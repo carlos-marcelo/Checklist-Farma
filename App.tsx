@@ -2342,22 +2342,22 @@ const App: React.FC = () => {
                                        <DateInput value={value as string || ''} onChange={(val) => handleInputChange(item.id, val)} theme={currentTheme} hasError={hasError} />
                                    )}
                                    {item.type === InputType.BOOLEAN_PASS_FAIL && (
-                                       <div className="flex gap-3">
+                                       <div className="flex gap-2 sm:gap-3">
                                            <button 
                                                onClick={() => handleInputChange(item.id, 'pass')}
-                                               className={`flex-1 py-3 rounded-xl border font-bold text-sm transition-all flex items-center justify-center gap-2 ${value === 'pass' ? 'bg-green-500 text-white border-green-600 shadow-md transform scale-[1.02]' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                                               className={`flex-1 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${value === 'pass' ? 'bg-green-500 text-white border-green-600 shadow-md transform scale-[1.02]' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
                                            >
-                                               <Check size={16} /> CONFORME
+                                               <Check size={14} className="sm:w-4 sm:h-4" /> <span className="tracking-wide">CONFORME</span>
                                            </button>
                                            <button 
                                                onClick={() => handleInputChange(item.id, 'fail')}
-                                               className={`flex-1 py-3 rounded-xl border font-bold text-sm transition-all flex items-center justify-center gap-2 ${value === 'fail' ? 'bg-red-500 text-white border-red-600 shadow-md transform scale-[1.02]' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                                               className={`flex-1 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${value === 'fail' ? 'bg-red-500 text-white border-red-600 shadow-md transform scale-[1.02]' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
                                            >
-                                               <AlertTriangle size={16} /> NÃO CONFORME
+                                               <AlertTriangle size={14} className="sm:w-4 sm:h-4" /> <span className="tracking-wide">NÃO CONFORME</span>
                                            </button>
                                             <button 
                                                onClick={() => handleInputChange(item.id, 'na')}
-                                               className={`w-16 py-3 rounded-xl border font-bold text-sm transition-all ${value === 'na' ? 'bg-gray-600 text-white border-gray-700' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}
+                                               className={`w-14 sm:w-16 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all ${value === 'na' ? 'bg-gray-600 text-white border-gray-700' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}
                                            >
                                                N/A
                                            </button>
