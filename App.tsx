@@ -132,7 +132,7 @@ const Logo = ({ config, large = false }: { config: AppConfig, large?: boolean })
   return (
     <div className="flex items-center gap-3">
         {/* System Logo (MF) */}
-        <div className={`relative ${large ? 'w-20 h-20' : 'w-10 h-10'} flex-shrink-0 filter drop-shadow-md`}>
+        <div className={`relative ${large ? 'w-20 h-20' : 'w-10 h-10 sm:w-12 sm:h-12'} flex-shrink-0 filter drop-shadow-md`}>
             <MFLogo className="w-full h-full" />
         </div>
         
@@ -144,18 +144,18 @@ const Logo = ({ config, large = false }: { config: AppConfig, large?: boolean })
         {/* Client/Pharmacy Logo or Name */}
         <div className="flex items-center gap-3">
              {config.logo && (
-                 <div className={`${large ? 'h-20 w-auto' : 'h-10 w-auto'} bg-white rounded-md p-1 shadow-sm`}>
+                 <div className={`${large ? 'h-20 w-auto' : 'h-10 w-auto sm:h-12'} bg-white rounded-md p-1 shadow-sm`}>
                     <img src={config.logo} alt="Pharmacy Logo" className="h-full w-auto object-contain" />
                  </div>
              )}
              
              {(!config.logo || large) && (
                  <div className={`flex flex-col justify-center ${large ? 'text-gray-800' : 'text-white'}`}>
-                     <span className={`font-black ${large ? 'text-2xl' : 'text-base'} uppercase tracking-tight leading-none`}>
+                     <span className={`font-black ${large ? 'text-2xl' : 'text-sm sm:text-base'} uppercase tracking-tight leading-none`}>
                         {config.pharmacyName}
                      </span>
                      {config.pharmacyName === 'Marcelo Far' && (
-                        <span className={`text-[10px] font-bold uppercase tracking-widest opacity-80 ${large ? 'text-gray-500' : 'text-white'}`}>
+                        <span className={`text-[9px] sm:text-[10px] font-bold uppercase tracking-widest opacity-80 ${large ? 'text-gray-500' : 'text-white'}`}>
                             Gestão & Excelência
                         </span>
                      )}
@@ -1609,7 +1609,7 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-gray-50 flex font-sans text-gray-800">
       {/* Sidebar - Elevated Design */}
       <aside 
-        className={`fixed inset-y-0 left-0 z-50 w-72 bg-white shadow-2xl transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 lg:static lg:inset-auto no-print flex flex-col border-r border-gray-100`}
+        className={`fixed inset-y-0 left-0 z-50 w-64 sm:w-72 bg-white shadow-2xl transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 lg:static lg:inset-auto no-print flex flex-col border-r border-gray-100`}
       >
         <div className={`h-28 flex items-center justify-center p-4 ${currentTheme.bgGradient} relative overflow-hidden shadow-md group`}>
           <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
@@ -1626,9 +1626,9 @@ const App: React.FC = () => {
           </button>
         </div>
         
-        <div className="px-6 py-6 border-b border-gray-100 bg-white relative">
-           <div className="flex items-center gap-4">
-             <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg ${currentTheme.bgGradient} shadow-md border-2 border-white overflow-hidden`}>
+        <div className="px-4 sm:px-6 py-4 sm:py-6 border-b border-gray-100 bg-white relative">
+           <div className="flex items-center gap-3 sm:gap-4">
+             <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-white font-bold text-base sm:text-lg ${currentTheme.bgGradient} shadow-md border-2 border-white overflow-hidden`}>
                {currentUser.photo ? (
                  <img src={currentUser.photo} alt="Profile" className="w-full h-full object-cover" />
                ) : (
@@ -1636,8 +1636,8 @@ const App: React.FC = () => {
                )}
              </div>
              <div className="flex-1 min-w-0">
-               <p className="text-sm font-bold text-gray-900 truncate">{currentUser.name}</p>
-               <p className="text-xs text-gray-500 truncate uppercase tracking-wider font-semibold">{currentUser.role === 'MASTER' ? 'Administrador' : 'Usuário'}</p>
+               <p className="text-sm sm:text-base font-bold text-gray-900 truncate">{currentUser.name}</p>
+               <p className="text-xs sm:text-sm text-gray-500 truncate uppercase tracking-wider font-semibold">{currentUser.role === 'MASTER' ? 'Administrador' : 'Usuário'}</p>
              </div>
            </div>
         </div>
@@ -1721,10 +1721,10 @@ const App: React.FC = () => {
         <div className="absolute inset-0 z-0 pointer-events-none opacity-40 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-gray-200 via-transparent to-transparent"></div>
 
         {/* Mobile Header */}
-        <header className={`${currentTheme.bgGradient} shadow-md lg:hidden h-18 flex items-center px-4 justify-between no-print z-20`}>
+        <header className={`${currentTheme.bgGradient} shadow-md lg:hidden h-20 sm:h-18 flex items-center px-4 sm:px-5 justify-between no-print z-20`}>
             <Logo config={displayConfig} />
-            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-white p-2 rounded-lg hover:bg-white/10">
-                {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
+            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-white p-3 sm:p-2 rounded-lg hover:bg-white/10 active:bg-white/20">
+                {isSidebarOpen ? <X size={28} className="sm:w-6 sm:h-6" /> : <Menu size={28} className="sm:w-6 sm:h-6" />}
             </button>
         </header>
 
