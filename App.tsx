@@ -548,29 +548,97 @@ const LoginScreen = ({
 
 const App: React.FC = () => {
   // Auth State
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<User[]>(() => {
+    try {
+      const savedUsers = localStorage.getItem('APP_USERS');
+      return savedUsers ? JSON.parse(savedUsers) as User[] : INITIAL_USERS;
+    } catch {
+      return INITIAL_USERS;
+    }
+  });
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    try {
+      const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
+      const savedUsers = localStorage.getItem('APP_USERS');
+      const arr: User[] = savedUsers ? JSON.parse(savedUsers) : INITIAL_USERS;
+      return savedEmail ? (arr.find(u => u.email === savedEmail) || null) : null;
+    } catch {
+      return null;
+    }
+  });
 
   // Config State
-  const [config, setConfig] = useState<AppConfig>({
-    pharmacyName: 'Marcelo Far',
-    logo: null,
-    theme: 'blue'
+  const [config, setConfig] = useState<AppConfig>(() => {
+    try {
+      const savedConfig = localStorage.getItem('APP_CONFIG');
+      return savedConfig ? JSON.parse(savedConfig) : {
+        pharmacyName: 'Marcelo Far',
+        logo: null,
+        theme: 'blue'
+      };
+    } catch {}
+    return {
+      pharmacyName: 'Marcelo Far',
+      logo: null,
+      theme: 'blue'
+    };
   });
 
   // App Logic State
   const [activeChecklistId, setActiveChecklistId] = useState<string>(CHECKLISTS[0].id);
-  const [formData, setFormData] = useState<Record<string, ChecklistData>>({});
-  const [images, setImages] = useState<Record<string, ChecklistImages>>({});
-  const [signatures, setSignatures] = useState<Record<string, Record<string, string>>>({});
+  const [formData, setFormData] = useState<Record<string, ChecklistData>>(() => {
+    try {
+      const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
+      if (savedEmail) {
+        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+        return allDrafts[savedEmail]?.formData || {};
+      }
+    } catch {}
+    return {};
+  });
+  const [images, setImages] = useState<Record<string, ChecklistImages>>(() => {
+    try {
+      const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
+      if (savedEmail) {
+        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+        return allDrafts[savedEmail]?.images || {};
+      }
+    } catch {}
+    return {};
+  });
+  const [signatures, setSignatures] = useState<Record<string, Record<string, string>>>(() => {
+    try {
+      const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
+      if (savedEmail) {
+        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+        return allDrafts[savedEmail]?.signatures || {};
+      }
+    } catch {}
+    return {};
+  });
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history'>('checklist');
-  const [ignoredChecklists, setIgnoredChecklists] = useState<Set<string>>(new Set());
+  const [ignoredChecklists, setIgnoredChecklists] = useState<Set<string>>(() => {
+    try {
+      const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
+      if (savedEmail) {
+        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+        return new Set(allDrafts[savedEmail]?.ignoredChecklists || []);
+      }
+    } catch {}
+    return new Set();
+  });
   const errorBoxRef = useRef<HTMLDivElement>(null);
   
   // History State
-  const [reportHistory, setReportHistory] = useState<ReportHistoryItem[]>([]);
+  const [reportHistory, setReportHistory] = useState<ReportHistoryItem[]>(() => {
+    try {
+      const savedHistory = localStorage.getItem('APP_HISTORY');
+      return savedHistory ? JSON.parse(savedHistory) : [];
+    } catch {}
+    return [];
+  });
   const [viewHistoryItem, setViewHistoryItem] = useState<ReportHistoryItem | null>(null);
   const [historyFilterUser, setHistoryFilterUser] = useState<string>('all');
 
@@ -596,18 +664,6 @@ const App: React.FC = () => {
 
   // --- PERSISTENCE & INIT EFFECTS ---
 
-  // Load Users from LocalStorage
-  useEffect(() => {
-    const savedUsers = localStorage.getItem('APP_USERS');
-    if (savedUsers) {
-      setUsers(JSON.parse(savedUsers));
-    }
-    const savedHistory = localStorage.getItem('APP_HISTORY');
-    if (savedHistory) {
-      setReportHistory(JSON.parse(savedHistory));
-    }
-  }, []);
-
   // Save Users to LocalStorage
   useEffect(() => {
     localStorage.setItem('APP_USERS', JSON.stringify(users));
@@ -618,18 +674,10 @@ const App: React.FC = () => {
     localStorage.setItem('APP_HISTORY', JSON.stringify(reportHistory));
   }, [reportHistory]);
 
-  // Load Draft for Current User
+  // Load Draft for Current User - only on initial login
+  const [draftLoaded, setDraftLoaded] = useState(false);
   useEffect(() => {
-    if (currentUser) {
-      // Sync currentUser with users array to get latest updates (like name/phone changes)
-      const freshUser = users.find(u => u.email === currentUser.email);
-      if (freshUser) {
-        // Deep compare to avoid loops or check specific fields
-        if (freshUser.name !== currentUser.name || freshUser.phone !== currentUser.phone || freshUser.photo !== currentUser.photo) {
-            setCurrentUser(freshUser);
-        }
-      }
-
+    if (currentUser && !draftLoaded) {
       const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
       const userDraft = allDrafts[currentUser.email];
       
@@ -638,18 +686,35 @@ const App: React.FC = () => {
         setImages(userDraft.images || {});
         setSignatures(userDraft.signatures || {});
         setIgnoredChecklists(new Set(userDraft.ignoredChecklists || []));
-      } else {
-        // Reset if no draft
-        setFormData({});
-        setImages({});
-        setSignatures({});
-        setIgnoredChecklists(new Set());
       }
-      // Load config if customized (global per browser, or could be per user)
-      const savedConfig = localStorage.getItem('APP_CONFIG');
-      if (savedConfig) setConfig(JSON.parse(savedConfig));
+      
+      setDraftLoaded(true);
     }
-  }, [currentUser, users]);
+    if (!currentUser) {
+      setDraftLoaded(false);
+    }
+  }, [currentUser]);
+
+  // Sync currentUser with users array to get latest updates (like name/phone changes)
+  useEffect(() => {
+    if (currentUser) {
+      const freshUser = users.find(u => u.email === currentUser.email);
+      if (freshUser) {
+        if (freshUser.name !== currentUser.name || freshUser.phone !== currentUser.phone || freshUser.photo !== currentUser.photo) {
+            setCurrentUser(freshUser);
+        }
+      }
+    }
+  }, [users]);
+
+    // Restore logged-in session after users load
+    useEffect(() => {
+        const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
+        if (savedEmail && !currentUser) {
+            const u = users.find(u => u.email === savedEmail);
+            if (u) setCurrentUser(u);
+        }
+    }, [users]);
 
   // Auto-Save Draft
   useEffect(() => {
@@ -670,6 +735,16 @@ const App: React.FC = () => {
       localStorage.setItem('APP_CONFIG', JSON.stringify(config));
   }, [config]);
 
+  // Scroll to top on initial load
+  useEffect(() => {
+      window.scrollTo(0, 0);
+  }, []);
+
+  // Ensure view changes or checklist switches return to top
+  useEffect(() => {
+      window.scrollTo(0, 0);
+  }, [currentView, activeChecklistId]);
+
 
   // --- DERIVED STATE ---
   const activeChecklist = CHECKLISTS.find(c => c.id === activeChecklistId) || CHECKLISTS[0];
@@ -687,15 +762,21 @@ const App: React.FC = () => {
       return true;
   });
 
-  // --- HANDLERS ---
-  const handleLogin = (user: User) => setCurrentUser(user);
-  const handleLogout = () => {
-    setCurrentUser(null);
-    setFormData({}); // Clear state from memory, relies on draft re-load
-    setImages({});
-    setSignatures({});
-    setCurrentView('checklist');
-  };
+    // --- HANDLERS ---
+    const handleLogin = (user: User) => {
+        // Persist session so F5 doesn't log the user out
+        localStorage.setItem('APP_CURRENT_EMAIL', user.email);
+        setCurrentUser(user);
+    };
+    const handleLogout = () => {
+        // Clear persisted session on logout
+        localStorage.removeItem('APP_CURRENT_EMAIL');
+        setCurrentUser(null);
+        setFormData({}); // Clear state from memory, relies on draft re-load
+        setImages({});
+        setSignatures({});
+        setCurrentView('checklist');
+    };
   
   const handleRegister = (newUser: User) => {
     setUsers(prev => [...prev, newUser]);
@@ -818,7 +899,7 @@ const App: React.FC = () => {
           setInternalShake(true);
           setInternalPhoneError('Formato inválido. Digite DDD (2) + Número (9).');
           setTimeout(() => setInternalShake(false), 500);
-          alert("O telefone deve conter exatamente 11 dígitos (DDD + Número).");
+          alert("⚠️ O telefone deve conter exatamente 11 dígitos (DDD + Número).");
           return;
       }
 
@@ -987,24 +1068,13 @@ const App: React.FC = () => {
   // --- ACTIONS ---
 
   const handleResetChecklist = () => {
-    if (confirm("Tem certeza que deseja recomeçar este checklist? Todas as informações não salvas neste formulário serão perdidas.")) {
-        setFormData(prev => {
-            const copy = { ...prev };
-            delete copy[activeChecklistId];
-            return copy;
-        });
-        setImages(prev => {
-            const copy = { ...prev };
-            delete copy[activeChecklistId];
-            return copy;
-        });
-        setSignatures(prev => {
-            const copy = { ...prev };
-            delete copy[activeChecklistId];
-            return copy;
-        });
-        window.scrollTo(0,0);
-        setShowErrors(false);
+    if (confirm("Tem certeza que deseja recomeçar todo o relatório? Todas as informações não salvas serão perdidas.")) {
+        if (currentUser) {
+          const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+          delete allDrafts[currentUser.email];
+          localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+        }
+        window.location.reload();
     }
   };
 
@@ -1420,7 +1490,7 @@ const App: React.FC = () => {
                      <button
                         onClick={handleResetChecklist}
                         className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-4 py-2 rounded-lg transition-colors text-sm font-bold"
-                        title="Limpar campos deste checklist"
+                        title="Limpar todos os dados do relatório atual"
                      >
                          <RotateCcw size={16} />
                          Recomeçar
