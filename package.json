@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "postbuild": "copy dist\\index.html dist\\404.html",
+    "deploy:ghpages": "git subtree push --prefix dist origin gh-pages",
     "preview": "vite preview"
   },
   "dependencies": {
