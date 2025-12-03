@@ -3,6 +3,7 @@ import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, 
 import { CHECKLISTS } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection } from './types';
 import SignaturePad from './components/SignaturePad';
+import { supabase } from './supabaseClient';
 
 // --- TYPES & INTERFACES FOR AUTH & CONFIG ---
 
