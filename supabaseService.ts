@@ -217,6 +217,25 @@ export async function createReport(report: DbReport): Promise<DbReport | null> {
   }
 }
 
+// Check if a similar report already exists to avoid duplicates
+export async function reportExists(report: DbReport): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from('reports')
+      .select('id')
+      .eq('user_email', report.user_email)
+      .eq('pharmacy_name', report.pharmacy_name)
+      .eq('score', report.score)
+      .eq('form_data', report.form_data)
+      .limit(1);
+    if (error) throw error;
+    return !!(data && data.length > 0);
+  } catch (error) {
+    console.error('Error checking report existence:', error);
+    return false;
+  }
+}
+
 export async function deleteReport(id: string): Promise<boolean> {
   try {
     const { error } = await supabase
@@ -322,8 +341,23 @@ export async function migrateLocalStorageToSupabase() {
     if (localUsers) {
       const users = JSON.parse(localUsers);
       for (const user of users) {
-        const created = await createUser(user);
-        if (created) results.users++;
+        // Try update if exists, else create
+        try {
+          const { data: existing } = await supabase
+            .from('users')
+            .select('email')
+            .eq('email', user.email)
+            .limit(1);
+          if (existing && existing.length > 0) {
+            await updateUser(user.email, user);
+            results.users++;
+          } else {
+            const created = await createUser(user);
+            if (created) results.users++;
+          }
+        } catch (e) {
+          console.error('Error upserting user during migration:', e);
+        }
       }
     }
 
@@ -339,7 +373,7 @@ export async function migrateLocalStorageToSupabase() {
     if (localHistory) {
       const reports = JSON.parse(localHistory);
       for (const report of reports) {
-        const created = await createReport({
+        const dbReport: DbReport = {
           user_email: report.userEmail,
           user_name: report.userName,
           pharmacy_name: report.pharmacyName,
@@ -348,8 +382,12 @@ export async function migrateLocalStorageToSupabase() {
           images: report.images,
           signatures: report.signatures,
           ignored_checklists: report.ignoredChecklists
-        });
-        if (created) results.reports++;
+        };
+        const exists = await reportExists(dbReport);
+        if (!exists) {
+          const created = await createReport(dbReport);
+          if (created) results.reports++;
+        }
       }
     }
 

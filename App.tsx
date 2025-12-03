@@ -674,6 +674,42 @@ const App: React.FC = () => {
           if (localHistory) {
             setReportHistory(JSON.parse(localHistory));
           }
+                    // Auto-migrate one-time when Supabase is empty and local has data
+                    const alreadyMigrated = localStorage.getItem('APP_MIGRATED_DONE') === 'true';
+                    const hasLocalData = !!localHistory || !!localStorage.getItem('APP_USERS') || !!localStorage.getItem('APP_DRAFTS') || !!localStorage.getItem('APP_CONFIG');
+                    if (!alreadyMigrated && hasLocalData) {
+                        try {
+                            const mig = await SupabaseService.migrateLocalStorageToSupabase();
+                            if (mig) {
+                                localStorage.setItem('APP_MIGRATED_DONE', 'true');
+                                // Refresh in-memory state from Supabase after migration
+                                const refreshedReports = await SupabaseService.fetchReports();
+                                if (refreshedReports.length > 0) {
+                                    const formatted = refreshedReports.map(r => ({
+                                        id: r.id || r.created_at || Date.now().toString(),
+                                        userEmail: r.user_email,
+                                        userName: r.user_name,
+                                        date: r.created_at || new Date().toISOString(),
+                                        pharmacyName: r.pharmacy_name,
+                                        score: r.score,
+                                        formData: r.form_data,
+                                        images: r.images,
+                                        signatures: r.signatures,
+                                        ignoredChecklists: r.ignored_checklists
+                                    }));
+                                    setReportHistory(formatted);
+                                    localStorage.setItem('APP_HISTORY', JSON.stringify(formatted));
+                                }
+                                const refreshedUsers = await SupabaseService.fetchUsers();
+                                if (refreshedUsers.length > 0) {
+                                    setUsers(refreshedUsers);
+                                    localStorage.setItem('APP_USERS', JSON.stringify(refreshedUsers));
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Auto-migration failed:', e);
+                        }
+                    }
         }
         
         // 4. Restore session if exists
@@ -874,13 +910,18 @@ const App: React.FC = () => {
         const results = await SupabaseService.migrateLocalStorageToSupabase();
         
         if (results) {
-            setMigrationStatus(`✅ Migração concluída!\n\nUsuários: ${results.users}\nRelatórios: ${results.reports}\nRascunhos: ${results.drafts}\nConfig: ${results.config ? 'Sim' : 'Não'}`);
+            const message = `✅ Migração concluída!\n\nUsuários: ${results.users}\nRelatórios: ${results.reports}\nRascunhos: ${results.drafts}\nConfig: ${results.config ? 'Sim' : 'Não'}`;
+            setMigrationStatus(message);
+            // Feedback explícito ao usuário
+            alert(message);
             setTimeout(() => {
                 setShowMigrationPanel(false);
                 window.location.reload();
             }, 3000);
         } else {
-            setMigrationStatus('❌ Erro na migração. Tente novamente.');
+            const errorMsg = '❌ Erro na migração. Tente novamente.';
+            setMigrationStatus(errorMsg);
+            alert(errorMsg);
         }
         
         setIsMigrating(false);
@@ -1253,8 +1294,8 @@ const App: React.FC = () => {
 
       const score = calculateGlobalScore();
       
-      // Save to Supabase first
-      const dbReport = await SupabaseService.createReport({
+      // Checar duplicidade antes de criar
+      const candidateReport = {
           user_email: currentUser.email,
           user_name: currentUser.name,
           pharmacy_name: config.pharmacyName,
@@ -1263,7 +1304,17 @@ const App: React.FC = () => {
           images: { ...images },
           signatures: { ...signatures },
           ignored_checklists: Array.from(ignoredChecklists)
-      });
+      };
+      const alreadyExists = await SupabaseService.reportExists(candidateReport as any);
+      if (alreadyExists) {
+          alert('Este relatório já foi registrado anteriormente. Não será duplicado.');
+          // Apenas levar para a visualização do mais recente igual
+          setCurrentView('history');
+          return;
+      }
+
+      // Save to Supabase first
+      const dbReport = await SupabaseService.createReport(candidateReport as any);
       
       const newReport: ReportHistoryItem = {
           id: dbReport?.id || Date.now().toString(),
@@ -1517,79 +1568,13 @@ const App: React.FC = () => {
     );
   }
 
-  if (!currentUser) {
-    return (
-      <>
-        <LoginScreen onLogin={handleLogin} users={users} onRegister={handleRegister} />
-        
-        {/* Migration Panel - Floating Button */}
-        {!showMigrationPanel && (
-          <button
-            onClick={() => setShowMigrationPanel(true)}
-            className="fixed bottom-4 right-4 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg hover:bg-blue-700 transition-all text-sm font-bold z-50"
-          >
-            🔄 Migrar para Nuvem
-          </button>
-        )}
-        
-        {/* Migration Panel */}
-        {showMigrationPanel && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8">
-              <h2 className="text-2xl font-bold text-gray-800 mb-4">Migração para Supabase</h2>
-              
-              {!isMigrating && !migrationStatus && (
-                <>
-                  <p className="text-gray-600 mb-6">
-                    Antes de migrar, é recomendado fazer um backup dos seus dados locais.
-                  </p>
-                  
-                  <div className="space-y-3">
-                    <button
-                      onClick={handleBackupDownload}
-                      className="w-full bg-green-600 text-white px-4 py-3 rounded-lg hover:bg-green-700 transition-all font-bold flex items-center justify-center gap-2"
-                    >
-                      <Download size={20} />
-                      Baixar Backup (JSON)
-                    </button>
-                    
-                    <button
-                      onClick={handleMigration}
-                      className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-all font-bold"
-                    >
-                      Migrar Dados para Nuvem
-                    </button>
-                    
-                    <button
-                      onClick={() => setShowMigrationPanel(false)}
-                      className="w-full bg-gray-200 text-gray-700 px-4 py-3 rounded-lg hover:bg-gray-300 transition-all font-bold"
-                    >
-                      Cancelar
-                    </button>
-                  </div>
-                </>
-              )}
-              
-              {isMigrating && (
-                <div className="text-center py-8">
-                  <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-600 mx-auto mb-4"></div>
-                  <p className="text-gray-600 font-medium">{migrationStatus}</p>
-                </div>
-              )}
-              
-              {!isMigrating && migrationStatus && (
-                <div className="text-center py-8">
-                  <pre className="text-left bg-gray-100 p-4 rounded-lg text-sm whitespace-pre-wrap">
-                    {migrationStatus}
-                  </pre>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </>
-    );
-  }
+    if (!currentUser) {
+        return (
+            <>
+                <LoginScreen onLogin={handleLogin} users={users} onRegister={handleRegister} />
+            </>
+        );
+    }
 
   // Determine if we are in "Read Only" mode (History View)
   const isReadOnly = currentView === 'view_history';
