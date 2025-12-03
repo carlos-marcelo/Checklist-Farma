@@ -1575,7 +1575,7 @@ const App: React.FC = () => {
           </div>
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
           <p className="text-white font-bold text-lg">Carregando dados...</p>
-          <p className="text-white/80 text-sm mt-2">Conectando ao Supabase</p>
+          <p className="text-white/80 text-sm mt-2">Conectando ao banco de dados</p>
         </div>
       </div>
     );
