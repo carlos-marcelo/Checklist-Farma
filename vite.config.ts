@@ -5,8 +5,8 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
-      // Base para custom domain em GitHub Pages/Vercel/Netlify
-      base: '/',
+      // Base para GitHub Pages em projeto: /<repo-name>/
+      base: '/Checklist-Farma/',
       server: {
         port: 3000,
         host: '0.0.0.0',
