@@ -1720,13 +1720,34 @@ const App: React.FC = () => {
         {/* Background Mesh Gradient */}
         <div className="absolute inset-0 z-0 pointer-events-none opacity-40 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-gray-200 via-transparent to-transparent"></div>
 
-        {/* Mobile Header */}
-        <header className={`${currentTheme.bgGradient} shadow-md lg:hidden h-18 flex items-center px-4 justify-between no-print z-20`}>
-            <Logo config={displayConfig} />
-            <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-white p-2 rounded-lg hover:bg-white/10">
-                {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
-            </button>
-        </header>
+                {/* Mobile Header */}
+                <header className={`${currentTheme.bgGradient} shadow-md lg:hidden h-18 flex items-center px-4 justify-between no-print z-20`}>
+                        <Logo config={displayConfig} />
+                        <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-white p-2 rounded-lg hover:bg-white/10">
+                                {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
+                        </button>
+                </header>
+
+                {/* Mobile Actions Bar: Title + Recomeçar */}
+                <div className="lg:hidden no-print bg-white/90 backdrop-blur-sm border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-18 z-20">
+                        <h1 className="text-base font-extrabold text-gray-800 truncate tracking-tight">
+                            {currentView === 'report' || currentView === 'view_history' ? 'Relatório Consolidado' : 
+                             currentView === 'summary' ? 'Visão Geral da Avaliação' : 
+                             currentView === 'settings' ? 'Configurações do Sistema' :
+                             currentView === 'history' ? 'Histórico de Relatórios' :
+                             activeChecklist.title}
+                        </h1>
+                        {currentView === 'checklist' && (
+                            <button
+                                onClick={handleResetChecklist}
+                                className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors text-xs font-bold"
+                                title="Limpar todos os dados do relatório atual"
+                            >
+                                <RotateCcw size={16} />
+                                <span>Recomeçar</span>
+                            </button>
+                        )}
+                </div>
 
         {/* Desktop Header */}
         <header className="hidden lg:flex items-center justify-between h-20 bg-white/80 backdrop-blur-md border-b border-gray-200 px-10 shadow-sm no-print sticky top-0 z-30">
