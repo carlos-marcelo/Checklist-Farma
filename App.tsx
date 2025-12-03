@@ -4,6 +4,7 @@ import { CHECKLISTS } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection } from './types';
 import SignaturePad from './components/SignaturePad';
 import { supabase } from './supabaseClient';
+import * as SupabaseService from './supabaseService';
 
 // --- TYPES & INTERFACES FOR AUTH & CONFIG ---
 
@@ -547,88 +548,34 @@ const LoginScreen = ({
 // --- MAIN APP ---
 
 const App: React.FC = () => {
+  // Migration State
+  const [showMigrationPanel, setShowMigrationPanel] = useState(false);
+  const [isMigrating, setIsMigrating] = useState(false);
+  const [migrationStatus, setMigrationStatus] = useState('');
+  
+  // Loading State
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  
   // Auth State
-  const [users, setUsers] = useState<User[]>(() => {
-    try {
-      const savedUsers = localStorage.getItem('APP_USERS');
-      return savedUsers ? JSON.parse(savedUsers) as User[] : INITIAL_USERS;
-    } catch {
-      return INITIAL_USERS;
-    }
-  });
-  const [currentUser, setCurrentUser] = useState<User | null>(() => {
-    try {
-      const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
-      const savedUsers = localStorage.getItem('APP_USERS');
-      const arr: User[] = savedUsers ? JSON.parse(savedUsers) : INITIAL_USERS;
-      return savedEmail ? (arr.find(u => u.email === savedEmail) || null) : null;
-    } catch {
-      return null;
-    }
-  });
+  const [users, setUsers] = useState<User[]>(INITIAL_USERS);
+  const [currentUser, setCurrentUser] = useState<User | null>(null);
 
   // Config State
-  const [config, setConfig] = useState<AppConfig>(() => {
-    try {
-      const savedConfig = localStorage.getItem('APP_CONFIG');
-      return savedConfig ? JSON.parse(savedConfig) : {
-        pharmacyName: 'Marcelo Far',
-        logo: null,
-        theme: 'blue'
-      };
-    } catch {}
-    return {
-      pharmacyName: 'Marcelo Far',
-      logo: null,
-      theme: 'blue'
-    };
+  const [config, setConfig] = useState<AppConfig>({
+    pharmacyName: 'Marcelo Far',
+    logo: null,
+    theme: 'blue'
   });
 
   // App Logic State
   const [activeChecklistId, setActiveChecklistId] = useState<string>(CHECKLISTS[0].id);
-  const [formData, setFormData] = useState<Record<string, ChecklistData>>(() => {
-    try {
-      const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
-      if (savedEmail) {
-        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
-        return allDrafts[savedEmail]?.formData || {};
-      }
-    } catch {}
-    return {};
-  });
-  const [images, setImages] = useState<Record<string, ChecklistImages>>(() => {
-    try {
-      const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
-      if (savedEmail) {
-        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
-        return allDrafts[savedEmail]?.images || {};
-      }
-    } catch {}
-    return {};
-  });
-  const [signatures, setSignatures] = useState<Record<string, Record<string, string>>>(() => {
-    try {
-      const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
-      if (savedEmail) {
-        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
-        return allDrafts[savedEmail]?.signatures || {};
-      }
-    } catch {}
-    return {};
-  });
+  const [formData, setFormData] = useState<Record<string, ChecklistData>>({});
+  const [images, setImages] = useState<Record<string, ChecklistImages>>({});
+  const [signatures, setSignatures] = useState<Record<string, Record<string, string>>>({});
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [showErrors, setShowErrors] = useState(false);
   const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history'>('checklist');
-  const [ignoredChecklists, setIgnoredChecklists] = useState<Set<string>>(() => {
-    try {
-      const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
-      if (savedEmail) {
-        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
-        return new Set(allDrafts[savedEmail]?.ignoredChecklists || []);
-      }
-    } catch {}
-    return new Set();
-  });
+  const [ignoredChecklists, setIgnoredChecklists] = useState<Set<string>>(new Set());
   const errorBoxRef = useRef<HTMLDivElement>(null);
   
   // History State
@@ -664,15 +611,134 @@ const App: React.FC = () => {
 
   // --- PERSISTENCE & INIT EFFECTS ---
 
-  // Save Users to LocalStorage
+  // MAIN INITIALIZATION - Load all data from Supabase on mount
   useEffect(() => {
-    localStorage.setItem('APP_USERS', JSON.stringify(users));
-  }, [users]);
+    const initializeData = async () => {
+      try {
+        setIsLoadingData(true);
+        
+        // 1. Load Users from Supabase (fallback to localStorage)
+        const dbUsers = await SupabaseService.fetchUsers();
+        if (dbUsers.length > 0) {
+          setUsers(dbUsers);
+          localStorage.setItem('APP_USERS', JSON.stringify(dbUsers)); // Backup
+        } else {
+          // Fallback to localStorage
+          const localUsers = localStorage.getItem('APP_USERS');
+          if (localUsers) {
+            setUsers(JSON.parse(localUsers));
+          }
+        }
+        
+        // 2. Load Config from Supabase (fallback to localStorage)
+        const dbConfig = await SupabaseService.fetchConfig();
+        if (dbConfig) {
+          setConfig({
+            pharmacyName: dbConfig.pharmacy_name,
+            logo: dbConfig.logo,
+            theme: dbConfig.theme
+          });
+          localStorage.setItem('APP_CONFIG', JSON.stringify({
+            pharmacyName: dbConfig.pharmacy_name,
+            logo: dbConfig.logo,
+            theme: dbConfig.theme
+          }));
+        } else {
+          // Fallback to localStorage
+          const localConfig = localStorage.getItem('APP_CONFIG');
+          if (localConfig) {
+            setConfig(JSON.parse(localConfig));
+          }
+        }
+        
+        // 3. Load Reports from Supabase (fallback to localStorage)
+        const dbReports = await SupabaseService.fetchReports();
+        if (dbReports.length > 0) {
+          const formattedReports = dbReports.map(r => ({
+            id: r.id || r.created_at || Date.now().toString(),
+            userEmail: r.user_email,
+            userName: r.user_name,
+            date: r.created_at || new Date().toISOString(),
+            pharmacyName: r.pharmacy_name,
+            score: r.score,
+            formData: r.form_data,
+            images: r.images,
+            signatures: r.signatures,
+            ignoredChecklists: r.ignored_checklists
+          }));
+          setReportHistory(formattedReports);
+          localStorage.setItem('APP_HISTORY', JSON.stringify(formattedReports)); // Backup
+        } else {
+          // Fallback to localStorage
+          const localHistory = localStorage.getItem('APP_HISTORY');
+          if (localHistory) {
+            setReportHistory(JSON.parse(localHistory));
+          }
+        }
+        
+        // 4. Restore session if exists
+        const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
+        if (savedEmail) {
+          const user = dbUsers.find(u => u.email === savedEmail) || 
+                       JSON.parse(localStorage.getItem('APP_USERS') || '[]').find((u: User) => u.email === savedEmail);
+          if (user) {
+            setCurrentUser(user);
+            
+            // Load user's draft from Supabase
+            const dbDraft = await SupabaseService.fetchDraft(savedEmail);
+            if (dbDraft) {
+              setFormData(dbDraft.form_data || {});
+              setImages(dbDraft.images || {});
+              setSignatures(dbDraft.signatures || {});
+              setIgnoredChecklists(new Set(dbDraft.ignored_checklists || []));
+            } else {
+              // Fallback to localStorage draft
+              const localDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+              const userDraft = localDrafts[savedEmail];
+              if (userDraft) {
+                setFormData(userDraft.formData || {});
+                setImages(userDraft.images || {});
+                setSignatures(userDraft.signatures || {});
+                setIgnoredChecklists(new Set(userDraft.ignoredChecklists || []));
+              }
+            }
+          }
+        }
+        
+      } catch (error) {
+        console.error('Error initializing data:', error);
+        // On error, fallback to localStorage completely
+        const localUsers = localStorage.getItem('APP_USERS');
+        if (localUsers) setUsers(JSON.parse(localUsers));
+        
+        const localConfig = localStorage.getItem('APP_CONFIG');
+        if (localConfig) setConfig(JSON.parse(localConfig));
+        
+        const localHistory = localStorage.getItem('APP_HISTORY');
+        if (localHistory) setReportHistory(JSON.parse(localHistory));
+      } finally {
+        setIsLoadingData(false);
+      }
+    };
+    
+    initializeData();
+  }, []);
 
-  // Save History to LocalStorage
+  // Save Users to Supabase AND LocalStorage
   useEffect(() => {
-    localStorage.setItem('APP_HISTORY', JSON.stringify(reportHistory));
-  }, [reportHistory]);
+    if (!isLoadingData && users.length > 0) {
+      localStorage.setItem('APP_USERS', JSON.stringify(users));
+      // Don't auto-save users to Supabase here to avoid conflicts
+    }
+  }, [users, isLoadingData]);
+
+  // Save History to Supabase AND LocalStorage
+  useEffect(() => {
+    if (!isLoadingData && reportHistory.length > 0) {
+      localStorage.setItem('APP_HISTORY', JSON.stringify(reportHistory));
+      // Reports are saved individually when created, not in batch
+    }
+  }, [reportHistory, isLoadingData]);
 
   // Load Draft for Current User - only on initial login
   const [draftLoaded, setDraftLoaded] = useState(false);
@@ -716,9 +782,10 @@ const App: React.FC = () => {
         }
     }, [users]);
 
-  // Auto-Save Draft
+  // Auto-Save Draft to Supabase AND LocalStorage
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser && !isLoadingData) {
+      // Save to LocalStorage (instant backup)
       const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
       allDrafts[currentUser.email] = {
         formData,
@@ -727,13 +794,39 @@ const App: React.FC = () => {
         ignoredChecklists: Array.from(ignoredChecklists)
       };
       localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+      
+      // Save to Supabase (async, with debounce)
+      const timeoutId = setTimeout(async () => {
+        await SupabaseService.saveDraft({
+          user_email: currentUser.email,
+          form_data: formData,
+          images: images,
+          signatures: signatures,
+          ignored_checklists: Array.from(ignoredChecklists)
+        });
+      }, 1000); // Wait 1 second after last change
+      
+      return () => clearTimeout(timeoutId);
     }
-  }, [formData, images, signatures, ignoredChecklists, currentUser]);
+  }, [formData, images, signatures, ignoredChecklists, currentUser, isLoadingData]);
 
-  // Save Config
+  // Save Config to Supabase AND LocalStorage
   useEffect(() => {
+    if (!isLoadingData) {
       localStorage.setItem('APP_CONFIG', JSON.stringify(config));
-  }, [config]);
+      
+      // Save to Supabase (async, with debounce)
+      const timeoutId = setTimeout(async () => {
+        await SupabaseService.saveConfig({
+          pharmacy_name: config.pharmacyName,
+          logo: config.logo,
+          theme: config.theme
+        });
+      }, 1000);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [config, isLoadingData]);
 
   // Scroll to top on initial load
   useEffect(() => {
@@ -763,6 +856,36 @@ const App: React.FC = () => {
   });
 
     // --- HANDLERS ---
+    
+    // Migration Handlers
+    const handleBackupDownload = () => {
+        SupabaseService.exportLocalStorageBackup();
+        alert('✅ Backup baixado com sucesso!');
+    };
+
+    const handleMigration = async () => {
+        if (!confirm('Deseja migrar todos os dados para o Supabase?\n\nIsso incluirá:\n- Usuários\n- Configurações\n- Relatórios\n- Rascunhos')) {
+            return;
+        }
+        
+        setIsMigrating(true);
+        setMigrationStatus('Migrando dados...');
+        
+        const results = await SupabaseService.migrateLocalStorageToSupabase();
+        
+        if (results) {
+            setMigrationStatus(`✅ Migração concluída!\n\nUsuários: ${results.users}\nRelatórios: ${results.reports}\nRascunhos: ${results.drafts}\nConfig: ${results.config ? 'Sim' : 'Não'}`);
+            setTimeout(() => {
+                setShowMigrationPanel(false);
+                window.location.reload();
+            }, 3000);
+        } else {
+            setMigrationStatus('❌ Erro na migração. Tente novamente.');
+        }
+        
+        setIsMigrating(false);
+    };
+    
     const handleLogin = (user: User) => {
         // Persist session so F5 doesn't log the user out
         localStorage.setItem('APP_CURRENT_EMAIL', user.email);
@@ -778,27 +901,32 @@ const App: React.FC = () => {
         setCurrentView('checklist');
     };
   
-  const handleRegister = (newUser: User) => {
-    setUsers(prev => [...prev, newUser]);
+  const handleRegister = async (newUser: User) => {
+    // Save to Supabase first
+    const created = await SupabaseService.createUser(newUser);
+    if (created) {
+      setUsers(prev => [...prev, newUser]);
+    } else {
+      // Fallback to local only
+      setUsers(prev => [...prev, newUser]);
+    }
   };
 
-  const updateUserStatus = (email: string, approved: boolean) => {
-    // When approving, ensure rejected is false
-    // Use functional state update to prevent race conditions
+  const updateUserStatus = async (email: string, approved: boolean) => {
+    // Update in Supabase
+    await SupabaseService.updateUser(email, { approved, rejected: false });
+    // Update local state
     setUsers(prev => prev.map(u => u.email === email ? { ...u, approved, rejected: false } : u));
   };
   
-  // This effectively bans/rejects the user. They cannot login.
-  // Immediate action, no confirmation needed for pending workflow
-  // For blocking active users, we might skip confirm based on user request "only block, no trash"
-  const handleRejectUser = (email: string, skipConfirm = true) => {
-      if (!skipConfirm) {
-           // kept for reference if needed, but per request action is immediate
-      }
-     setUsers(prev => prev.map(u => u.email === email ? { ...u, approved: false, rejected: true } : u));
+  const handleRejectUser = async (email: string, skipConfirm = true) => {
+    // Update in Supabase
+    await SupabaseService.updateUser(email, { approved: false, rejected: true });
+    // Update local state
+    setUsers(prev => prev.map(u => u.email === email ? { ...u, approved: false, rejected: true } : u));
   };
 
-  const handleUpdateUserProfile = (field: keyof User, value: string) => {
+  const handleUpdateUserProfile = async (field: keyof User, value: string) => {
     if (!currentUser) return;
     
     // Custom handling for phone in profile to limit 11 digits
@@ -807,9 +935,13 @@ const App: React.FC = () => {
         if (val.length <= 11) {
             setProfilePhoneError(''); // clear error on type
             setUsers(prevUsers => prevUsers.map(u => u.email === currentUser.email ? { ...u, phone: val } : u));
+            // Update in Supabase
+            await SupabaseService.updateUser(currentUser.email, { phone: val });
         }
     } else {
         setUsers(prevUsers => prevUsers.map(u => u.email === currentUser.email ? { ...u, [field]: value } : u));
+        // Update in Supabase
+        await SupabaseService.updateUser(currentUser.email, { [field]: value } as any);
     }
   };
   
@@ -820,18 +952,23 @@ const App: React.FC = () => {
   };
 
 
-  const handleUserPhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUserPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       if (e.target.files && e.target.files[0]) {
           const reader = new FileReader();
-          reader.onloadend = () => {
-              // Directly update state via setUsers to ensure persistence
-              setUsers(prevUsers => prevUsers.map(u => u.email === currentUser?.email ? { ...u, photo: reader.result as string } : u));
+          reader.onloadend = async () => {
+              const photo = reader.result as string;
+              // Update state
+              setUsers(prevUsers => prevUsers.map(u => u.email === currentUser?.email ? { ...u, photo } : u));
+              // Update in Supabase
+              if (currentUser) {
+                await SupabaseService.updateUser(currentUser.email, { photo });
+              }
           };
           reader.readAsDataURL(e.target.files[0]);
       }
   };
 
-  const handleSaveProfileAndSecurity = () => {
+  const handleSaveProfileAndSecurity = async () => {
       if (!currentUser) return;
 
       // Validate Phone
@@ -860,8 +997,10 @@ const App: React.FC = () => {
                alert("Erro: A senha deve ter pelo menos 6 caracteres.");
                return;
           }
-          // Update Password
+          // Update Password in local state
           setUsers(prevUsers => prevUsers.map(u => u.email === currentUser.email ? { ...u, password: newPassInput } : u));
+          // Update Password in Supabase
+          await SupabaseService.updateUser(currentUser.email, { password: newPassInput });
       }
 
       // Clear password fields
@@ -887,7 +1026,7 @@ const App: React.FC = () => {
   };
 
 
-  const handleCreateUserInternal = () => {
+  const handleCreateUserInternal = async () => {
       if (!newUserName || !newUserEmail || !newUserPass || !newUserPhone || !newUserConfirmPass) {
           alert("Preencha todos os campos.");
           return;
@@ -932,7 +1071,16 @@ const App: React.FC = () => {
           approved: true, // Internal creation is auto-approved
           rejected: false
       };
-      setUsers(prev => [...prev, newUser]);
+      
+      // Save to Supabase first
+      const created = await SupabaseService.createUser(newUser);
+      if (created) {
+        setUsers(prev => [...prev, newUser]);
+      } else {
+        // Fallback to local only
+        setUsers(prev => [...prev, newUser]);
+      }
+      
       setNewUserName('');
       setNewUserEmail('');
       setNewUserPhone('');
@@ -943,8 +1091,11 @@ const App: React.FC = () => {
       alert("Usuário criado com sucesso!");
   };
 
-  const handleDeleteHistoryItem = (itemId: string) => {
+  const handleDeleteHistoryItem = async (itemId: string) => {
       if (confirm("Atenção: Esta ação é irreversível. Tem certeza que deseja excluir permanentemente este relatório?")) {
+          // Delete from Supabase
+          await SupabaseService.deleteReport(itemId);
+          // Delete from local state
           setReportHistory(prev => prev.filter(item => item.id !== itemId));
           // If viewing deleted item, go back to list
           if (viewHistoryItem?.id === itemId) {
@@ -1067,18 +1218,21 @@ const App: React.FC = () => {
 
   // --- ACTIONS ---
 
-  const handleResetChecklist = () => {
+  const handleResetChecklist = async () => {
     if (confirm("Tem certeza que deseja recomeçar todo o relatório? Todas as informações não salvas serão perdidas.")) {
         if (currentUser) {
+          // Delete from localStorage
           const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
           delete allDrafts[currentUser.email];
           localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+          // Delete from Supabase
+          await SupabaseService.deleteDraft(currentUser.email);
         }
         window.location.reload();
     }
   };
 
-  const handleFinalizeAndSave = () => {
+  const handleFinalizeAndSave = async () => {
       if (!currentUser) return;
       
       // Strict Validation: Must have at least one active checklist, AND all active checklists must be complete
@@ -1099,11 +1253,23 @@ const App: React.FC = () => {
 
       const score = calculateGlobalScore();
       
+      // Save to Supabase first
+      const dbReport = await SupabaseService.createReport({
+          user_email: currentUser.email,
+          user_name: currentUser.name,
+          pharmacy_name: config.pharmacyName,
+          score: score,
+          form_data: { ...formData },
+          images: { ...images },
+          signatures: { ...signatures },
+          ignored_checklists: Array.from(ignoredChecklists)
+      });
+      
       const newReport: ReportHistoryItem = {
-          id: Date.now().toString(),
+          id: dbReport?.id || Date.now().toString(),
           userEmail: currentUser.email,
           userName: currentUser.name,
-          date: new Date().toISOString(),
+          date: dbReport?.created_at || new Date().toISOString(),
           pharmacyName: config.pharmacyName,
           score: score,
           formData: { ...formData },
@@ -1114,16 +1280,19 @@ const App: React.FC = () => {
 
       setReportHistory(prev => [newReport, ...prev]);
       
-      // Clear Draft
+      // Clear Draft from state
       setFormData({});
       setImages({});
       setSignatures({});
       setIgnoredChecklists(new Set());
       
-      // Clear from storage explicitly to be safe
+      // Clear from localStorage
       const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
       delete allDrafts[currentUser.email];
       localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+      
+      // Clear from Supabase
+      await SupabaseService.deleteDraft(currentUser.email);
 
       alert("Relatório salvo e arquivado com sucesso!");
       
@@ -1332,8 +1501,94 @@ const App: React.FC = () => {
 
   // --- RENDER ---
 
+  // Loading Screen
+  if (isLoadingData) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-20 h-20 mx-auto mb-6">
+            <MFLogo className="w-full h-full animate-pulse" />
+          </div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
+          <p className="text-white font-bold text-lg">Carregando dados...</p>
+          <p className="text-white/80 text-sm mt-2">Conectando ao Supabase</p>
+        </div>
+      </div>
+    );
+  }
+
   if (!currentUser) {
-    return <LoginScreen onLogin={handleLogin} users={users} onRegister={handleRegister} />;
+    return (
+      <>
+        <LoginScreen onLogin={handleLogin} users={users} onRegister={handleRegister} />
+        
+        {/* Migration Panel - Floating Button */}
+        {!showMigrationPanel && (
+          <button
+            onClick={() => setShowMigrationPanel(true)}
+            className="fixed bottom-4 right-4 bg-blue-600 text-white px-4 py-2 rounded-lg shadow-lg hover:bg-blue-700 transition-all text-sm font-bold z-50"
+          >
+            🔄 Migrar para Nuvem
+          </button>
+        )}
+        
+        {/* Migration Panel */}
+        {showMigrationPanel && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-8">
+              <h2 className="text-2xl font-bold text-gray-800 mb-4">Migração para Supabase</h2>
+              
+              {!isMigrating && !migrationStatus && (
+                <>
+                  <p className="text-gray-600 mb-6">
+                    Antes de migrar, é recomendado fazer um backup dos seus dados locais.
+                  </p>
+                  
+                  <div className="space-y-3">
+                    <button
+                      onClick={handleBackupDownload}
+                      className="w-full bg-green-600 text-white px-4 py-3 rounded-lg hover:bg-green-700 transition-all font-bold flex items-center justify-center gap-2"
+                    >
+                      <Download size={20} />
+                      Baixar Backup (JSON)
+                    </button>
+                    
+                    <button
+                      onClick={handleMigration}
+                      className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg hover:bg-blue-700 transition-all font-bold"
+                    >
+                      Migrar Dados para Nuvem
+                    </button>
+                    
+                    <button
+                      onClick={() => setShowMigrationPanel(false)}
+                      className="w-full bg-gray-200 text-gray-700 px-4 py-3 rounded-lg hover:bg-gray-300 transition-all font-bold"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </>
+              )}
+              
+              {isMigrating && (
+                <div className="text-center py-8">
+                  <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-600 mx-auto mb-4"></div>
+                  <p className="text-gray-600 font-medium">{migrationStatus}</p>
+                </div>
+              )}
+              
+              {!isMigrating && migrationStatus && (
+                <div className="text-center py-8">
+                  <pre className="text-left bg-gray-100 p-4 rounded-lg text-sm whitespace-pre-wrap">
+                    {migrationStatus}
+                  </pre>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </>
+    );
   }
 
   // Determine if we are in "Read Only" mode (History View)
