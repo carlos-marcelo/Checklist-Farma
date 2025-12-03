@@ -552,10 +552,6 @@ const App: React.FC = () => {
   const [showMigrationPanel, setShowMigrationPanel] = useState(false);
   const [isMigrating, setIsMigrating] = useState(false);
   const [migrationStatus, setMigrationStatus] = useState('');
-
-  // Supabase Connectivity Status
-  const [supabaseStatus, setSupabaseStatus] = useState<'online' | 'offline' | 'unknown'>('unknown');
-  const [supabaseError, setSupabaseError] = useState<string>('');
   
   // Loading State
   const [isLoadingData, setIsLoadingData] = useState(true);
@@ -620,16 +616,6 @@ const App: React.FC = () => {
     const initializeData = async () => {
       try {
         setIsLoadingData(true);
-
-        // Quick connectivity check
-        try {
-          const pingUsers = await SupabaseService.fetchUsers();
-          setSupabaseStatus(pingUsers ? 'online' : 'offline');
-          setSupabaseError('');
-        } catch (e: any) {
-          setSupabaseStatus('offline');
-          setSupabaseError(e?.message || 'Falha ao conectar ao Supabase');
-        }
         
         // 1. Load Users from Supabase (fallback to localStorage)
         const dbUsers = await SupabaseService.fetchUsers();
@@ -957,26 +943,22 @@ const App: React.FC = () => {
     };
   
   const handleRegister = async (newUser: User) => {
-    console.log('🔄 Tentando criar usuário:', newUser.email);
     try {
       // Save to Supabase first
       const created = await SupabaseService.createUser(newUser);
       if (created) {
-        console.log('✅ Usuário criado no Supabase com sucesso:', created);
         // Add to local state
         setUsers(prev => [...prev, newUser]);
         // Backup to localStorage
         const updated = [...users, newUser];
         localStorage.setItem('APP_USERS', JSON.stringify(updated));
       } else {
-        console.warn('⚠️ Supabase retornou null. Salvando apenas localmente.');
         // Fallback to local only
         setUsers(prev => [...prev, newUser]);
         const updated = [...users, newUser];
         localStorage.setItem('APP_USERS', JSON.stringify(updated));
       }
-    } catch (error: any) {
-      console.error('❌ Erro ao criar usuário no Supabase:', error?.message || error);
+    } catch (error) {
       // Fallback to local only on error
       setUsers(prev => [...prev, newUser]);
       const updated = [...users, newUser];
@@ -1144,14 +1126,11 @@ const App: React.FC = () => {
           rejected: false
       };
       
-      console.log('🔄 [MASTER] Criando usuário interno:', newUser.email);
       // Save to Supabase first
       const created = await SupabaseService.createUser(newUser);
       if (created) {
-        console.log('✅ [MASTER] Usuário interno criado no Supabase:', created);
         setUsers(prev => [...prev, newUser]);
       } else {
-        console.warn('⚠️ [MASTER] Falha ao criar no Supabase. Salvando localmente.');
         // Fallback to local only
         setUsers(prev => [...prev, newUser]);
       }
@@ -2909,13 +2888,6 @@ const App: React.FC = () => {
             )}
 
         </main>
-
-        {/* Supabase Connectivity Badge */}
-        <div className="fixed bottom-4 right-4 z-50">
-          <div className={`px-3 py-2 rounded-full text-xs font-bold shadow-md ${supabaseStatus === 'online' ? 'bg-green-100 text-green-700' : supabaseStatus === 'offline' ? 'bg-red-100 text-red-700' : 'bg-gray-100 text-gray-600'}`}>
-            {supabaseStatus === 'online' ? 'Supabase: Online' : supabaseStatus === 'offline' ? `Supabase: Offline${supabaseError ? ' — ' + supabaseError : ''}` : 'Supabase: Verificando...'}
-          </div>
-        </div>
       </div>
     </div>
   );
