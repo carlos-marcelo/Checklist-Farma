@@ -65,6 +65,7 @@ export async function fetchUsers(): Promise<DbUser[]> {
 
 export async function createUser(user: DbUser): Promise<DbUser | null> {
   try {
+    console.log('📤 Supabase: Tentando criar usuário:', user.email);
     const { data, error } = await supabase
       .from('users')
       .insert([{
@@ -80,10 +81,14 @@ export async function createUser(user: DbUser): Promise<DbUser | null> {
       .select()
       .single();
     
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Supabase createUser error:', error);
+      throw error;
+    }
+    console.log('✅ Supabase: Usuário criado com sucesso:', data);
     return data;
-  } catch (error) {
-    console.error('Error creating user:', error);
+  } catch (error: any) {
+    console.error('❌ Error creating user:', error?.message || error);
     return null;
   }
 }

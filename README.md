@@ -15,9 +15,22 @@ View your app in AI Studio: https://ai.studio/apps/drive/1nozC64cycw2FI5dSOe7CWF
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Create `.env.local` with Supabase keys:
+
+```
+VITE_SUPABASE_URL=https://SEU_PROJETO.supabase.co
+VITE_SUPABASE_ANON_KEY=seu_anon_key
+```
+
 3. Run the app:
    `npm run dev`
+
+## Deploy Secrets (GitHub Actions)
+- Settings → Secrets and variables → Actions → New repository secret
+  - `VITE_SUPABASE_URL`
+  - `VITE_SUPABASE_ANON_KEY`
+
+O workflow usa esses valores na build. Sem eles, o app exibirá um badge "Supabase: Offline".
 
 # Checklist-Farma
 
