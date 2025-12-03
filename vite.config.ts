@@ -5,8 +5,8 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
-      // Base para GitHub Pages em projeto: /Checklist-Farma/
-      base: '/Checklist-Farma/',
+      // Base para domínio próprio marcelo.far.br
+      base: '/',
       server: {
         port: 3000,
         host: '0.0.0.0',
