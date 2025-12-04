@@ -1501,7 +1501,27 @@ const App: React.FC = () => {
           ignoredChecklists: Array.from(ignoredChecklists)
       };
 
-      setReportHistory(prev => [newReport, ...prev]);
+      // Force refresh reports from Supabase to ensure sync across devices
+      try {
+          const dbReports = await SupabaseService.fetchReports();
+          const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
+              id: r.id,
+              userEmail: r.user_email,
+              userName: r.user_name,
+              date: r.created_at,
+              pharmacyName: r.pharmacy_name,
+              score: r.score,
+              formData: r.form_data || {},
+              images: r.images || {},
+              signatures: r.signatures || {},
+              ignoredChecklists: r.ignored_checklists || []
+          }));
+          setReportHistory(formattedReports);
+      } catch (error) {
+          console.error('Error refreshing reports:', error);
+          // Fallback: adicionar apenas o novo relatório
+          setReportHistory(prev => [newReport, ...prev]);
+      }
       
       // Clear Draft from state
       setFormData({});

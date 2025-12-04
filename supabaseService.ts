@@ -219,14 +219,18 @@ export async function createReport(report: DbReport): Promise<DbReport | null> {
 // Check if a similar report already exists to avoid duplicates
 export async function reportExists(report: DbReport): Promise<boolean> {
   try {
+    // Verificar se já existe relatório do mesmo usuário/farmácia/nota nos últimos 5 minutos
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+    
     const { data, error } = await supabase
       .from('reports')
-      .select('id')
+      .select('id, score')
       .eq('user_email', report.user_email)
       .eq('pharmacy_name', report.pharmacy_name)
       .eq('score', report.score)
-      .eq('form_data', report.form_data)
+      .gte('created_at', fiveMinutesAgo)
       .limit(1);
+      
     if (error) throw error;
     return !!(data && data.length > 0);
   } catch (error) {
