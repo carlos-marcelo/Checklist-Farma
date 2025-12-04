@@ -1242,19 +1242,44 @@ const App: React.FC = () => {
   const handleImageUpload = (sectionId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      
+      // Comprimir imagem antes de processar (evita travamento em celulares)
       const reader = new FileReader();
       reader.onloadend = () => {
-        setImages(prev => {
-            const currentListImages = prev[activeChecklistId] || {};
-            const sectionImages = currentListImages[sectionId] || [];
-            return {
-                ...prev,
-                [activeChecklistId]: {
-                    ...currentListImages,
-                    [sectionId]: [...sectionImages, reader.result as string]
-                }
-            };
-        });
+        const img = new Image();
+        img.onload = () => {
+          // Reduzir tamanho se muito grande
+          const canvas = document.createElement('canvas');
+          let width = img.width;
+          let height = img.height;
+          
+          // Máximo 800px de largura para mobile
+          if (width > 800) {
+            height = (height * 800) / width;
+            width = 800;
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(img, 0, 0, width, height);
+            const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7); // 70% qualidade
+            
+            setImages(prev => {
+                const currentListImages = prev[activeChecklistId] || {};
+                const sectionImages = currentListImages[sectionId] || [];
+                return {
+                    ...prev,
+                    [activeChecklistId]: {
+                        ...currentListImages,
+                        [sectionId]: [...sectionImages, compressedBase64]
+                    }
+                };
+            });
+          }
+        };
+        img.src = reader.result as string;
       };
       reader.readAsDataURL(file);
     }
