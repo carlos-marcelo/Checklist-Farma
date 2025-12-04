@@ -197,7 +197,7 @@ const LogoPrint = ({ config, theme }: { config: AppConfig, theme: any }) => {
 };
 
 // Custom Date Input 3D
-const DateInput = ({ value, onChange, theme, hasError }: { value: string, onChange: (val: string) => void, theme: any, hasError?: boolean }) => {
+const DateInput = ({ value, onChange, theme, hasError, disabled }: { value: string, onChange: (val: string) => void, theme: any, hasError?: boolean, disabled?: boolean }) => {
   const [day, setDay] = useState('');
   const [month, setMonth] = useState('');
   const [year, setYear] = useState('');
@@ -232,27 +232,27 @@ const DateInput = ({ value, onChange, theme, hasError }: { value: string, onChan
   const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
   const years = Array.from({length: 10}, (_, i) => (new Date().getFullYear() - 1 + i).toString());
 
-  const selectClass = `appearance-none border ${hasError ? 'border-red-500 bg-red-50 text-red-900' : 'border-gray-200 bg-gray-50 text-gray-900'} rounded-lg p-2.5 focus:ring-2 ${theme.ring} focus:border-transparent outline-none shadow-sm transition-all hover:bg-white cursor-pointer font-medium`;
+  const selectClass = `appearance-none border ${hasError ? 'border-red-500 bg-red-50 text-red-900' : 'border-gray-200 bg-gray-50 text-gray-900'} rounded-lg p-2.5 focus:ring-2 ${theme.ring} focus:border-transparent outline-none shadow-sm transition-all hover:bg-white cursor-pointer font-medium ${disabled ? 'opacity-60 cursor-not-allowed bg-gray-100' : ''}`;
 
   return (
     <div className="flex gap-3">
       <div className="flex flex-col w-20">
         <label className="text-[10px] uppercase font-bold text-gray-400 mb-1 tracking-wider">Dia</label>
-        <select value={day} onChange={(e) => updateDate(e.target.value, month, year)} className={selectClass}>
+        <select value={day} onChange={(e) => updateDate(e.target.value, month, year)} className={selectClass} disabled={disabled}>
           <option value="">--</option>
           {days.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
       </div>
       <div className="flex flex-col w-24">
         <label className="text-[10px] uppercase font-bold text-gray-400 mb-1 tracking-wider">Mês</label>
-        <select value={month} onChange={(e) => updateDate(day, e.target.value, year)} className={selectClass}>
+        <select value={month} onChange={(e) => updateDate(day, e.target.value, year)} className={selectClass} disabled={disabled}>
           <option value="">--</option>
           {months.map((m, i) => <option key={m} value={(i+1).toString().padStart(2, '0')}>{m}</option>)}
         </select>
       </div>
       <div className="flex flex-col w-24">
         <label className="text-[10px] uppercase font-bold text-gray-400 mb-1 tracking-wider">Ano</label>
-        <select value={year} onChange={(e) => updateDate(day, month, e.target.value)} className={selectClass}>
+        <select value={year} onChange={(e) => updateDate(day, month, e.target.value)} className={selectClass} disabled={disabled}>
           <option value="">--</option>
           {years.map(y => <option key={y} value={y}>{y}</option>)}
         </select>
@@ -1693,6 +1693,7 @@ const App: React.FC = () => {
 
             <div className="px-3 mt-8 mb-3 text-xs font-bold text-gray-400 uppercase tracking-widest">Gerenciamento</div>
             
+            {currentUser?.role === 'MASTER' && (
             <button
                 onClick={() => handleViewChange('summary')}
                 className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${
@@ -1704,6 +1705,7 @@ const App: React.FC = () => {
                 <LayoutDashboard className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'summary' ? '' : 'text-gray-400'}`} />
                 Visão Geral / Finalizar
             </button>
+            )}
 
             <button
                 onClick={() => handleViewChange('history')}
@@ -1760,7 +1762,7 @@ const App: React.FC = () => {
                              currentView === 'history' ? 'Histórico de Relatórios' :
                              activeChecklist.title}
                         </h1>
-                        {currentView === 'checklist' && (
+                        {currentView === 'checklist' && currentUser?.role === 'MASTER' && (
                             <button
                                 onClick={handleResetChecklist}
                                 className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors text-xs font-bold"
@@ -1783,7 +1785,7 @@ const App: React.FC = () => {
             </h1>
             
             <div className="flex items-center gap-4">
-                {currentView === 'checklist' && (
+                {currentView === 'checklist' && currentUser?.role === 'MASTER' && (
                      <button
                         onClick={handleResetChecklist}
                         className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-4 py-2 rounded-lg transition-colors text-sm font-bold"
@@ -2370,7 +2372,7 @@ const App: React.FC = () => {
                                        />
                                    )}
                                    {item.type === InputType.DATE && (
-                                       <DateInput value={value as string || ''} onChange={(val) => handleInputChange(item.id, val)} theme={currentTheme} hasError={hasError} />
+                                       <DateInput value={value as string || ''} onChange={(val) => handleInputChange(item.id, val)} theme={currentTheme} hasError={hasError} disabled={isReadOnly} />
                                    )}
                                    {item.type === InputType.BOOLEAN_PASS_FAIL && (
                                        <div className="flex gap-2 sm:gap-3">
