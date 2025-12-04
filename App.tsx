@@ -171,17 +171,17 @@ const LogoPrint = ({ config, theme }: { config: AppConfig, theme: any }) => {
     return (
         <div className={`flex items-center justify-between mb-8 pb-6 border-b-4 ${theme.border}`}>
             {/* Left: Client Logo */}
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-4">
                  {config.logo ? (
                      <img src={config.logo} alt="Logo" className="h-28 w-auto object-contain" />
                  ) : (
                      <div className="w-24 h-24 bg-gray-100 rounded-xl flex items-center justify-center text-gray-400 font-bold border-2 border-dashed border-gray-300">LOGO</div>
                  )}
                  <div>
-                    <div className={`font-black text-4xl leading-tight uppercase tracking-wide ${theme.text}`}>
+                    <div className={`font-black text-lg leading-tight uppercase tracking-wide ${theme.text}`}>
                         {config.pharmacyName}
                     </div>
-                    <div className="text-gray-500 font-bold tracking-[0.2em] text-sm mt-1">RELATÓRIO DE AVALIAÇÃO</div>
+                    <div className="text-gray-500 font-bold tracking-wide text-[10px] mt-1">RELATÓRIO DE AVALIAÇÃO</div>
                 </div>
             </div>
 
