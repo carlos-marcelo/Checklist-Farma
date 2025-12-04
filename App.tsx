@@ -618,9 +618,11 @@ const App: React.FC = () => {
         
         // 1. Load Users from Supabase (fallback to localStorage)
         const dbUsers = await SupabaseService.fetchUsers();
+        let mappedUsers: User[] = [];
+        
         if (dbUsers.length > 0) {
           // Map preferred_theme from DB to preferredTheme in App
-          const mappedUsers = dbUsers.map(u => ({
+          mappedUsers = dbUsers.map(u => ({
             ...u,
             preferredTheme: u.preferred_theme as ThemeColor | undefined
           }));
@@ -630,7 +632,8 @@ const App: React.FC = () => {
           // Fallback to localStorage
           const localUsers = localStorage.getItem('APP_USERS');
           if (localUsers) {
-            setUsers(JSON.parse(localUsers));
+            mappedUsers = JSON.parse(localUsers);
+            setUsers(mappedUsers);
           }
         }
         
@@ -721,7 +724,8 @@ const App: React.FC = () => {
         // 4. Restore session if exists
         const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
         if (savedEmail) {
-          const user = dbUsers.find(u => u.email === savedEmail) || 
+          // Use mappedUsers instead of dbUsers to ensure preferredTheme is loaded
+          const user = mappedUsers.find(u => u.email === savedEmail) || 
                        JSON.parse(localStorage.getItem('APP_USERS') || '[]').find((u: User) => u.email === savedEmail);
           if (user) {
             setCurrentUser(user);
