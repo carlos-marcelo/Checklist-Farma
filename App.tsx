@@ -799,7 +799,10 @@ const App: React.FC = () => {
     if (currentUser) {
       const freshUser = users.find(u => u.email === currentUser.email);
       if (freshUser) {
-        if (freshUser.name !== currentUser.name || freshUser.phone !== currentUser.phone || freshUser.photo !== currentUser.photo) {
+        if (freshUser.name !== currentUser.name || 
+            freshUser.phone !== currentUser.phone || 
+            freshUser.photo !== currentUser.photo ||
+            freshUser.preferredTheme !== currentUser.preferredTheme) {
             setCurrentUser(freshUser);
         }
       }
