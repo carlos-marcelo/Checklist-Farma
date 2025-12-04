@@ -1806,7 +1806,7 @@ const App: React.FC = () => {
                            Personalização e Aparência
                         </h2>
                         
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                        <div className="space-y-10">
                             {currentUser.role === 'MASTER' && (
                                 <div>
                                     <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Nome da Farmácia</label>
@@ -2338,15 +2338,19 @@ const App: React.FC = () => {
                                            type="text" 
                                            value={value as string || ''} 
                                            onChange={(e) => handleInputChange(item.id, e.target.value)}
-                                           className={`w-full border ${inputClasses} rounded-lg p-3 focus:bg-white focus:ring-2 ${currentTheme.ring} outline-none transition-colors shadow-inner-light`}
+                                           disabled={isReadOnly}
+                                           readOnly={isReadOnly}
+                                           className={`w-full border ${inputClasses} rounded-lg p-3 focus:bg-white focus:ring-2 ${currentTheme.ring} outline-none transition-colors shadow-inner-light ${isReadOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                                        />
                                    )}
                                    {item.type === InputType.TEXTAREA && (
                                        <textarea 
                                            value={value as string || ''} 
                                            onChange={(e) => handleInputChange(item.id, e.target.value)}
+                                           disabled={isReadOnly}
+                                           readOnly={isReadOnly}
                                            rows={3}
-                                           className={`w-full border ${inputClasses} rounded-lg p-3 focus:bg-white focus:ring-2 ${currentTheme.ring} outline-none transition-colors shadow-inner-light`}
+                                           className={`w-full border ${inputClasses} rounded-lg p-3 focus:bg-white focus:ring-2 ${currentTheme.ring} outline-none transition-colors shadow-inner-light ${isReadOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
                                        />
                                    )}
                                    {item.type === InputType.DATE && (
@@ -2356,19 +2360,22 @@ const App: React.FC = () => {
                                        <div className="flex gap-2 sm:gap-3">
                                            <button 
                                                onClick={() => handleInputChange(item.id, 'pass')}
-                                               className={`flex-1 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${value === 'pass' ? 'bg-green-500 text-white border-green-600 shadow-md transform scale-[1.02]' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                                               disabled={isReadOnly}
+                                               className={`flex-1 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${value === 'pass' ? 'bg-green-500 text-white border-green-600 shadow-md transform scale-[1.02]' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                            >
                                                <Check size={14} className="sm:w-4 sm:h-4" /> <span className="tracking-wide">CONFORME</span>
                                            </button>
                                            <button 
                                                onClick={() => handleInputChange(item.id, 'fail')}
-                                               className={`flex-1 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${value === 'fail' ? 'bg-red-500 text-white border-red-600 shadow-md transform scale-[1.02]' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                                               disabled={isReadOnly}
+                                               className={`flex-1 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${value === 'fail' ? 'bg-red-500 text-white border-red-600 shadow-md transform scale-[1.02]' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                            >
                                                <AlertTriangle size={14} className="sm:w-4 sm:h-4" /> <span className="tracking-wide">NÃO CONFORME</span>
                                            </button>
                                             <button 
                                                onClick={() => handleInputChange(item.id, 'na')}
-                                               className={`w-14 sm:w-16 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all ${value === 'na' ? 'bg-gray-600 text-white border-gray-700' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'}`}
+                                               disabled={isReadOnly}
+                                               className={`w-14 sm:w-16 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all ${value === 'na' ? 'bg-gray-600 text-white border-gray-700' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
                                            >
                                                N/A
                                            </button>
@@ -2389,25 +2396,31 @@ const App: React.FC = () => {
                                     {(getDataSource(activeChecklistId).imgs[section.id] || []).map((img, idx) => (
                                        <div key={idx} className="relative w-28 h-28 rounded-xl overflow-hidden border border-gray-200 shadow-sm group">
                                            <img src={img} className="w-full h-full object-cover" />
-                                           <button onClick={() => removeImage(section.id, idx)} className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-all shadow-sm hover:bg-red-700"><Trash2 size={12} /></button>
+                                           {!isReadOnly && (
+                                               <button onClick={() => removeImage(section.id, idx)} className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-all shadow-sm hover:bg-red-700"><Trash2 size={12} /></button>
+                                           )}
                                        </div>
                                     ))}
                                     
-                                    {/* Camera Button */}
-                                    <label className={`w-28 h-28 flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:bg-white hover:border-blue-400 hover:text-blue-600 text-gray-400 transition-all bg-gray-50`}>
-                                       <Camera size={24} />
-                                       <span className="text-[10px] font-bold mt-2 uppercase tracking-wide text-center px-1">Câmera</span>
-                                       {/* capture="environment" forces camera on mobile */}
-                                       <input type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => handleImageUpload(section.id, e)} />
-                                    </label>
-                                    
-                                    {/* Gallery Upload Button */}
-                                    <label className={`w-28 h-28 flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:bg-white hover:border-gray-400 hover:text-gray-600 text-gray-400 transition-all bg-gray-50`}>
-                                       <Upload size={24} />
-                                       <span className="text-[10px] font-bold mt-2 uppercase tracking-wide text-center px-1">Galeria</span>
-                                       {/* Standard upload */}
-                                       <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(section.id, e)} />
-                                    </label>
+                                    {/* Camera Button - Only for MASTER */}
+                                    {!isReadOnly && (
+                                        <>
+                                            <label className={`w-28 h-28 flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:bg-white hover:border-blue-400 hover:text-blue-600 text-gray-400 transition-all bg-gray-50`}>
+                                               <Camera size={24} />
+                                               <span className="text-[10px] font-bold mt-2 uppercase tracking-wide text-center px-1">Câmera</span>
+                                               {/* capture="environment" forces camera on mobile */}
+                                               <input type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => handleImageUpload(section.id, e)} />
+                                            </label>
+                                            
+                                            {/* Gallery Upload Button */}
+                                            <label className={`w-28 h-28 flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:bg-white hover:border-gray-400 hover:text-gray-600 text-gray-400 transition-all bg-gray-50`}>
+                                               <Upload size={24} />
+                                               <span className="text-[10px] font-bold mt-2 uppercase tracking-wide text-center px-1">Galeria</span>
+                                               {/* Standard upload */}
+                                               <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(section.id, e)} />
+                                            </label>
+                                        </>
+                                    )}
                                 </div>
                            </div>
                            )}
@@ -2416,7 +2429,8 @@ const App: React.FC = () => {
                   );
                   })}
 
-                  {/* Signatures */}
+                  {/* Signatures - Only for MASTER */}
+                  {!isReadOnly && (
                    <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
                        <h3 className="font-bold text-lg text-gray-800 mb-6 flex items-center gap-2">
                            <FileCheck className={currentTheme.text} />
@@ -2427,8 +2441,10 @@ const App: React.FC = () => {
                            <SignaturePad label="Assinatura Coordenador / Aplicador" onEnd={(data) => handleSignature('coordenador', data)} />
                        </div>
                    </div>
+                  )}
 
-                   {/* Next Step Navigation */}
+                   {/* Next Step Navigation - Only for MASTER */}
+                   {!isReadOnly && (
                    <div className="flex flex-col sm:flex-row justify-between pt-4 gap-4">
                        <button
                            onClick={handleVerify}
@@ -2458,6 +2474,7 @@ const App: React.FC = () => {
                            </button>
                        </div>
                    </div>
+                   )}
                 </div>
             )}
 
