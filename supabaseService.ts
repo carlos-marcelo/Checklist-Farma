@@ -12,6 +12,7 @@ export interface DbUser {
   approved: boolean;
   rejected?: boolean;
   photo?: string;
+  preferred_theme?: 'red' | 'green' | 'blue' | 'yellow';
   created_at?: string;
 }
 
@@ -74,7 +75,8 @@ export async function createUser(user: DbUser): Promise<DbUser | null> {
         role: user.role,
         approved: user.approved,
         rejected: user.rejected || false,
-        photo: user.photo
+        photo: user.photo,
+        preferred_theme: user.preferred_theme || 'blue'
       }])
       .select()
       .single();

@@ -619,8 +619,13 @@ const App: React.FC = () => {
         // 1. Load Users from Supabase (fallback to localStorage)
         const dbUsers = await SupabaseService.fetchUsers();
         if (dbUsers.length > 0) {
-          setUsers(dbUsers);
-          localStorage.setItem('APP_USERS', JSON.stringify(dbUsers)); // Backup
+          // Map preferred_theme from DB to preferredTheme in App
+          const mappedUsers = dbUsers.map(u => ({
+            ...u,
+            preferredTheme: u.preferred_theme as ThemeColor | undefined
+          }));
+          setUsers(mappedUsers);
+          localStorage.setItem('APP_USERS', JSON.stringify(mappedUsers)); // Backup
         } else {
           // Fallback to localStorage
           const localUsers = localStorage.getItem('APP_USERS');
@@ -699,8 +704,12 @@ const App: React.FC = () => {
                                 }
                                 const refreshedUsers = await SupabaseService.fetchUsers();
                                 if (refreshedUsers.length > 0) {
-                                    setUsers(refreshedUsers);
-                                    localStorage.setItem('APP_USERS', JSON.stringify(refreshedUsers));
+                                    const mappedRefreshedUsers = refreshedUsers.map(u => ({
+                                        ...u,
+                                        preferredTheme: u.preferred_theme as ThemeColor | undefined
+                                    }));
+                                    setUsers(mappedRefreshedUsers);
+                                    localStorage.setItem('APP_USERS', JSON.stringify(mappedRefreshedUsers));
                                 }
                             }
                         } catch (e) {
@@ -1029,8 +1038,8 @@ const App: React.FC = () => {
           u.email === currentUser.email ? { ...u, preferredTheme: theme } : u
       ));
       
-      // Save to Supabase
-      await SupabaseService.updateUser(currentUser.email, { preferredTheme: theme } as any);
+      // Save to Supabase (map camelCase to snake_case)
+      await SupabaseService.updateUser(currentUser.email, { preferred_theme: theme } as any);
   };  const handleSaveProfileAndSecurity = async () => {
       if (!currentUser) return;
 
