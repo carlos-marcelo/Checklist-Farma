@@ -1549,11 +1549,90 @@ const App: React.FC = () => {
       setCurrentView('view_history');
   };
 
-  const handleDownloadPDF = () => {
-      document.title = `Relatorio_Avaliacao_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}`;
-      window.print();
-      // Reset title after print dialog closes (approximate)
-      setTimeout(() => document.title = 'Drogaria Cidade - Checklists', 1000);
+  const handleDownloadPDF = async () => {
+      // @ts-ignore - html2canvas e jspdf são carregados via CDN
+      const html2canvas = window.html2canvas;
+      // @ts-ignore
+      const { jsPDF } = window.jspdf;
+      
+      if (!html2canvas || !jsPDF) {
+          alert('⚠️ Erro: Bibliotecas de PDF não carregadas. Recarregue a página.');
+          return;
+      }
+      
+      const reportElement = document.querySelector('.max-w-5xl') as HTMLElement;
+      if (!reportElement) {
+          alert('⚠️ Erro: Relatório não encontrado.');
+          return;
+      }
+      
+      // Mostrar feedback de loading
+      const downloadBtn = document.querySelector('.no-print button') as HTMLButtonElement;
+      const originalHTML = downloadBtn?.innerHTML || '';
+      if (downloadBtn) {
+          downloadBtn.innerHTML = '<svg class="animate-spin h-5 w-5 mr-2 inline" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Gerando PDF...';
+          downloadBtn.disabled = true;
+      }
+      
+      try {
+          // Gerar canvas do relatório completo
+          const canvas = await html2canvas(reportElement, {
+              scale: 2, // Qualidade alta (2x resolução)
+              useCORS: true,
+              logging: false,
+              backgroundColor: '#ffffff',
+              windowWidth: 1200,
+              onclone: (clonedDoc) => {
+                  const clonedElement = clonedDoc.querySelector('.max-w-5xl') as HTMLElement;
+                  if (clonedElement) {
+                      clonedElement.style.maxWidth = '1200px';
+                      clonedElement.style.padding = '40px';
+                  }
+              }
+          });
+          
+          // Criar PDF
+          const imgData = canvas.toDataURL('image/png');
+          const pdf = new jsPDF({
+              orientation: 'portrait',
+              unit: 'mm',
+              format: 'a4'
+          });
+          
+          const pageWidth = pdf.internal.pageSize.getWidth();
+          const pageHeight = pdf.internal.pageSize.getHeight();
+          const imgWidth = pageWidth;
+          const imgHeight = (canvas.height * pageWidth) / canvas.width;
+          
+          let heightLeft = imgHeight;
+          let position = 0;
+          
+          // Adicionar primeira página
+          pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+          heightLeft -= pageHeight;
+          
+          // Adicionar páginas adicionais se necessário
+          while (heightLeft > 0) {
+              position = heightLeft - imgHeight;
+              pdf.addPage();
+              pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+              heightLeft -= pageHeight;
+          }
+          
+          // Baixar PDF
+          const fileName = `Relatorio_${config.pharmacyName.replace(/\s+/g, '_')}_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.pdf`;
+          pdf.save(fileName);
+          
+      } catch (error) {
+          console.error('Erro ao gerar PDF:', error);
+          alert('⚠️ Erro ao gerar PDF. Tente usar a impressão do navegador (Ctrl+P).');
+      } finally {
+          // Restaurar botão
+          if (downloadBtn) {
+              downloadBtn.innerHTML = originalHTML;
+              downloadBtn.disabled = false;
+          }
+      }
   };
 
 
@@ -2991,10 +3070,10 @@ const App: React.FC = () => {
                                                  </div>
                                                  {/* Images in Report */}
                                                  {(getDataSource(cl.id).imgs[sec.id] || []).length > 0 && (
-                                                     <div className="mt-4 grid grid-cols-4 gap-4">
+                                                     <div className="mt-4 grid grid-cols-4 gap-4 break-inside-avoid">
                                                          {(getDataSource(cl.id).imgs[sec.id] || []).map((img, idx) => (
-                                                             <div key={idx} className="h-32 rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
-                                                                 <img src={img} className="w-full h-full object-cover" />
+                                                             <div key={idx} className="h-32 rounded-lg border border-gray-200 overflow-hidden bg-gray-50 break-inside-avoid">
+                                                                 <img src={img} alt={`Imagem ${idx + 1}`} className="w-full h-full object-cover" />
                                                              </div>
                                                          ))}
                                                      </div>
@@ -3022,10 +3101,20 @@ const App: React.FC = () => {
                          })}
                     </div>
 
-                    <div className="mt-12 flex justify-center no-print">
-                        <button onClick={handleDownloadPDF} className="flex items-center gap-2 bg-gray-800 text-white px-8 py-3 rounded-xl hover:bg-gray-900 transition-all shadow-lg font-bold">
+                    <div className="mt-12 flex justify-center gap-4 no-print flex-wrap">
+                        <button 
+                            onClick={handleDownloadPDF} 
+                            className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-8 py-3 rounded-xl transition-all shadow-lg font-bold"
+                        >
                             <Download size={20} />
                             Baixar Relatório em PDF
+                        </button>
+                        <button 
+                            onClick={() => window.print()} 
+                            className="flex items-center gap-2 bg-gray-700 hover:bg-gray-800 text-white px-8 py-3 rounded-xl transition-all shadow-lg font-bold"
+                        >
+                            <Printer size={20} />
+                            Imprimir
                         </button>
                     </div>
                 </div>
