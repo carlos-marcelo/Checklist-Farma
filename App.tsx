@@ -606,6 +606,7 @@ const App: React.FC = () => {
   const [confirmPassInput, setConfirmPassInput] = useState('');
   const [saveShake, setSaveShake] = useState(false);
   const [profilePhoneError, setProfilePhoneError] = useState('');
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const saveDraftAbortControllerRef = useRef<AbortController | null>(null);
 
 
@@ -856,6 +857,7 @@ const App: React.FC = () => {
       const timeoutId = setTimeout(async () => {
         // Check if aborted before saving
         if (!abortController.signal.aborted) {
+          setSyncStatus('saving');
           await SupabaseService.saveDraft({
             user_email: currentUser.email,
             form_data: formData,
@@ -863,6 +865,8 @@ const App: React.FC = () => {
             signatures: signatures,
             ignored_checklists: Array.from(ignoredChecklists)
           });
+          setSyncStatus('saved');
+          setTimeout(() => setSyncStatus('idle'), 2000); // Mostrar "Salvo" por 2s
         }
       }, 1500); // Increased debounce time to reduce spam
       
@@ -1235,6 +1239,18 @@ const App: React.FC = () => {
           });
       }
 
+      // Sincronizar com localStorage imediatamente
+      if (currentUser) {
+        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+        allDrafts[currentUser.email] = {
+          formData: newData,
+          images: images,
+          signatures: signatures,
+          ignoredChecklists: Array.from(ignoredChecklists)
+        };
+        localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+      }
+
       return newData;
     });
   };
@@ -1242,6 +1258,11 @@ const App: React.FC = () => {
   const handleImageUpload = (sectionId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
+      
+      // Limite de 5MB por imagem
+      if (file.size > 5 * 1024 * 1024) {
+        alert('⚠️ Imagem muito grande (máximo 5MB). Será comprimida automaticamente.');
+      }
       
       // Comprimir imagem antes de processar (evita travamento em celulares)
       const reader = new FileReader();
@@ -1253,10 +1274,10 @@ const App: React.FC = () => {
           let width = img.width;
           let height = img.height;
           
-          // Máximo 800px de largura para mobile
-          if (width > 800) {
-            height = (height * 800) / width;
-            width = 800;
+          // Máximo 1024px de largura para melhor qualidade
+          if (width > 1024) {
+            height = (height * 1024) / width;
+            width = 1024;
           }
           
           canvas.width = width;
@@ -1264,18 +1285,39 @@ const App: React.FC = () => {
           const ctx = canvas.getContext('2d');
           if (ctx) {
             ctx.drawImage(img, 0, 0, width, height);
-            const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7); // 70% qualidade
+            // Reduzir qualidade progressivamente até ficar sob 2MB
+            let quality = 0.85;
+            let compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+            
+            while (compressedBase64.length > 2 * 1024 * 1024 && quality > 0.3) {
+              quality -= 0.1;
+              compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+            }
             
             setImages(prev => {
                 const currentListImages = prev[activeChecklistId] || {};
                 const sectionImages = currentListImages[sectionId] || [];
-                return {
+                const newImages = {
                     ...prev,
                     [activeChecklistId]: {
                         ...currentListImages,
                         [sectionId]: [...sectionImages, compressedBase64]
                     }
                 };
+                
+                // Sincronizar imediatamente com localStorage
+                if (currentUser) {
+                  const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+                  allDrafts[currentUser.email] = {
+                    formData: formData,
+                    images: newImages,
+                    signatures: signatures,
+                    ignoredChecklists: Array.from(ignoredChecklists)
+                  };
+                  localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+                }
+                
+                return newImages;
             });
           }
         };
@@ -1301,13 +1343,29 @@ const App: React.FC = () => {
   };
 
   const handleSignature = (role: string, dataUrl: string) => {
-      setSignatures(prev => ({
-          ...prev,
-          [activeChecklistId]: {
-              ...(prev[activeChecklistId] || {}),
-              [role]: dataUrl
+      setSignatures(prev => {
+          const updated = {
+              ...prev,
+              [activeChecklistId]: {
+                  ...(prev[activeChecklistId] || {}),
+                  [role]: dataUrl
+              }
+          };
+          
+          // Sincronizar assinatura imediatamente com localStorage
+          if (currentUser) {
+            const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+            allDrafts[currentUser.email] = {
+              formData: formData,
+              images: images,
+              signatures: updated,
+              ignoredChecklists: Array.from(ignoredChecklists)
+            };
+            localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
           }
-      }));
+          
+          return updated;
+      });
   };
 
   // Helper to get data source (Draft or History Item)
