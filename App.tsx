@@ -793,17 +793,57 @@ const App: React.FC = () => {
   useEffect(() => {
     setDraftLoaded(false); // Reset on any currentUser change
     if (currentUser) {
-      const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
-      const userDraft = allDrafts[currentUser.email];
+      // Primeiro, verificar se há um draft do Supabase (mais recente)
+      const loadDraft = async () => {
+        try {
+          const supabaseDraft = await SupabaseService.fetchDraft(currentUser.email);
+          
+          if (supabaseDraft && supabaseDraft.form_data) {
+            // Usar draft do Supabase (mais confiável)
+            setFormData(supabaseDraft.form_data || {});
+            setImages(supabaseDraft.images || {});
+            setSignatures(supabaseDraft.signatures || {});
+            setIgnoredChecklists(new Set(supabaseDraft.ignored_checklists || []));
+            
+            // Sincronizar localStorage com Supabase
+            const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+            allDrafts[currentUser.email] = {
+              formData: supabaseDraft.form_data || {},
+              images: supabaseDraft.images || {},
+              signatures: supabaseDraft.signatures || {},
+              ignoredChecklists: supabaseDraft.ignored_checklists || []
+            };
+            localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+          } else {
+            // Supabase não tem draft (foi finalizado ou limpo)
+            // Limpar draft do localStorage também
+            const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+            delete allDrafts[currentUser.email];
+            localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+            
+            // Estado limpo
+            setFormData({});
+            setImages({});
+            setSignatures({});
+            setIgnoredChecklists(new Set());
+          }
+        } catch (error) {
+          // Se falhar Supabase, usar localStorage (fallback offline)
+          const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+          const userDraft = allDrafts[currentUser.email];
+          
+          if (userDraft) {
+            setFormData(userDraft.formData || {});
+            setImages(userDraft.images || {});
+            setSignatures(userDraft.signatures || {});
+            setIgnoredChecklists(new Set(userDraft.ignoredChecklists || []));
+          }
+        }
+        
+        setDraftLoaded(true);
+      };
       
-      if (userDraft) {
-        setFormData(userDraft.formData || {});
-        setImages(userDraft.images || {});
-        setSignatures(userDraft.signatures || {});
-        setIgnoredChecklists(new Set(userDraft.ignoredChecklists || []));
-      }
-      
-      setDraftLoaded(true);
+      loadDraft();
     }
   }, [currentUser]);
 
