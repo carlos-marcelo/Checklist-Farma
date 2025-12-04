@@ -19,7 +19,6 @@ export interface DbConfig {
   id?: string;
   pharmacy_name: string;
   logo: string | null;
-  theme: 'red' | 'green' | 'blue' | 'yellow';
   updated_at?: string;
 }
 
@@ -149,7 +148,6 @@ export async function saveConfig(config: DbConfig): Promise<boolean> {
         .update({
           pharmacy_name: config.pharmacy_name,
           logo: config.logo,
-          theme: config.theme,
           updated_at: new Date().toISOString()
         })
         .eq('id', existing.id);
@@ -161,8 +159,7 @@ export async function saveConfig(config: DbConfig): Promise<boolean> {
         .from('configs')
         .insert([{
           pharmacy_name: config.pharmacy_name,
-          logo: config.logo,
-          theme: config.theme
+          logo: config.logo
         }]);
       
       if (error) throw error;

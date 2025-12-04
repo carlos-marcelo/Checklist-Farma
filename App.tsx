@@ -13,7 +13,6 @@ type ThemeColor = 'red' | 'green' | 'blue' | 'yellow';
 interface AppConfig {
   pharmacyName: string;
   logo: string | null;
-  theme: ThemeColor;
 }
 
 interface User {
@@ -24,7 +23,8 @@ interface User {
   role: 'MASTER' | 'USER';
   approved: boolean;
   rejected?: boolean; // New field to handle "Banned/Refused" state
-  photo?: string; 
+  photo?: string;
+  preferredTheme?: ThemeColor; // Individual theme preference
 }
 
 interface ReportHistoryItem {
@@ -563,8 +563,7 @@ const App: React.FC = () => {
   // Config State
   const [config, setConfig] = useState<AppConfig>({
     pharmacyName: 'Marcelo Far',
-    logo: null,
-    theme: 'blue'
+    logo: null
   });
 
   // App Logic State
@@ -635,13 +634,11 @@ const App: React.FC = () => {
         if (dbConfig) {
           setConfig({
             pharmacyName: dbConfig.pharmacy_name,
-            logo: dbConfig.logo,
-            theme: dbConfig.theme
+            logo: dbConfig.logo
           });
           localStorage.setItem('APP_CONFIG', JSON.stringify({
             pharmacyName: dbConfig.pharmacy_name,
-            logo: dbConfig.logo,
-            theme: dbConfig.theme
+            logo: dbConfig.logo
           }));
         } else {
           // Fallback to localStorage
@@ -855,8 +852,7 @@ const App: React.FC = () => {
       const timeoutId = setTimeout(async () => {
         await SupabaseService.saveConfig({
           pharmacy_name: config.pharmacyName,
-          logo: config.logo,
-          theme: config.theme
+          logo: config.logo
         });
       }, 1000);
       
@@ -877,7 +873,7 @@ const App: React.FC = () => {
 
   // --- DERIVED STATE ---
   const activeChecklist = CHECKLISTS.find(c => c.id === activeChecklistId) || CHECKLISTS[0];
-  const currentTheme = THEMES[config.theme];
+  const currentTheme = THEMES[currentUser?.preferredTheme || 'blue'];
   
   // Pending users are those NOT approved AND NOT rejected (fresh requests)
   const pendingUsers = users.filter(u => !u.approved && !u.rejected);
@@ -1015,14 +1011,24 @@ const App: React.FC = () => {
               setUsers(prevUsers => prevUsers.map(u => u.email === currentUser?.email ? { ...u, photo } : u));
               // Update in Supabase
               if (currentUser) {
-                await SupabaseService.updateUser(currentUser.email, { photo });
+                  await SupabaseService.updateUser(currentUser.email, { photo });
               }
           };
           reader.readAsDataURL(e.target.files[0]);
       }
   };
 
-  const handleSaveProfileAndSecurity = async () => {
+  const handleUpdateUserTheme = async (theme: ThemeColor) => {
+      if (!currentUser) return;
+      
+      // Update user's preferred theme
+      setUsers(prevUsers => prevUsers.map(u => 
+          u.email === currentUser.email ? { ...u, preferredTheme: theme } : u
+      ));
+      
+      // Save to Supabase
+      await SupabaseService.updateUser(currentUser.email, { preferredTheme: theme } as any);
+  };  const handleSaveProfileAndSecurity = async () => {
       if (!currentUser) return;
 
       // Validate Phone
@@ -1560,7 +1566,8 @@ const App: React.FC = () => {
           if (historyFilterUser === 'all') return reportHistory;
           return reportHistory.filter(r => r.userEmail === historyFilterUser);
       }
-      return reportHistory.filter(r => r.userEmail === currentUser?.email);
+      // USER role sees only master's reports
+      return reportHistory.filter(r => r.userEmail === 'asconavietagestor@gmail.com');
   };
 
   // --- RENDER ---
@@ -1590,7 +1597,7 @@ const App: React.FC = () => {
     }
 
   // Determine if we are in "Read Only" mode (History View)
-  const isReadOnly = currentView === 'view_history';
+  const isReadOnly = currentView === 'view_history' || currentUser?.role === 'USER';
   const displayConfig = isReadOnly && viewHistoryItem ? { ...config, pharmacyName: viewHistoryItem.pharmacyName } : config;
   
   // Calculate current checklist specific stats for render
@@ -1800,16 +1807,18 @@ const App: React.FC = () => {
                         </h2>
                         
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
-                            <div>
-                                <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Nome da Farmácia</label>
-                                <input 
-                                    type="text" 
-                                    value={config.pharmacyName}
-                                    onChange={(e) => setConfig({ ...config, pharmacyName: e.target.value })}
-                                    className={`w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:ring-2 ${currentTheme.ring} outline-none shadow-inner-light transition-all`}
-                                />
-                                <p className="text-xs text-gray-500 mt-2 font-medium">Exibido no cabeçalho e relatórios.</p>
-                            </div>
+                            {currentUser.role === 'MASTER' && (
+                                <div>
+                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Nome da Farmácia</label>
+                                    <input 
+                                        type="text" 
+                                        value={config.pharmacyName}
+                                        onChange={(e) => setConfig({ ...config, pharmacyName: e.target.value })}
+                                        className={`w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:ring-2 ${currentTheme.ring} outline-none shadow-inner-light transition-all`}
+                                    />
+                                    <p className="text-xs text-gray-500 mt-2 font-medium">Exibido no cabeçalho e relatórios.</p>
+                                </div>
+                            )}
 
                             <div>
                                 <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Cor do Tema</label>
@@ -1817,43 +1826,45 @@ const App: React.FC = () => {
                                     {(['red', 'green', 'blue', 'yellow'] as ThemeColor[]).map(color => (
                                         <button
                                             key={color}
-                                            onClick={() => setConfig({ ...config, theme: color })}
-                                            className={`w-12 h-12 rounded-xl shadow-md border-2 ${THEMES[color].bg} ${config.theme === color ? 'border-gray-800 scale-110 ring-2 ring-offset-2 ring-gray-300' : 'border-transparent opacity-80 hover:opacity-100'} transition-all transform hover:scale-105`}
+                                            onClick={() => handleUpdateUserTheme(color)}
+                                            className={`w-12 h-12 rounded-xl shadow-md border-2 ${THEMES[color].bg} ${(currentUser?.preferredTheme || 'blue') === color ? 'border-gray-800 scale-110 ring-2 ring-offset-2 ring-gray-300' : 'border-transparent opacity-80 hover:opacity-100'} transition-all transform hover:scale-105`}
                                             title={color}
                                         />
                                     ))}
                                 </div>
                             </div>
 
-                            <div className="col-span-1 md:col-span-2">
-                                <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Logo da Empresa</label>
-                                <div className="flex items-center gap-8 bg-gray-50 p-6 rounded-2xl border border-gray-200">
-                                    <div className="h-28 w-44 bg-white rounded-xl shadow-sm border border-gray-200 flex items-center justify-center overflow-hidden relative">
-                                        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] opacity-10"></div>
-                                        {config.logo ? (
-                                            <img src={config.logo} alt="Preview" className="h-full w-full object-contain p-2 relative z-10" />
-                                        ) : (
-                                            <ImageIcon className="text-gray-300 relative z-10" size={40} />
-                                        )}
-                                    </div>
-                                    <div className="flex flex-col gap-3">
-                                        <label className={`cursor-pointer inline-flex items-center px-5 py-2.5 border border-gray-300 shadow-sm text-sm font-bold rounded-lg text-gray-700 bg-white hover:bg-gray-50 hover:shadow-md transition-all`}>
-                                            <Upload size={18} className="mr-2" />
-                                            Carregar Imagem
-                                            <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
-                                        </label>
-                                        {config.logo && (
-                                            <button 
-                                                onClick={() => setConfig({ ...config, logo: null })}
-                                                className="text-sm text-red-600 hover:text-red-800 font-semibold"
-                                            >
-                                                Remover Logo
-                                            </button>
-                                        )}
-                                        <p className="text-xs text-gray-400">Recomendado: PNG Transparente</p>
+                            {currentUser.role === 'MASTER' && (
+                                <div className="col-span-1 md:col-span-2">
+                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Logo da Empresa</label>
+                                    <div className="flex items-center gap-8 bg-gray-50 p-6 rounded-2xl border border-gray-200">
+                                        <div className="h-28 w-44 bg-white rounded-xl shadow-sm border border-gray-200 flex items-center justify-center overflow-hidden relative">
+                                            <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] opacity-10"></div>
+                                            {config.logo ? (
+                                                <img src={config.logo} alt="Preview" className="h-full w-full object-contain p-2 relative z-10" />
+                                            ) : (
+                                                <ImageIcon className="text-gray-300 relative z-10" size={40} />
+                                            )}
+                                        </div>
+                                        <div className="flex flex-col gap-3">
+                                            <label className={`cursor-pointer inline-flex items-center px-5 py-2.5 border border-gray-300 shadow-sm text-sm font-bold rounded-lg text-gray-700 bg-white hover:bg-gray-50 hover:shadow-md transition-all`}>
+                                                <Upload size={18} className="mr-2" />
+                                                Carregar Imagem
+                                                <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
+                                            </label>
+                                            {config.logo && (
+                                                <button 
+                                                    onClick={() => setConfig({ ...config, logo: null })}
+                                                    className="text-sm text-red-600 hover:text-red-800 font-semibold"
+                                                >
+                                                    Remover Logo
+                                                </button>
+                                            )}
+                                            <p className="text-xs text-gray-400">Recomendado: PNG Transparente</p>
+                                        </div>
                                     </div>
                                 </div>
-                            </div>
+                            )}
                         </div>
                     </div>
 
