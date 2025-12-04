@@ -2730,11 +2730,11 @@ const App: React.FC = () => {
 
             {/* --- REPORT / HISTORY VIEW (READ ONLY) --- */}
             {(currentView === 'report' || currentView === 'view_history') && (
-                <div className="max-w-5xl mx-auto bg-white p-10 shadow-2xl rounded-3xl min-h-screen print:shadow-none print:p-0 print:w-full">
+                <div className="max-w-5xl mx-auto bg-white p-10 shadow-2xl rounded-3xl min-h-screen print:shadow-none print:px-8 print:py-6 print:w-full">
                     <LogoPrint config={displayConfig} theme={currentTheme} />
                     
                     {/* Basic Info Block (Extracted Top) */}
-                    <div className="mb-10 border-b-2 border-gray-100 pb-8">
+                    <div className="mb-10 pb-8">
                          <h3 className={`text-xl font-black uppercase tracking-tight mb-6 pb-2 border-b-2 ${currentTheme.border} ${currentTheme.text}`}>Informações Básicas</h3>
                          <div className="grid grid-cols-2 gap-8">
                              <div>

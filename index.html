@@ -70,18 +70,50 @@
       }
 
       @media print {
-        @page { size: A4; margin: 12mm; }
+        @page { 
+          size: A4; 
+          margin: 10mm 12mm; 
+        }
         .no-print { display: none !important; }
         .print-only { display: block !important; }
-        html, body { height: auto; }
-        body { background: white !important; -webkit-print-color-adjust: exact; margin: 0 !important; }
-        #root { padding: 0 !important; }
+        html, body { 
+          height: auto; 
+          overflow: visible !important;
+        }
+        body { 
+          background: white !important; 
+          -webkit-print-color-adjust: exact; 
+          print-color-adjust: exact;
+          margin: 0 !important; 
+          padding: 0 !important;
+        }
+        #root { 
+          padding: 0 !important; 
+          margin: 0 !important;
+          max-width: 100% !important;
+        }
         .page-break { page-break-before: always; }
         .shadow-card, .shadow-floating, .shadow-soft { box-shadow: none !important; }
         .bg-gradient-to-br { background: none !important; }
         /* Avoid breaking sections and signature blocks */
-        .break-inside-avoid { break-inside: avoid; }
-        img { max-width: 100%; height: auto; }
+        .break-inside-avoid { 
+          break-inside: avoid;
+          page-break-inside: avoid;
+        }
+        img { 
+          max-width: 100%; 
+          height: auto;
+          page-break-inside: avoid;
+        }
+        /* Ensure content fits */
+        * {
+          overflow: visible !important;
+        }
+        /* Remove extra spacing that can cause page overflow */
+        .space-y-6 > *:last-child,
+        .space-y-8 > *:last-child {
+          margin-bottom: 0 !important;
+        }
       }
       .print-only { display: none; }
     </style>
