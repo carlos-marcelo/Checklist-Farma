@@ -1,7 +1,0 @@
-{
-  "name": "final Checklists 3.0",
-  "description": "site de checklist e sistemas de gerenciamento em farmácia",
-  "requestFramePermissions": [
-    "camera"
-  ]
-}

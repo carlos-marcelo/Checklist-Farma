@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, Calculator, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, Lock, UserPlus, ShieldCheck, History, RotateCcw, Save, Search, Calendar, Eye, Phone, User as UserIcon, Ban, Check, Bell, Filter, UserX, Undo2, ScanSearch, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Mail } from 'lucide-react';
+import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock } from 'lucide-react';
 import { CHECKLISTS } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection } from './types';
 import SignaturePad from './components/SignaturePad';
@@ -93,7 +93,7 @@ const THEMES: Record<ThemeColor, {
   },
 };
 
-// --- MOCK DATABASE ---
+// --- FALLBACK USERS (usado apenas se Supabase falhar) ---
 const INITIAL_USERS: User[] = [
   { email: 'asconavietagestor@gmail.com', password: 'marcelo1508', name: 'Marcelo Asconavieta', phone: '99999999999', role: 'MASTER', approved: true, rejected: false },
   { email: 'contato@marcelo.far.br', password: 'marcelo1508', name: 'Contato Marcelo', phone: '99999999999', role: 'MASTER', approved: true, rejected: false },
@@ -606,6 +606,7 @@ const App: React.FC = () => {
   const [confirmPassInput, setConfirmPassInput] = useState('');
   const [saveShake, setSaveShake] = useState(false);
   const [profilePhoneError, setProfilePhoneError] = useState('');
+  const saveDraftAbortControllerRef = useRef<AbortController | null>(null);
 
 
   // --- PERSISTENCE & INIT EFFECTS ---
@@ -789,7 +790,8 @@ const App: React.FC = () => {
   // Load Draft for Current User - only on initial login
   const [draftLoaded, setDraftLoaded] = useState(false);
   useEffect(() => {
-    if (currentUser && !draftLoaded) {
+    setDraftLoaded(false); // Reset on any currentUser change
+    if (currentUser) {
       const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
       const userDraft = allDrafts[currentUser.email];
       
@@ -801,9 +803,6 @@ const App: React.FC = () => {
       }
       
       setDraftLoaded(true);
-    }
-    if (!currentUser) {
-      setDraftLoaded(false);
     }
   }, [currentUser]);
 
@@ -844,18 +843,33 @@ const App: React.FC = () => {
       };
       localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
       
+      // Cancel previous save if exists
+      if (saveDraftAbortControllerRef.current) {
+        saveDraftAbortControllerRef.current.abort();
+      }
+      
+      // Create new abort controller
+      const abortController = new AbortController();
+      saveDraftAbortControllerRef.current = abortController;
+      
       // Save to Supabase (async, with debounce)
       const timeoutId = setTimeout(async () => {
-        await SupabaseService.saveDraft({
-          user_email: currentUser.email,
-          form_data: formData,
-          images: images,
-          signatures: signatures,
-          ignored_checklists: Array.from(ignoredChecklists)
-        });
-      }, 1000); // Wait 1 second after last change
+        // Check if aborted before saving
+        if (!abortController.signal.aborted) {
+          await SupabaseService.saveDraft({
+            user_email: currentUser.email,
+            form_data: formData,
+            images: images,
+            signatures: signatures,
+            ignored_checklists: Array.from(ignoredChecklists)
+          });
+        }
+      }, 1500); // Increased debounce time to reduce spam
       
-      return () => clearTimeout(timeoutId);
+      return () => {
+        clearTimeout(timeoutId);
+        abortController.abort();
+      };
     }
   }, [formData, images, signatures, ignoredChecklists, currentUser, isLoadingData]);
 
