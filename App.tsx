@@ -169,7 +169,7 @@ const Logo = ({ config, large = false }: { config: AppConfig, large?: boolean })
 // Print Logo
 const LogoPrint = ({ config, theme }: { config: AppConfig, theme: any }) => {
     return (
-        <div className={`flex items-center justify-between mb-8 pb-6 border-b-4 ${theme.border}`}>
+        <div className={`flex items-center justify-between mb-6 pb-4 border-b-4 ${theme.border}`}>
             {/* Left: Client Logo */}
             <div className="flex items-center gap-4">
                  {config.logo ? (
@@ -2730,12 +2730,12 @@ const App: React.FC = () => {
 
             {/* --- REPORT / HISTORY VIEW (READ ONLY) --- */}
             {(currentView === 'report' || currentView === 'view_history') && (
-                <div className="max-w-5xl mx-auto bg-white p-10 shadow-2xl rounded-3xl min-h-screen print:shadow-none print:px-8 print:py-6 print:w-full">
+                <div className="max-w-5xl mx-auto bg-white p-10 shadow-2xl rounded-3xl min-h-screen print:shadow-none print:rounded-none">
                     <LogoPrint config={displayConfig} theme={currentTheme} />
                     
                     {/* Basic Info Block (Extracted Top) */}
-                    <div className="mb-10 pb-8">
-                         <h3 className={`text-xl font-black uppercase tracking-tight mb-6 pb-2 border-b-2 ${currentTheme.border} ${currentTheme.text}`}>Informações Básicas</h3>
+                    <div className="mb-6 pb-4">
+                         <h3 className={`text-xl font-black uppercase tracking-tight mb-4 pb-2 border-b-2 ${currentTheme.border} ${currentTheme.text}`}>Informações Básicas</h3>
                          <div className="grid grid-cols-2 gap-8">
                              <div>
                                  <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Nome do Coordenador / Aplicador</p>
@@ -2756,7 +2756,7 @@ const App: React.FC = () => {
                          </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-8 mb-10 border-b-2 border-gray-100 pb-8">
+                    <div className="grid grid-cols-2 gap-8 mb-6 border-b-2 border-gray-100 pb-4">
                         <div>
                              <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Responsável pela Avaliação (Sistema)</p>
                              <p className="text-lg font-bold text-gray-800">{viewHistoryItem ? viewHistoryItem.userName : currentUser.name}</p>
