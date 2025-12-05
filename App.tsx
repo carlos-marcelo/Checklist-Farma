@@ -849,73 +849,80 @@ const App: React.FC = () => {
         }
     }, [users]);
 
-  // Sincronização bidirecional em tempo real - Supabase é a fonte única da verdade
+  // Sincronização bidirecional - Puxa do Supabase a cada 3s
   useEffect(() => {
-    if (!currentUser || !draftLoaded || isSavingRef.current) return;
+    if (!currentUser || !draftLoaded) return;
     
     const syncInterval = setInterval(async () => {
+      if (isSavingRef.current) return; // Não sincronizar durante salvamento
+      
       try {
         const remoteDraft = await SupabaseService.fetchDraft(currentUser.email);
         
         if (remoteDraft) {
-          // Atualizar SEMPRE com dados remotos (quem salvou primeiro no Supabase vence)
-          setFormData(remoteDraft.form_data || {});
-          setImages(remoteDraft.images || {});
-          setSignatures(remoteDraft.signatures || {});
-          setIgnoredChecklists(new Set(remoteDraft.ignored_checklists || []));
-          lastRemoteUpdateRef.current = Date.now();
+          // Comparar se há diferenças antes de atualizar (evita re-render desnecessário)
+          const hasChanges = 
+            JSON.stringify(remoteDraft.form_data) !== JSON.stringify(formData) ||
+            JSON.stringify(remoteDraft.images) !== JSON.stringify(images) ||
+            JSON.stringify(remoteDraft.signatures) !== JSON.stringify(signatures);
+          
+          if (hasChanges) {
+            console.log('🔄 Atualizando com dados do Supabase');
+            setFormData(remoteDraft.form_data || {});
+            setImages(remoteDraft.images || {});
+            setSignatures(remoteDraft.signatures || {});
+            setIgnoredChecklists(new Set(remoteDraft.ignored_checklists || []));
+          }
         }
       } catch (error) {
         console.error('❌ Erro na sincronização:', error);
       }
-    }, 3000); // 3 segundos - sincronização contínua
+    }, 3000);
     
     return () => clearInterval(syncInterval);
-  }, [currentUser, draftLoaded]);
+  }, [currentUser, draftLoaded, formData, images, signatures]);
 
-  // Auto-Save imediato no Supabase - SEM debounce, SEM merge
+  // Auto-Save com debounce de 1 segundo
   useEffect(() => {
-    if (currentUser && !isLoadingData && draftLoaded) {
-      // Cancel previous save if exists
-      if (saveDraftAbortControllerRef.current) {
-        saveDraftAbortControllerRef.current.abort();
+    if (!currentUser || !draftLoaded || isLoadingData) return;
+    
+    // Cancel previous save
+    if (saveDraftAbortControllerRef.current) {
+      saveDraftAbortControllerRef.current.abort();
+    }
+    
+    const abortController = new AbortController();
+    saveDraftAbortControllerRef.current = abortController;
+    
+    // Debounce de 1 segundo
+    const timeoutId = setTimeout(async () => {
+      if (abortController.signal.aborted || isSavingRef.current) return;
+      
+      isSavingRef.current = true;
+      setSyncStatus('saving');
+      
+      const success = await SupabaseService.saveDraft({
+        user_email: currentUser.email,
+        form_data: formData,
+        images: images,
+        signatures: signatures,
+        ignored_checklists: Array.from(ignoredChecklists)
+      });
+      
+      if (success) {
+        setSyncStatus('saved');
+        setTimeout(() => setSyncStatus('idle'), 1000);
+      } else {
+        setSyncStatus('idle');
       }
       
-      // Create new abort controller
-      const abortController = new AbortController();
-      saveDraftAbortControllerRef.current = abortController;
-      
-      // Save IMEDIATAMENTE (sem debounce)
-      const saveNow = async () => {
-        if (abortController.signal.aborted || isSavingRef.current) return;
-        
-        isSavingRef.current = true;
-        setSyncStatus('saving');
-        
-        const success = await SupabaseService.saveDraft({
-          user_email: currentUser.email,
-          form_data: formData,
-          images: images,
-          signatures: signatures,
-          ignored_checklists: Array.from(ignoredChecklists)
-        });
-        
-        if (success) {
-          setSyncStatus('saved');
-          setTimeout(() => setSyncStatus('idle'), 1000);
-        } else {
-          setSyncStatus('idle');
-        }
-        
-        isSavingRef.current = false;
-      };
-      
-      saveNow();
-      
-      return () => {
-        abortController.abort();
-      };
-    }
+      isSavingRef.current = false;
+    }, 1000); // 1 segundo de debounce
+    
+    return () => {
+      clearTimeout(timeoutId);
+      abortController.abort();
+    };
   }, [formData, images, signatures, ignoredChecklists, currentUser, isLoadingData, draftLoaded]);
 
   // Save Config to Supabase AND LocalStorage
