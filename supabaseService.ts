@@ -274,38 +274,21 @@ export async function fetchDraft(userEmail: string): Promise<DbDraft | null> {
 
 export async function saveDraft(draft: DbDraft): Promise<boolean> {
   try {
-    // Verificar se já existe draft para este usuário
-    const existing = await fetchDraft(draft.user_email);
+    // Use upsert to avoid race condition from fetch-before-save pattern
+    const { error } = await supabase
+      .from('drafts')
+      .upsert({
+        user_email: draft.user_email,
+        form_data: draft.form_data,
+        images: draft.images,
+        signatures: draft.signatures,
+        ignored_checklists: draft.ignored_checklists,
+        updated_at: new Date().toISOString()
+      }, {
+        onConflict: 'user_email'
+      });
     
-    if (existing && existing.id) {
-      // Update
-      const { error } = await supabase
-        .from('drafts')
-        .update({
-          form_data: draft.form_data,
-          images: draft.images,
-          signatures: draft.signatures,
-          ignored_checklists: draft.ignored_checklists,
-          updated_at: new Date().toISOString()
-        })
-        .eq('user_email', draft.user_email);
-      
-      if (error) throw error;
-    } else {
-      // Insert
-      const { error } = await supabase
-        .from('drafts')
-        .insert([{
-          user_email: draft.user_email,
-          form_data: draft.form_data,
-          images: draft.images,
-          signatures: draft.signatures,
-          ignored_checklists: draft.ignored_checklists
-        }]);
-      
-      if (error) throw error;
-    }
-    
+    if (error) throw error;
     return true;
   } catch (error) {
     console.error('Error saving draft:', error);
