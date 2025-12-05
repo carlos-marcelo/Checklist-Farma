@@ -1525,15 +1525,20 @@ const App: React.FC = () => {
 
     // --- ACTIONS ---
 
-    const handleResetChecklist = async () => {
-        if (confirm("Tem certeza que deseja recomeçar todo o relatório? Todas as informações não salvas serão perdidas.")) {
+    const handleResetChecklist = () => {
+        // Simple, direct confirmation. No event preventDefault magic needed here if connected properly.
+        const shouldReset = window.confirm(
+            "⚠️ TEM CERTEZA QUE DESEJA RECOMEÇAR?\n\nTodas as informações não salvas serão perdidas."
+        );
+
+        if (shouldReset) {
             if (currentUser) {
                 // Delete from localStorage
                 const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
                 delete allDrafts[currentUser.email];
                 localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
-                // Delete from Supabase
-                await SupabaseService.deleteDraft(currentUser.email);
+                // Delete from Supabase (async, no await needed for UI reset)
+                SupabaseService.deleteDraft(currentUser.email);
             }
             window.location.reload();
         }
@@ -1835,37 +1840,46 @@ const App: React.FC = () => {
     };
 
     const handleDownloadPDF = () => {
-        // Usar impressão nativa do navegador para PDF perfeito
-        // Isso respeita todos os estilos @media print e evita problemas de:
-        // - Texto sobreposto
-        // - Imagens cortadas  
-        // - Assinaturas duplicadas
-        // - Botões aparecendo no PDF
-
-        // Preparar título do documento para o PDF
+        // 1. Get current title
         const originalTitle = document.title;
-        const pdfTitle = `Relatorio_${config.pharmacyName.replace(/\s+/g, '_')}_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}`;
-        document.title = pdfTitle;
 
-        // Mostrar instrução ao usuário
-        const userConfirmed = confirm(
-            '📄 GERAR PDF DO RELATÓRIO\n\n' +
-            '1️⃣ Clique em OK\n' +
-            '2️⃣ Na janela de impressão, selecione "Salvar como PDF"\n' +
-            '3️⃣ Ajuste as configurações se necessário\n' +
-            '4️⃣ Clique em Salvar\n\n' +
-            '💡 Dica: Use as configurações padrão para melhor resultado'
-        );
+        // 2. Try to get Filial and Date using robust scan
+        let filial = 'Sem_Filial';
+        const targetChecklists = ['gerencial', ...CHECKLISTS.map(c => c.id)]; // Prioritize 'gerencial' where the field lives
 
-        if (userConfirmed) {
-            // Abrir diálogo de impressão nativa
-            window.print();
+        for (const checkId of targetChecklists) {
+            const data = viewHistoryItem ? viewHistoryItem.formData[checkId] : formData[checkId];
+            if (data?.filial && String(data.filial).trim() !== '') {
+                filial = String(data.filial);
+                break;
+            }
         }
 
-        // Restaurar título original após um breve delay
+        // Date logic
+        let dateRaw = new Date().toLocaleDateString('pt-BR');
+        for (const checkId of targetChecklists) {
+            const data = viewHistoryItem ? viewHistoryItem.formData[checkId] : formData[checkId];
+            if (data?.data_aplicacao) {
+                dateRaw = String(data.data_aplicacao);
+                break;
+            }
+        }
+
+        // 3. Format filename
+        const safeFilial = filial.trim().replace(/\s+/g, '_');
+        const safeDate = dateRaw.replace(/\//g, '-');
+        const filename = `Relatorio_${safeFilial}_${safeDate}`;
+
+        // 4. Set title (browser uses this as filename)
+        document.title = filename;
+
+        // 5. Open print dialog immediately
+        window.print();
+
+        // 6. Restore title after a safe delay
         setTimeout(() => {
             document.title = originalTitle;
-        }, 1000);
+        }, 2000);
     };
 
 
@@ -2138,7 +2152,23 @@ const App: React.FC = () => {
 
     // Determine if we are in "Read Only" mode (History View)
     const isReadOnly = currentView === 'view_history' || currentUser?.role === 'USER';
-    const displayConfig = isReadOnly && viewHistoryItem ? { ...config, pharmacyName: viewHistoryItem.pharmacyName } : config;
+
+    // Dynamic Header Logic: Use 'filial' input if available, otherwise default config
+    const getDynamicPharmacyName = () => {
+        if (viewHistoryItem) return viewHistoryItem.pharmacyName;
+
+        // Try to find 'filial' in active draft data (prioritize 'gerencial')
+        const targetChecklists = ['gerencial', ...CHECKLISTS.map(c => c.id)];
+        for (const checkId of targetChecklists) {
+            const data = formData[checkId];
+            if (data?.filial && String(data.filial).trim() !== '') {
+                return String(data.filial);
+            }
+        }
+        return config.pharmacyName;
+    };
+
+    const displayConfig = { ...config, pharmacyName: getDynamicPharmacyName() };
 
     // Calculate current checklist specific stats for render
     const currentChecklistStats = getChecklistStats(activeChecklistId);
@@ -2964,10 +2994,18 @@ const App: React.FC = () => {
                                     </h3>
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                         <div data-signature="gestor">
-                                            <SignaturePad label="Assinatura do Gestor" onEnd={(data) => handleSignature('gestor', data)} />
+                                            <SignaturePad
+                                                label="Assinatura do Gestor"
+                                                onEnd={(data) => handleSignature('gestor', data)}
+                                                existingSignature={signatures[activeChecklistId]?.['gestor']}
+                                            />
                                         </div>
                                         <div data-signature="coordenador">
-                                            <SignaturePad label="Assinatura Coordenador / Aplicador" onEnd={(data) => handleSignature('coordenador', data)} />
+                                            <SignaturePad
+                                                label="Assinatura Coordenador / Aplicador"
+                                                onEnd={(data) => handleSignature('coordenador', data)}
+                                                existingSignature={signatures[activeChecklistId]?.['coordenador']}
+                                            />
                                         </div>
                                     </div>
                                 </div>
