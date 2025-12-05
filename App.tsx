@@ -874,15 +874,23 @@ const App: React.FC = () => {
   // Auto-Save Draft to Supabase AND LocalStorage
   useEffect(() => {
     if (currentUser && !isLoadingData) {
-      // Save to LocalStorage (instant backup)
-      const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
-      allDrafts[currentUser.email] = {
-        formData,
-        images,
-        signatures,
-        ignoredChecklists: Array.from(ignoredChecklists)
-      };
-      localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+      // Try to save to LocalStorage (best-effort, may fail if quota exceeded)
+      try {
+        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+        allDrafts[currentUser.email] = {
+          formData,
+          images,
+          signatures,
+          ignoredChecklists: Array.from(ignoredChecklists)
+        };
+        localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+      } catch (storageError: any) {
+        if (storageError.name === 'QuotaExceededError') {
+          console.warn('⚠️ localStorage cheio - salvando apenas no Supabase');
+        } else {
+          console.error('Erro ao salvar no localStorage:', storageError);
+        }
+      }
       
       // Cancel previous save if exists
       if (saveDraftAbortControllerRef.current) {
@@ -1299,10 +1307,10 @@ const App: React.FC = () => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       
-      // Verificar limite de 8 imagens por seção
+      // Verificar limite de 2 imagens por seção
       const currentImages = images[activeChecklistId]?.[sectionId] || [];
-      if (currentImages.length >= 8) {
-        alert('⚠️ Máximo de 8 imagens por seção atingido. Remova uma imagem antes de adicionar outra.');
+      if (currentImages.length >= 2) {
+        alert('⚠️ Máximo de 2 imagens por seção atingido. Remova uma imagem antes de adicionar outra.');
         e.target.value = '';
         return;
       }
@@ -1404,8 +1412,12 @@ const App: React.FC = () => {
                           ignoredChecklists: Array.from(ignoredChecklists)
                         };
                         localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
-                      } catch (storageError) {
-                        console.error('Erro ao salvar no localStorage:', storageError);
+                      } catch (storageError: any) {
+                        if (storageError.name === 'QuotaExceededError') {
+                          console.warn('⚠️ localStorage cheio - imagens salvas no Supabase');
+                        } else {
+                          console.error('Erro ao salvar no localStorage:', storageError);
+                        }
                       }
                     }
                     
@@ -3143,8 +3155,8 @@ const App: React.FC = () => {
                                                  </div>
                                                  {/* Images in Report */}
                                                  {(getDataSource(cl.id).imgs[sec.id] || []).length > 0 && (
-                                                     <div className="mt-4 grid grid-cols-4 md:grid-cols-8 gap-4 break-inside-avoid">
-                                                         {(getDataSource(cl.id).imgs[sec.id] || []).slice(0, 8).map((img, idx) => (
+                                                     <div className="mt-4 grid grid-cols-2 gap-4 break-inside-avoid">
+                                                         {(getDataSource(cl.id).imgs[sec.id] || []).slice(0, 2).map((img, idx) => (
                                                              <div key={idx} className="h-32 rounded-lg border border-gray-200 overflow-hidden bg-gray-50 break-inside-avoid">
                                                                  <img src={img} alt={`Imagem ${idx + 1}`} className="w-full h-full object-contain" />
                                                              </div>
