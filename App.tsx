@@ -577,14 +577,8 @@ const App: React.FC = () => {
   const [ignoredChecklists, setIgnoredChecklists] = useState<Set<string>>(new Set());
   const errorBoxRef = useRef<HTMLDivElement>(null);
   
-  // History State
-  const [reportHistory, setReportHistory] = useState<ReportHistoryItem[]>(() => {
-    try {
-      const savedHistory = localStorage.getItem('APP_HISTORY');
-      return savedHistory ? JSON.parse(savedHistory) : [];
-    } catch {}
-    return [];
-  });
+  // History State - NUNCA usar localStorage (quota exceeded com imagens)
+  const [reportHistory, setReportHistory] = useState<ReportHistoryItem[]>([]);
   const [viewHistoryItem, setViewHistoryItem] = useState<ReportHistoryItem | null>(null);
   const [historyFilterUser, setHistoryFilterUser] = useState<string>('all');
 
@@ -617,6 +611,14 @@ const App: React.FC = () => {
     const initializeData = async () => {
       try {
         setIsLoadingData(true);
+        
+        // Limpar localStorage antigo que causa quota exceeded
+        try {
+          localStorage.removeItem('APP_HISTORY');
+          console.log('🧹 localStorage limpo (APP_HISTORY removido)');
+        } catch (e) {
+          console.warn('Erro ao limpar localStorage:', e);
+        }
         
         // 1. Load Users from Supabase (fallback to localStorage)
         const dbUsers = await SupabaseService.fetchUsers();
@@ -658,9 +660,10 @@ const App: React.FC = () => {
           }
         }
         
-        // 3. Load Reports from Supabase (fallback to localStorage)
+        // 3. Load Reports APENAS do Supabase (NUNCA localStorage - muito grande)
         const dbReports = await SupabaseService.fetchReports();
         if (dbReports.length > 0) {
+          console.log('📊 Carregando', dbReports.length, 'relatórios do Supabase');
           const formattedReports = dbReports.map(r => ({
             id: r.id || r.created_at || Date.now().toString(),
             userEmail: r.user_email,
@@ -674,53 +677,10 @@ const App: React.FC = () => {
             ignoredChecklists: r.ignored_checklists
           }));
           setReportHistory(formattedReports);
-          localStorage.setItem('APP_HISTORY', JSON.stringify(formattedReports)); // Backup
+          // NÃO salvar no localStorage - imagens excedem quota
         } else {
-          // Fallback to localStorage
-          const localHistory = localStorage.getItem('APP_HISTORY');
-          if (localHistory) {
-            setReportHistory(JSON.parse(localHistory));
-          }
-                    // Auto-migrate one-time when Supabase is empty and local has data
-                    const alreadyMigrated = localStorage.getItem('APP_MIGRATED_DONE') === 'true';
-                    const hasLocalData = !!localHistory || !!localStorage.getItem('APP_USERS') || !!localStorage.getItem('APP_DRAFTS') || !!localStorage.getItem('APP_CONFIG');
-                    if (!alreadyMigrated && hasLocalData) {
-                        try {
-                            const mig = await SupabaseService.migrateLocalStorageToSupabase();
-                            if (mig) {
-                                localStorage.setItem('APP_MIGRATED_DONE', 'true');
-                                // Refresh in-memory state from Supabase after migration
-                                const refreshedReports = await SupabaseService.fetchReports();
-                                if (refreshedReports.length > 0) {
-                                    const formatted = refreshedReports.map(r => ({
-                                        id: r.id || r.created_at || Date.now().toString(),
-                                        userEmail: r.user_email,
-                                        userName: r.user_name,
-                                        date: r.created_at || new Date().toISOString(),
-                                        pharmacyName: r.pharmacy_name,
-                                        score: r.score,
-                                        formData: r.form_data,
-                                        images: r.images,
-                                        signatures: r.signatures,
-                                        ignoredChecklists: r.ignored_checklists
-                                    }));
-                                    setReportHistory(formatted);
-                                    localStorage.setItem('APP_HISTORY', JSON.stringify(formatted));
-                                }
-                                const refreshedUsers = await SupabaseService.fetchUsers();
-                                if (refreshedUsers.length > 0) {
-                                    const mappedRefreshedUsers = refreshedUsers.map(u => ({
-                                        ...u,
-                                        preferredTheme: u.preferred_theme as ThemeColor | undefined
-                                    }));
-                                    setUsers(mappedRefreshedUsers);
-                                    localStorage.setItem('APP_USERS', JSON.stringify(mappedRefreshedUsers));
-                                }
-                            }
-                        } catch (e) {
-                            console.error('Auto-migration failed:', e);
-                        }
-                    }
+          console.log('⚠️ Nenhum relatório encontrado no Supabase');
+          setReportHistory([]);
         }
         
         // 4. Restore session if exists
@@ -755,15 +715,15 @@ const App: React.FC = () => {
         
       } catch (error) {
         console.error('Error initializing data:', error);
-        // On error, fallback to localStorage completely
+        // On error, fallback to localStorage apenas para users e config
         const localUsers = localStorage.getItem('APP_USERS');
         if (localUsers) setUsers(JSON.parse(localUsers));
         
         const localConfig = localStorage.getItem('APP_CONFIG');
         if (localConfig) setConfig(JSON.parse(localConfig));
         
-        const localHistory = localStorage.getItem('APP_HISTORY');
-        if (localHistory) setReportHistory(JSON.parse(localHistory));
+        // NÃO carregar reportHistory do localStorage - sempre vazio se Supabase falhar
+        setReportHistory([]);
       } finally {
         setIsLoadingData(false);
       }
@@ -772,21 +732,19 @@ const App: React.FC = () => {
     initializeData();
   }, []);
 
-  // Save Users to Supabase AND LocalStorage
+  // Save Users to Supabase (localStorage apenas como backup leve - sem imagens)
   useEffect(() => {
     if (!isLoadingData && users.length > 0) {
-      localStorage.setItem('APP_USERS', JSON.stringify(users));
-      // Don't auto-save users to Supabase here to avoid conflicts
+      try {
+        localStorage.setItem('APP_USERS', JSON.stringify(users));
+      } catch (error) {
+        console.warn('⚠️ Erro ao salvar users no localStorage (não crítico):', error);
+      }
     }
   }, [users, isLoadingData]);
 
-  // Save History to Supabase AND LocalStorage
-  useEffect(() => {
-    if (!isLoadingData && reportHistory.length > 0) {
-      localStorage.setItem('APP_HISTORY', JSON.stringify(reportHistory));
-      // Reports are saved individually when created, not in batch
-    }
-  }, [reportHistory, isLoadingData]);
+  // NÃO SALVAR reportHistory no localStorage - apenas Supabase
+  // LocalStorage tem limite de ~5-10MB e relatórios com imagens excedem isso
 
   // Load Draft for Current User - only on initial login
   const [draftLoaded, setDraftLoaded] = useState(false);
@@ -1492,61 +1450,125 @@ const App: React.FC = () => {
   const handleFinalizeAndSave = async () => {
       if (!currentUser) return;
       
-      // Strict Validation: Must have at least one active checklist, AND all active checklists must be complete
-      const activeChecklistIds = CHECKLISTS.filter(cl => !ignoredChecklists.has(cl.id)).map(cl => cl.id);
-      
-      if (activeChecklistIds.length === 0) {
-          alert("Erro: Você deve preencher pelo menos um checklist para finalizar.");
-          return;
-      }
-      
-      const incompleteChecklists = activeChecklistIds.filter(id => !isChecklistComplete(id));
-      
-      if (incompleteChecklists.length > 0) {
-          const names = incompleteChecklists.map(id => CHECKLISTS.find(c => c.id === id)?.title).join('\n- ');
-          alert(`Erro: Os seguintes checklists ativos estão incompletos:\n- ${names}\n\nPor favor, complete-os ou marque como 'Não se Aplica' para continuar.`);
-          return;
-      }
-
-      const score = calculateGlobalScore();
-      
-      // Checar duplicidade antes de criar
-      const candidateReport = {
-          user_email: currentUser.email,
-          user_name: currentUser.name,
-          pharmacy_name: config.pharmacyName,
-          score: score,
-          form_data: { ...formData },
-          images: { ...images },
-          signatures: { ...signatures },
-          ignored_checklists: Array.from(ignoredChecklists)
-      };
-      const alreadyExists = await SupabaseService.reportExists(candidateReport as any);
-      if (alreadyExists) {
-          alert('Este relatório já foi registrado anteriormente. Não será duplicado.');
-          // Apenas levar para a visualização do mais recente igual
-          setCurrentView('history');
-          return;
-      }
-
-      // Save to Supabase first
-      const dbReport = await SupabaseService.createReport(candidateReport as any);
-      
-      const newReport: ReportHistoryItem = {
-          id: dbReport?.id || Date.now().toString(),
-          userEmail: currentUser.email,
-          userName: currentUser.name,
-          date: dbReport?.created_at || new Date().toISOString(),
-          pharmacyName: config.pharmacyName,
-          score: score,
-          formData: { ...formData },
-          images: { ...images },
-          signatures: { ...signatures },
-          ignoredChecklists: Array.from(ignoredChecklists)
-      };
-
-      // Force refresh reports from Supabase to ensure sync across devices
       try {
+        // Strict Validation: Must have at least one active checklist, AND all active checklists must be complete
+        const activeChecklistIds = CHECKLISTS.filter(cl => !ignoredChecklists.has(cl.id)).map(cl => cl.id);
+        
+        if (activeChecklistIds.length === 0) {
+            alert("Erro: Você deve preencher pelo menos um checklist para finalizar.");
+            return;
+        }
+        
+        const incompleteChecklists = activeChecklistIds.filter(id => !isChecklistComplete(id));
+        
+        if (incompleteChecklists.length > 0) {
+            const names = incompleteChecklists.map(id => CHECKLISTS.find(c => c.id === id)?.title).join('\n- ');
+            alert(`Erro: Os seguintes checklists ativos estão incompletos:\n- ${names}\n\nPor favor, complete-os ou marque como 'Não se Aplica' para continuar.`);
+            return;
+        }
+
+        const score = calculateGlobalScore();
+        
+        console.log('💾 Salvando relatório no Supabase...');
+        
+        // Checar duplicidade antes de criar
+        const candidateReport = {
+            user_email: currentUser.email,
+            user_name: currentUser.name,
+            pharmacy_name: config.pharmacyName,
+            score: score,
+            form_data: { ...formData },
+            images: { ...images },
+            signatures: { ...signatures },
+            ignored_checklists: Array.from(ignoredChecklists)
+        };
+        
+        const alreadyExists = await SupabaseService.reportExists(candidateReport as any);
+        if (alreadyExists) {
+            alert('Este relatório já foi registrado anteriormente. Não será duplicado.');
+            // Recarregar relatórios do Supabase
+            const dbReports = await SupabaseService.fetchReports();
+            const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
+                id: r.id,
+                userEmail: r.user_email,
+                userName: r.user_name,
+                date: r.created_at,
+                pharmacyName: r.pharmacy_name,
+                score: r.score,
+                formData: r.form_data || {},
+                images: r.images || {},
+                signatures: r.signatures || {},
+                ignoredChecklists: r.ignored_checklists || []
+            }));
+            setReportHistory(formattedReports);
+            setCurrentView('history');
+            return;
+        }
+
+        // Save to Supabase first
+        const dbReport = await SupabaseService.createReport(candidateReport as any);
+        
+        if (!dbReport) {
+            throw new Error('Falha ao salvar relatório no Supabase');
+        }
+        
+        console.log('✅ Relatório salvo:', dbReport.id);
+        
+        const newReport: ReportHistoryItem = {
+            id: dbReport.id,
+            userEmail: currentUser.email,
+            userName: currentUser.name,
+            date: dbReport.created_at,
+            pharmacyName: config.pharmacyName,
+            score: score,
+            formData: { ...formData },
+            images: { ...images },
+            signatures: { ...signatures },
+            ignoredChecklists: Array.from(ignoredChecklists)
+        };
+
+        // Force refresh reports from Supabase to ensure sync across devices
+        console.log('🔄 Recarregando todos os relatórios do Supabase...');
+        const dbReports = await SupabaseService.fetchReports();
+        const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
+            id: r.id,
+            userEmail: r.user_email,
+            userName: r.user_name,
+            date: r.created_at,
+            pharmacyName: r.pharmacy_name,
+            score: r.score,
+            formData: r.form_data || {},
+            images: r.images || {},
+            signatures: r.signatures || {},
+            ignoredChecklists: r.ignored_checklists || []
+        }));
+        setReportHistory(formattedReports);
+        console.log('✅ Relatórios atualizados:', formattedReports.length, 'itens');
+        
+        // Clear Draft from state
+        setFormData({});
+        setImages({});
+        setSignatures({});
+        setIgnoredChecklists(new Set());
+        
+        // Clear from Supabase
+        await SupabaseService.deleteDraft(currentUser.email);
+
+        console.log('✅ Finalizando - redirecionando para visualização');
+        
+        // Redirect to View History (Report View)
+        setViewHistoryItem(newReport);
+        setCurrentView('view_history');
+        
+        // Scroll to top
+        window.scrollTo(0, 0);
+        
+      } catch (error) {
+        console.error('❌ Erro ao finalizar relatório:', error);
+        alert('Erro ao salvar relatório. Por favor, tente novamente ou verifique sua conexão.');
+        
+        // Em caso de erro, tentar recarregar relatórios do Supabase
+        try {
           const dbReports = await SupabaseService.fetchReports();
           const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
               id: r.id,
@@ -1561,31 +1583,11 @@ const App: React.FC = () => {
               ignoredChecklists: r.ignored_checklists || []
           }));
           setReportHistory(formattedReports);
-      } catch (error) {
-          console.error('Error refreshing reports:', error);
-          // Fallback: adicionar apenas o novo relatório
-          setReportHistory(prev => [newReport, ...prev]);
+          setCurrentView('history');
+        } catch (reloadError) {
+          console.error('❌ Erro ao recarregar relatórios:', reloadError);
+        }
       }
-      
-      // Clear Draft from state
-      setFormData({});
-      setImages({});
-      setSignatures({});
-      setIgnoredChecklists(new Set());
-      
-      // Clear from localStorage
-      const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
-      delete allDrafts[currentUser.email];
-      localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
-      
-      // Clear from Supabase
-      await SupabaseService.deleteDraft(currentUser.email);
-
-      alert("Relatório salvo e arquivado com sucesso!");
-      
-      // Redirect to View History (Report View)
-      setViewHistoryItem(newReport);
-      setCurrentView('view_history');
   };
 
   const handleViewHistoryItem = (item: ReportHistoryItem) => {
@@ -3168,12 +3170,48 @@ const App: React.FC = () => {
             {currentView === 'history' && (
                  <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-24">
                      <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
-                         <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-3">
-                           <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
-                                <History size={24} className={currentTheme.text} />
-                           </div>
-                           Histórico de Avaliações
-                        </h2>
+                         <div className="flex items-center justify-between mb-6">
+                             <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">
+                               <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
+                                    <History size={24} className={currentTheme.text} />
+                               </div>
+                               Histórico de Avaliações
+                            </h2>
+                            
+                            <button
+                                onClick={async () => {
+                                    try {
+                                        console.log('🔄 Recarregando relatórios...');
+                                        const dbReports = await SupabaseService.fetchReports();
+                                        const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
+                                            id: r.id,
+                                            userEmail: r.user_email,
+                                            userName: r.user_name,
+                                            date: r.created_at,
+                                            pharmacyName: r.pharmacy_name,
+                                            score: r.score,
+                                            formData: r.form_data || {},
+                                            images: r.images || {},
+                                            signatures: r.signatures || {},
+                                            ignoredChecklists: r.ignored_checklists || []
+                                        }));
+                                        setReportHistory(formattedReports);
+                                        console.log('✅ Relatórios recarregados:', formattedReports.length);
+                                        alert(`Atualizado! ${formattedReports.length} relatório(s) encontrado(s).`);
+                                    } catch (error) {
+                                        console.error('❌ Erro ao recarregar:', error);
+                                        alert('Erro ao recarregar relatórios.');
+                                    }
+                                }}
+                                className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
+                                title="Recarregar relatórios do Supabase"
+                            >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                                Atualizar
+                            </button>
+                         </div>
                         
                         {/* Filters for Master */}
                         {currentUser.role === 'MASTER' && (
