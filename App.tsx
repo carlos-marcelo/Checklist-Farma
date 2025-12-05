@@ -1299,71 +1299,138 @@ const App: React.FC = () => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       
-      // Limite de 5MB por imagem
-      if (file.size > 5 * 1024 * 1024) {
-        alert('⚠️ Imagem muito grande (máximo 5MB). Será comprimida automaticamente.');
+      // Verificar limite de 8 imagens por seção
+      const currentImages = images[activeChecklistId]?.[sectionId] || [];
+      if (currentImages.length >= 8) {
+        alert('⚠️ Máximo de 8 imagens por seção atingido. Remova uma imagem antes de adicionar outra.');
+        e.target.value = '';
+        return;
       }
       
-      // Comprimir imagem antes de processar (evita travamento em celulares)
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const img = new Image();
-        img.onload = () => {
-          // Reduzir tamanho se muito grande
-          const canvas = document.createElement('canvas');
-          let width = img.width;
-          let height = img.height;
-          
-          // Máximo 1024px de largura para melhor qualidade
-          if (width > 1024) {
-            height = (height * 1024) / width;
-            width = 1024;
-          }
-          
-          canvas.width = width;
-          canvas.height = height;
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            ctx.drawImage(img, 0, 0, width, height);
-            // Reduzir qualidade progressivamente até ficar sob 2MB
-            let quality = 0.85;
-            let compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+      // Validar tipo de arquivo
+      if (!file.type.startsWith('image/')) {
+        alert('⚠️ Por favor, selecione apenas arquivos de imagem.');
+        e.target.value = '';
+        return;
+      }
+      
+      // Limite de 15MB por imagem
+      if (file.size > 15 * 1024 * 1024) {
+        alert('⚠️ Imagem muito grande (máximo 15MB). Será comprimida automaticamente.');
+      }
+      
+      try {
+        const reader = new FileReader();
+        
+        reader.onerror = () => {
+          alert('❌ Erro ao carregar a imagem. Tente novamente.');
+          e.target.value = '';
+        };
+        
+        reader.onloadend = () => {
+          try {
+            const img = new Image();
             
-            while (compressedBase64.length > 2 * 1024 * 1024 && quality > 0.3) {
-              quality -= 0.1;
-              compressedBase64 = canvas.toDataURL('image/jpeg', quality);
-            }
+            img.onerror = () => {
+              alert('❌ Erro ao processar a imagem. Tente outro formato (JPG/PNG).');
+              e.target.value = '';
+            };
             
-            setImages(prev => {
-                const currentListImages = prev[activeChecklistId] || {};
-                const sectionImages = currentListImages[sectionId] || [];
-                const newImages = {
-                    ...prev,
-                    [activeChecklistId]: {
-                        ...currentListImages,
-                        [sectionId]: [...sectionImages, compressedBase64]
-                    }
-                };
+            img.onload = () => {
+              try {
+                const canvas = document.createElement('canvas');
+                let width = img.width;
+                let height = img.height;
                 
-                // Sincronizar imediatamente com localStorage
-                if (currentUser) {
-                  const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
-                  allDrafts[currentUser.email] = {
-                    formData: formData,
-                    images: newImages,
-                    signatures: signatures,
-                    ignoredChecklists: Array.from(ignoredChecklists)
-                  };
-                  localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+                // Máximo 1600px de largura
+                const maxWidth = 1600;
+                if (width > maxWidth) {
+                  height = (height * maxWidth) / width;
+                  width = maxWidth;
                 }
                 
-                return newImages;
-            });
+                canvas.width = width;
+                canvas.height = height;
+                const ctx = canvas.getContext('2d');
+                
+                if (!ctx) {
+                  alert('❌ Erro ao processar imagem. Tente novamente.');
+                  e.target.value = '';
+                  return;
+                }
+                
+                ctx.drawImage(img, 0, 0, width, height);
+                
+                // Reduzir qualidade progressivamente até ficar sob 2MB
+                let quality = 0.9;
+                let compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+                const targetSize = 2 * 1024 * 1024;
+                
+                while (compressedBase64.length > targetSize && quality > 0.5) {
+                  quality -= 0.05;
+                  compressedBase64 = canvas.toDataURL('image/jpeg', quality);
+                }
+                
+                if (compressedBase64.length > 3 * 1024 * 1024) {
+                  alert('⚠️ Não foi possível comprimir a imagem o suficiente. Tente uma imagem menor.');
+                  e.target.value = '';
+                  return;
+                }
+                
+                setImages(prev => {
+                    const currentListImages = prev[activeChecklistId] || {};
+                    const sectionImages = currentListImages[sectionId] || [];
+                    const newImages = {
+                        ...prev,
+                        [activeChecklistId]: {
+                            ...currentListImages,
+                            [sectionId]: [...sectionImages, compressedBase64]
+                        }
+                    };
+                    
+                    if (currentUser) {
+                      try {
+                        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+                        allDrafts[currentUser.email] = {
+                          formData: formData,
+                          images: newImages,
+                          signatures: signatures,
+                          ignoredChecklists: Array.from(ignoredChecklists)
+                        };
+                        localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+                      } catch (storageError) {
+                        console.error('Erro ao salvar no localStorage:', storageError);
+                      }
+                    }
+                    
+                    return newImages;
+                });
+                
+                e.target.value = '';
+                
+              } catch (canvasError) {
+                console.error('Erro no canvas:', canvasError);
+                alert('❌ Erro ao processar a imagem. Tente novamente.');
+                e.target.value = '';
+              }
+            };
+            
+            img.src = reader.result as string;
+            
+          } catch (imgError) {
+            console.error('Erro ao criar Image:', imgError);
+            alert('❌ Erro ao carregar a imagem. Tente novamente.');
+            e.target.value = '';
           }
         };
-        img.src = reader.result as string;
-      };
-      reader.readAsDataURL(file);
+        
+        reader.readAsDataURL(file);
+        
+      } catch (error) {
+        console.error('Erro geral no upload:', error);
+        alert('❌ Erro ao processar a imagem. Tente novamente.');
+        e.target.value = '';
+      }
     }
   };
 
@@ -3070,10 +3137,10 @@ const App: React.FC = () => {
                                                  </div>
                                                  {/* Images in Report */}
                                                  {(getDataSource(cl.id).imgs[sec.id] || []).length > 0 && (
-                                                     <div className="mt-4 grid grid-cols-4 gap-4 break-inside-avoid">
-                                                         {(getDataSource(cl.id).imgs[sec.id] || []).map((img, idx) => (
+                                                     <div className="mt-4 grid grid-cols-4 md:grid-cols-8 gap-4 break-inside-avoid">
+                                                         {(getDataSource(cl.id).imgs[sec.id] || []).slice(0, 8).map((img, idx) => (
                                                              <div key={idx} className="h-32 rounded-lg border border-gray-200 overflow-hidden bg-gray-50 break-inside-avoid">
-                                                                 <img src={img} alt={`Imagem ${idx + 1}`} className="w-full h-full object-cover" />
+                                                                 <img src={img} alt={`Imagem ${idx + 1}`} className="w-full h-full object-contain" />
                                                              </div>
                                                          ))}
                                                      </div>
