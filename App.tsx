@@ -763,9 +763,59 @@ const App: React.FC = () => {
           if (supabaseDraft) {
             console.log('✅ Draft encontrado - substituindo local completamente');
             // SUBSTITUIR tudo no load inicial
-            setFormData(supabaseDraft.form_data || {});
+            const loadedFormData = supabaseDraft.form_data || {};
+            const loadedSignatures = supabaseDraft.signatures || {};
+            
+            // SINCRONIZAR dados básicos entre todos os checklists
+            const globalFields = ['nome_coordenador', 'filial', 'gestor', 'data_aplicacao'];
+            const syncedFormData: Record<string, ChecklistData> = {};
+            
+            // Encontrar primeiro checklist com dados para usar como fonte
+            let sourceData: ChecklistData = {};
+            for (const clId of Object.keys(loadedFormData)) {
+              if (loadedFormData[clId]) {
+                sourceData = loadedFormData[clId];
+                break;
+              }
+            }
+            
+            // Sincronizar dados globais em todos os checklists
+            CHECKLISTS.forEach(cl => {
+              syncedFormData[cl.id] = {
+                ...(loadedFormData[cl.id] || {})
+              };
+              
+              // Copiar campos globais do sourceData
+              globalFields.forEach(field => {
+                if (sourceData[field]) {
+                  syncedFormData[cl.id][field] = sourceData[field];
+                }
+              });
+            });
+            
+            // SINCRONIZAR assinaturas entre todos os checklists
+            const syncedSignatures: Record<string, Record<string, string>> = {};
+            
+            // Encontrar assinaturas existentes
+            let gestorSig = '';
+            let coordSig = '';
+            for (const clId of Object.keys(loadedSignatures)) {
+              if (loadedSignatures[clId]?.['gestor']) gestorSig = loadedSignatures[clId]['gestor'];
+              if (loadedSignatures[clId]?.['coordenador']) coordSig = loadedSignatures[clId]['coordenador'];
+              if (gestorSig && coordSig) break;
+            }
+            
+            // Replicar assinaturas em todos os checklists
+            CHECKLISTS.forEach(cl => {
+              syncedSignatures[cl.id] = {};
+              if (gestorSig) syncedSignatures[cl.id]['gestor'] = gestorSig;
+              if (coordSig) syncedSignatures[cl.id]['coordenador'] = coordSig;
+            });
+            
+            // SUBSTITUIR tudo no load inicial
+            setFormData(syncedFormData);
             setImages(supabaseDraft.images || {});
-            setSignatures(supabaseDraft.signatures || {});
+            setSignatures(syncedSignatures);
             setIgnoredChecklists(new Set(supabaseDraft.ignored_checklists || []));
             lastRemoteUpdateRef.current = Date.now();
           } else {
@@ -875,7 +925,7 @@ const App: React.FC = () => {
       }
       
       isSavingRef.current = false;
-    }, 1000); // 1 segundo de debounce
+    }, 300); // 300ms de debounce para gravação mais rápida
     
     return () => {
       clearTimeout(timeoutId);
@@ -1245,6 +1295,18 @@ const App: React.FC = () => {
           });
       }
 
+      // Salvar imediatamente no localStorage
+      if (currentUser) {
+        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+        allDrafts[currentUser.email] = {
+          formData: newData,
+          images: images,
+          signatures: signatures,
+          ignoredChecklists: Array.from(ignoredChecklists)
+        };
+        localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+      }
+
       return newData;
     });
   };
@@ -1399,13 +1461,28 @@ const App: React.FC = () => {
 
   const handleSignature = (role: string, dataUrl: string) => {
       setSignatures(prev => {
-          const updated = {
-              ...prev,
-              [activeChecklistId]: {
-                  ...(prev[activeChecklistId] || {}),
+          const updated: Record<string, Record<string, string>> = {};
+          
+          // Replicar assinatura para TODOS os checklists (como info básica)
+          CHECKLISTS.forEach(cl => {
+              updated[cl.id] = {
+                  ...(prev[cl.id] || {}),
                   [role]: dataUrl
-              }
-          };
+              };
+          });
+          
+          // Salvar imediatamente no localStorage
+          if (currentUser) {
+            const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+            allDrafts[currentUser.email] = {
+              formData: formData,
+              images: images,
+              signatures: updated,
+              ignoredChecklists: Array.from(ignoredChecklists)
+            };
+            localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+          }
+          
           return updated;
       });
   };
@@ -1451,21 +1528,168 @@ const App: React.FC = () => {
       if (!currentUser) return;
       
       try {
-        // Strict Validation: Must have at least one active checklist, AND all active checklists must be complete
+        // Get active checklists (not marked as "Não se Aplica")
         const activeChecklistIds = CHECKLISTS.filter(cl => !ignoredChecklists.has(cl.id)).map(cl => cl.id);
         
+        console.log('🔍 DEBUG - Checklists ativos:', activeChecklistIds);
+        console.log('🔍 DEBUG - Checklists ignorados:', Array.from(ignoredChecklists));
+        
+        // VALIDAÇÃO 1: Deve ter pelo menos um checklist ativo
         if (activeChecklistIds.length === 0) {
-            alert("Erro: Você deve preencher pelo menos um checklist para finalizar.");
+            alert(
+                "❌ ERRO: Nenhum checklist ativo!\n\n" +
+                "Para finalizar, você precisa:\n" +
+                "✓ Preencher 100% de pelo menos UM checklist\n\n" +
+                "💡 Dica: Complete um checklist totalmente antes de finalizar."
+            );
             return;
         }
         
+        // VALIDAÇÃO 2: Verificar se pelo menos UM checklist está 100% completo
+        const completeChecklists = activeChecklistIds.filter(id => isChecklistComplete(id));
+        
+        console.log('🔍 DEBUG - Checklists completos:', completeChecklists);
+        console.log('🔍 DEBUG - Total completos:', completeChecklists.length);
+        
+        if (completeChecklists.length === 0) {
+            // Calcular percentual de cada checklist ativo
+            const checklistStatus = activeChecklistIds.map(id => {
+                const cl = CHECKLISTS.find(c => c.id === id);
+                const stats = getChecklistStats(id);
+                const sigs = signatures[id] || {};
+                
+                // Contar campos obrigatórios preenchidos
+                let requiredFilled = 0;
+                let requiredTotal = 0;
+                
+                cl?.sections.forEach(section => {
+                    section.items.forEach(item => {
+                        if (item.required) {
+                            requiredTotal++;
+                            const val = getInputValue(item.id, id);
+                            if (val !== '' && val !== null && val !== undefined) {
+                                requiredFilled++;
+                            }
+                        }
+                    });
+                });
+                
+                // Contar assinaturas (2 obrigatórias)
+                const hasSigs = (sigs['gestor'] ? 1 : 0) + (sigs['coordenador'] ? 1 : 0);
+                const totalRequired = requiredTotal + 2; // +2 para as assinaturas
+                const totalFilled = requiredFilled + hasSigs;
+                
+                const percentage = totalRequired > 0 ? Math.round((totalFilled / totalRequired) * 100) : 0;
+                
+                console.log(`🔍 DEBUG - ${cl?.title}: ${percentage}% (${totalFilled}/${totalRequired})`);
+                
+                return {
+                    id: id,
+                    title: cl?.title || '',
+                    percentage: percentage,
+                    missing: totalRequired - totalFilled
+                };
+            });
+            
+            const statusText = checklistStatus
+                .map(s => `  • ${s.title}: ${s.percentage}% (faltam ${s.missing} campos)`)
+                .join('\n');
+            
+            alert(
+                "⚠️ ATENÇÃO: Nenhum checklist está 100% completo!\n\n" +
+                "📊 Status atual:\n" +
+                statusText + "\n\n" +
+                "🚫 NÃO É POSSÍVEL FINALIZAR\n\n" +
+                "Para finalizar, você DEVE:\n" +
+                "✓ Preencher 100% de pelo menos UM checklist\n" +
+                "✓ OU marcar os checklists incompletos como 'Não se Aplica'\n\n" +
+                "💡 Dica: Complete todos os campos obrigatórios e ambas as assinaturas."
+            );
+            
+            // Navegar para o checklist com maior percentual
+            const bestChecklist = checklistStatus.reduce((best, current) => 
+                current.percentage > best.percentage ? current : best
+            );
+            
+            setActiveChecklistId(bestChecklist.id);
+            setCurrentView('checklist');
+            setShowErrors(true);
+            setTimeout(() => {
+                scrollToFirstMissing(bestChecklist.id);
+            }, 300);
+            
+            console.log('❌ BLOQUEADO - Nenhum checklist 100% completo');
+            return;
+        }
+        
+        // VALIDAÇÃO 3: Verificar se há checklists INCOMPLETOS entre os ativos
         const incompleteChecklists = activeChecklistIds.filter(id => !isChecklistComplete(id));
         
+        console.log('🔍 DEBUG - Checklists incompletos:', incompleteChecklists);
+        
         if (incompleteChecklists.length > 0) {
-            const names = incompleteChecklists.map(id => CHECKLISTS.find(c => c.id === id)?.title).join('\n- ');
-            alert(`Erro: Os seguintes checklists ativos estão incompletos:\n- ${names}\n\nPor favor, complete-os ou marque como 'Não se Aplica' para continuar.`);
+            const incompleteNames = incompleteChecklists.map(id => {
+                const cl = CHECKLISTS.find(c => c.id === id);
+                const stats = getChecklistStats(id);
+                const sigs = signatures[id] || {};
+                
+                // Calcular percentual
+                let requiredFilled = 0;
+                let requiredTotal = 0;
+                
+                cl?.sections.forEach(section => {
+                    section.items.forEach(item => {
+                        if (item.required) {
+                            requiredTotal++;
+                            const val = getInputValue(item.id, id);
+                            if (val !== '' && val !== null && val !== undefined) {
+                                requiredFilled++;
+                            }
+                        }
+                    });
+                });
+                
+                const hasSigs = (sigs['gestor'] ? 1 : 0) + (sigs['coordenador'] ? 1 : 0);
+                const totalRequired = requiredTotal + 2;
+                const totalFilled = requiredFilled + hasSigs;
+                const percentage = totalRequired > 0 ? Math.round((totalFilled / totalRequired) * 100) : 0;
+                
+                return `  • ${cl?.title}: ${percentage}% preenchido`;
+            }).join('\n');
+            
+            const completeNames = completeChecklists.map(id => {
+                const cl = CHECKLISTS.find(c => c.id === id);
+                return `  ✅ ${cl?.title}`;
+            }).join('\n');
+            
+            alert(
+                "🚨 CHECKLISTS INCOMPLETOS DETECTADOS!\n\n" +
+                "Checklists completos (100%):\n" +
+                completeNames + "\n\n" +
+                "⚠️ Checklists incompletos:\n" +
+                incompleteNames + "\n\n" +
+                "🚫 VOCÊ NÃO PODE FINALIZAR COM CHECKLISTS INCOMPLETOS!\n\n" +
+                "Escolha UMA das opções:\n" +
+                "1️⃣ COMPLETAR: Preencher 100% dos checklists incompletos\n" +
+                "2️⃣ MARCAR 'NÃO SE APLICA': Desmarcar os checklists incompletos\n\n" +
+                "💡 Só é possível salvar quando TODOS os checklists ativos estiverem 100% completos."
+            );
+            
+            // Navegar para o primeiro checklist incompleto
+            setActiveChecklistId(incompleteChecklists[0]);
+            setCurrentView('checklist');
+            setShowErrors(true);
+            setTimeout(() => {
+                scrollToFirstMissing(incompleteChecklists[0]);
+            }, 300);
+            
+            console.log('❌ BLOQUEADO - Existem checklists incompletos');
             return;
         }
+        
+        console.log('✅ VALIDAÇÕES PASSARAM - Salvando relatório...');
+        
+        // ✅ TUDO OK - Pode finalizar!
 
         const score = calculateGlobalScore();
         
@@ -1676,7 +1900,8 @@ const App: React.FC = () => {
         }
      }
      const currentSigs = signatures[checklistId] || {};
-     if (!currentSigs['gestor']) return false; 
+     // EXIGIR assinatura de gestor E coordenador
+     if (!currentSigs['gestor'] || !currentSigs['coordenador']) return false; 
      
      return true;
   };
@@ -1757,16 +1982,69 @@ const App: React.FC = () => {
       });
   };
 
+  // Função para scroll e highlight do primeiro item faltante
+  const scrollToFirstMissing = (checklistId: string) => {
+      const stats = getChecklistStats(checklistId);
+      const currentSigs = signatures[checklistId] || {};
+      
+      // Verificar primeiro item faltante
+      if (stats.missingItems.length > 0) {
+          const firstMissing = stats.missingItems[0];
+          // Encontrar o elemento no DOM pelo ID do item
+          const checklist = CHECKLISTS.find(c => c.id === checklistId);
+          if (checklist) {
+              for (const section of checklist.sections) {
+                  for (const item of section.items) {
+                      if (item.text === firstMissing.text) {
+                          const element = document.getElementById(item.id);
+                          if (element) {
+                              element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                              element.classList.add('highlight-missing');
+                              setTimeout(() => element.classList.remove('highlight-missing'), 3000);
+                              return;
+                          }
+                      }
+                  }
+              }
+          }
+      }
+      
+      // Verificar assinaturas faltantes
+      if (!currentSigs['gestor']) {
+          const gestorSig = document.querySelector('[data-signature="gestor"]');
+          if (gestorSig) {
+              gestorSig.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              gestorSig.classList.add('highlight-missing');
+              setTimeout(() => gestorSig.classList.remove('highlight-missing'), 3000);
+              return;
+          }
+      }
+      
+      if (!currentSigs['coordenador']) {
+          const coordSig = document.querySelector('[data-signature="coordenador"]');
+          if (coordSig) {
+              coordSig.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              coordSig.classList.add('highlight-missing');
+              setTimeout(() => coordSig.classList.remove('highlight-missing'), 3000);
+              return;
+          }
+      }
+      
+      // Se não encontrou nada específico, scroll para o error box
+      errorBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   const handleVerify = () => {
     setShowErrors(true);
     
     const stats = getChecklistStats(activeChecklistId);
-    const hasSigMissing = !signatures[activeChecklistId]?.['gestor'];
+    const currentSigs = signatures[activeChecklistId] || {};
+    const hasSigMissing = !currentSigs['gestor'] || !currentSigs['coordenador'];
 
     if (stats.missingItems.length > 0 || hasSigMissing || stats.unansweredItems.length > 0) {
-        // Scroll to error box at the bottom
+        // Scroll para o primeiro item faltante com highlight
         setTimeout(() => {
-             errorBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+             scrollToFirstMissing(activeChecklistId);
         }, 100);
     } else {
         alert("Checklist completo! Você pode prosseguir.");
@@ -1786,12 +2064,13 @@ const App: React.FC = () => {
   const handleNextChecklist = () => {
       // Validate Current Checklist first
       const stats = getChecklistStats(activeChecklistId);
-      const hasSigMissing = !signatures[activeChecklistId]?.['gestor'];
+      const currentSigs = signatures[activeChecklistId] || {};
+      const hasSigMissing = !currentSigs['gestor'] || !currentSigs['coordenador'];
 
       if (stats.missingItems.length > 0 || hasSigMissing) {
           setShowErrors(true);
            setTimeout(() => {
-             errorBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+             scrollToFirstMissing(activeChecklistId);
         }, 100);
         return; // Block navigation
       }
@@ -2675,8 +2954,12 @@ const App: React.FC = () => {
                            Assinatura e Validação
                        </h3>
                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                           <SignaturePad label="Assinatura do Gestor" onEnd={(data) => handleSignature('gestor', data)} />
-                           <SignaturePad label="Assinatura Coordenador / Aplicador" onEnd={(data) => handleSignature('coordenador', data)} />
+                           <div data-signature="gestor">
+                               <SignaturePad label="Assinatura do Gestor" onEnd={(data) => handleSignature('gestor', data)} />
+                           </div>
+                           <div data-signature="coordenador">
+                               <SignaturePad label="Assinatura Coordenador / Aplicador" onEnd={(data) => handleSignature('coordenador', data)} />
+                           </div>
                        </div>
                    </div>
                   )}

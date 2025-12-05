@@ -72,6 +72,18 @@
         20%, 40%, 60%, 80% { transform: translateX(5px); }
       }
 
+      @keyframes highlight-pulse {
+        0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+        50% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
+      }
+      
+      .highlight-missing {
+        animation: highlight-pulse 1s ease-in-out 3 !important;
+        border: 2px solid #ef4444 !important;
+        background-color: #fee2e2 !important;
+        transition: all 0.3s ease !important;
+      }
+
       @media print {
         @page { 
           size: A4; 
