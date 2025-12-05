@@ -123,24 +123,36 @@
           display: block;
         }
         
-        /* Grid de imagens na impressão - mantém 4 colunas como na tela */
-        .grid-cols-4 {
+        /* Grid de imagens no relatório - NUNCA cortar */
+        .grid-cols-2 {
           display: grid !important;
-          grid-template-columns: repeat(4, 1fr) !important;
-          gap: 1rem !important;
-          page-break-inside: avoid;
+          grid-template-columns: repeat(2, 1fr) !important;
+          gap: 1.5rem !important;
+          page-break-inside: avoid !important;
+          break-inside: avoid !important;
+          margin: 1.5rem 0 !important;
         }
         
-        .grid-cols-4 > div {
-          break-inside: avoid;
-          page-break-inside: avoid;
-          height: 8rem !important; /* Mantém h-32 (128px = 8rem) */
+        .report-image-container {
+          break-inside: avoid !important;
+          page-break-inside: avoid !important;
+          page-break-before: auto !important;
+          page-break-after: auto !important;
+          height: 240px !important;
+          display: block !important;
+          padding: 8px !important;
+          background: white !important;
+          border: 2px solid #d1d5db !important;
+          border-radius: 8px !important;
         }
         
-        .grid-cols-4 img {
+        .report-image-container img {
           width: 100% !important;
           height: 100% !important;
-          object-fit: cover !important;
+          object-fit: contain !important;
+          display: block !important;
+          max-width: 100% !important;
+          max-height: 100% !important;
         }
         
         /* Manter espaçamentos originais */
