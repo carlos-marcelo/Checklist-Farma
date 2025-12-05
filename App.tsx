@@ -2950,13 +2950,13 @@ const App: React.FC = () => {
 
             {/* --- REPORT / HISTORY VIEW (READ ONLY) --- */}
             {(currentView === 'report' || currentView === 'view_history') && (
-                <div className="max-w-5xl mx-auto bg-white p-10 shadow-2xl rounded-3xl min-h-screen">
+                <div className="max-w-5xl mx-auto bg-white p-6 shadow-2xl rounded-3xl min-h-screen">
                     <LogoPrint config={displayConfig} theme={currentTheme} />
                     
                     {/* Basic Info Block (Extracted Top) */}
-                    <div className="mb-10 pb-8">
-                         <h3 className={`text-xl font-black uppercase tracking-tight mb-6 pb-2 border-b-2 ${currentTheme.border} ${currentTheme.text}`}>Informações Básicas</h3>
-                         <div className="grid grid-cols-2 gap-8">
+                    <div className="mb-4 pb-3">
+                         <h3 className={`text-lg font-black uppercase tracking-tight mb-3 pb-1 border-b-2 ${currentTheme.border} ${currentTheme.text}`}>Informações Básicas</h3>
+                         <div className="grid grid-cols-2 gap-4">
                              <div>
                                  <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Nome do Coordenador / Aplicador</p>
                                  <p className="text-lg font-bold text-gray-800">{getInputValue('nome_coordenador', basicInfoSourceChecklist) || '-'}</p>
@@ -2976,7 +2976,7 @@ const App: React.FC = () => {
                          </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-8 mb-10 border-b-2 border-gray-100 pb-8">
+                    <div className="grid grid-cols-2 gap-4 mb-4 border-b-2 border-gray-100 pb-3">
                         <div>
                              <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Responsável pela Avaliação (Sistema)</p>
                              <p className="text-lg font-bold text-gray-800">{viewHistoryItem ? viewHistoryItem.userName : currentUser.name}</p>
@@ -2999,7 +2999,7 @@ const App: React.FC = () => {
                         const feedback = getScoreFeedback(scoreNum);
                         
                         return (
-                            <div className="flex flex-col items-center justify-center p-6 bg-gray-50 rounded-2xl border border-gray-200 mb-10 text-center">
+                            <div className="flex flex-col items-center justify-center p-3 bg-gray-50 rounded-xl border border-gray-200 mb-4 text-center">
                                 <span className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Nota Global</span>
                                 <div className="flex items-center gap-4 mb-2">
                                     {feedback.icon}
@@ -3014,23 +3014,23 @@ const App: React.FC = () => {
                         );
                     })()}
 
-                    <div className="space-y-12">
+                    <div className="space-y-4">
                          {CHECKLISTS.map(cl => {
                              const isIgnored = viewHistoryItem ? viewHistoryItem.ignoredChecklists.includes(cl.id) : ignoredChecklists.has(cl.id);
                              if (isIgnored) return null;
                              
                              return (
                                  <div key={cl.id} className="break-inside-avoid">
-                                     <h3 className={`text-xl font-black uppercase tracking-tight mb-6 pb-2 border-b-2 ${currentTheme.border} ${currentTheme.text}`}>{cl.title}</h3>
-                                     <div className="space-y-8">
+                                     <h3 className={`text-lg font-black uppercase tracking-tight mb-3 pb-1 border-b-2 ${currentTheme.border} ${currentTheme.text}`}>{cl.title}</h3>
+                                     <div className="space-y-3">
                                          {cl.sections.map(sec => {
                                             // SKIP INFO BASICA IN INDIVIDUAL SECTIONS (Already shown at top)
                                             if (sec.id === 'info_basica') return null;
 
                                             return (
-                                             <div key={sec.id} className="mb-6">
-                                                 <h4 className="font-bold text-gray-800 mb-4 uppercase text-sm tracking-wide bg-gray-100 p-2 pl-4 rounded-lg">{sec.title}</h4>
-                                                 <div className="pl-4 space-y-3">
+                                             <div key={sec.id} className="mb-3">
+                                                 <h4 className="font-bold text-gray-800 mb-2 uppercase text-xs tracking-wide bg-gray-100 p-1 pl-3 rounded-lg">{sec.title}</h4>
+                                                 <div className="pl-3 space-y-2">
                                                      {sec.items.map(item => {
                                                          const val = getInputValue(item.id, cl.id);
                                                          if (item.type === InputType.HEADER) return <h5 key={item.id} className="font-bold text-gray-700 mt-4 border-b border-gray-200">{item.text}</h5>;
@@ -3054,9 +3054,9 @@ const App: React.FC = () => {
                                                  </div>
                                                  {/* Images in Report */}
                                                  {(getDataSource(cl.id).imgs[sec.id] || []).length > 0 && (
-                                                     <div className="mt-6 mb-6 grid grid-cols-2 gap-6 break-inside-avoid page-break-inside-avoid" style={{pageBreakInside: 'avoid'}}>
+                                                     <div className="mt-2 mb-2 grid grid-cols-2 gap-2 break-inside-avoid page-break-inside-avoid" style={{pageBreakInside: 'avoid'}}>
                                                          {(getDataSource(cl.id).imgs[sec.id] || []).slice(0, 2).map((img, idx) => (
-                                                             <div key={idx} className="report-image-container rounded-lg border-2 border-gray-300 bg-white p-2 break-inside-avoid" style={{height: '240px', pageBreakInside: 'avoid', breakInside: 'avoid'}}>
+                                                             <div key={idx} className="report-image-container rounded-lg border border-gray-300 bg-white p-1 break-inside-avoid" style={{height: '200px', pageBreakInside: 'avoid', breakInside: 'avoid'}}>
                                                                  <img src={img} alt={`Imagem ${idx + 1}`} className="w-full h-full object-contain" style={{maxWidth: '100%', maxHeight: '100%', objectFit: 'contain'}} />
                                                              </div>
                                                          ))}
@@ -3066,16 +3066,16 @@ const App: React.FC = () => {
                                          )})}
                                      </div>
                                      {/* Signatures in Report */}
-                                     <div className="mt-8 flex justify-end gap-8">
+                                     <div className="mt-4 flex justify-end gap-4">
                                          {getDataSource(cl.id).sigs['gestor'] && (
                                              <div className="text-center">
-                                                 <img src={getDataSource(cl.id).sigs['gestor']} className="h-20 mb-2 border-b border-gray-300" />
+                                                 <img src={getDataSource(cl.id).sigs['gestor']} className="h-16 mb-1 border-b border-gray-300" />
                                                  <p className="text-xs font-bold text-gray-500 uppercase">Assinatura Gestor</p>
                                              </div>
                                          )}
                                           {getDataSource(cl.id).sigs['coordenador'] && (
                                              <div className="text-center">
-                                                 <img src={getDataSource(cl.id).sigs['coordenador']} className="h-20 mb-2 border-b border-gray-300" />
+                                                 <img src={getDataSource(cl.id).sigs['coordenador']} className="h-16 mb-1 border-b border-gray-300" />
                                                  <p className="text-xs font-bold text-gray-500 uppercase">Assinatura Coordenador</p>
                                              </div>
                                          )}
@@ -3085,7 +3085,7 @@ const App: React.FC = () => {
                          })}
                     </div>
 
-                    <div className="mt-12 flex justify-center no-print">
+                    <div className="mt-6 flex justify-center no-print">
                         <button 
                             onClick={handleDownloadPDF} 
                             className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-8 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5 font-bold"
