@@ -791,54 +791,37 @@ const App: React.FC = () => {
   // Load Draft for Current User - only on initial login
   const [draftLoaded, setDraftLoaded] = useState(false);
   const [loadedDraftEmail, setLoadedDraftEmail] = useState<string | null>(null);
-  const isSavingCriticalDataRef = useRef(false);
+  const isSavingRef = useRef(false);
+  const lastRemoteUpdateRef = useRef<number>(0);
   
   useEffect(() => {
-    // Só recarregar se for um usuário diferente OU se ainda não carregou
+    // Só carregar draft INICIAL - depois usa sync bidirecional
     if (currentUser && currentUser.email !== loadedDraftEmail) {
-      // Primeiro, verificar se há um draft do Supabase (mais recente)
       const loadDraft = async () => {
         try {
-          console.log('📥 Carregando draft do Supabase para:', currentUser.email);
+          console.log('📥 [LOAD INICIAL] Carregando draft do Supabase');
           const supabaseDraft = await SupabaseService.fetchDraft(currentUser.email);
-          console.log('📦 Draft recebido:', supabaseDraft);
           
           if (supabaseDraft) {
-            console.log('✅ Draft encontrado - carregando dados');
-            console.log('  - FormData:', Object.keys(supabaseDraft.form_data || {}).length, 'campos');
-            console.log('  - Images:', Object.keys(supabaseDraft.images || {}).length, 'seções');
-            console.log('  - Signatures:', Object.keys(supabaseDraft.signatures || {}).length, 'checklists');
-            
-            // MERGE ao invés de substituir - preserva dados em edição
-            setFormData(prev => ({ ...prev, ...(supabaseDraft.form_data || {}) }));
-            setImages(prev => ({ ...prev, ...(supabaseDraft.images || {}) }));
-            setSignatures(prev => ({ ...prev, ...(supabaseDraft.signatures || {}) }));
-            setIgnoredChecklists(prev => new Set([...prev, ...(supabaseDraft.ignored_checklists || [])]));
+            console.log('✅ Draft encontrado - substituindo local completamente');
+            // SUBSTITUIR tudo no load inicial
+            setFormData(supabaseDraft.form_data || {});
+            setImages(supabaseDraft.images || {});
+            setSignatures(supabaseDraft.signatures || {});
+            setIgnoredChecklists(new Set(supabaseDraft.ignored_checklists || []));
+            lastRemoteUpdateRef.current = Date.now();
           } else {
-            console.warn('⚠️ Nenhum draft encontrado no Supabase - iniciando vazio');
-            setFormData({});
-            setImages({});
-            setSignatures({});
-            setIgnoredChecklists(new Set());
+            console.log('⚠️ Nenhum draft - estado limpo');
           }
         } catch (error) {
           console.error('❌ Erro ao carregar draft:', error);
-          setFormData({});
-          setImages({});
-          setSignatures({});
-          setIgnoredChecklists(new Set());
         }
         
         setDraftLoaded(true);
         setLoadedDraftEmail(currentUser.email);
       };
       
-      // Não recarregar se estiver salvando dados críticos (assinatura, imagem)
-      if (!isSavingCriticalDataRef.current) {
-        loadDraft();
-      } else {
-        console.log('🔒 Bloqueio de reload - salvamento crítico em andamento');
-      }
+      loadDraft();
     }
   }, [currentUser, loadedDraftEmail]);
 
@@ -866,62 +849,33 @@ const App: React.FC = () => {
         }
     }, [users]);
 
-  // Sincronização em tempo real - verifica Supabase a cada 2 segundos
+  // Sincronização bidirecional em tempo real - Supabase é a fonte única da verdade
   useEffect(() => {
-    if (!currentUser || isSavingCriticalDataRef.current) return;
+    if (!currentUser || !draftLoaded || isSavingRef.current) return;
     
     const syncInterval = setInterval(async () => {
       try {
-        console.log('🔄 Verificando atualizações do Supabase...');
         const remoteDraft = await SupabaseService.fetchDraft(currentUser.email);
         
         if (remoteDraft) {
-          // Fazer MERGE com dados remotos tendo PRIORIDADE (para ver mudanças de outros dispositivos)
-          setFormData(prev => {
-            const merged = { ...prev, ...(remoteDraft.form_data || {}) };
-            const hasChanges = JSON.stringify(prev) !== JSON.stringify(merged);
-            if (hasChanges) {
-              console.log('🔀 FormData atualizado:', Object.keys(merged).length, 'checklists');
-            }
-            return merged;
-          });
-          
-          setImages(prev => {
-            const merged = { ...prev, ...(remoteDraft.images || {}) };
-            const hasChanges = JSON.stringify(prev) !== JSON.stringify(merged);
-            if (hasChanges) {
-              console.log('🔀 Images atualizadas:', Object.keys(merged).length, 'seções');
-            }
-            return merged;
-          });
-          
-          setSignatures(prev => {
-            const merged = { ...prev, ...(remoteDraft.signatures || {}) };
-            const hasChanges = JSON.stringify(prev) !== JSON.stringify(merged);
-            if (hasChanges) {
-              console.log('🔀 Signatures atualizadas:', Object.keys(merged).length, 'checklists');
-            }
-            return merged;
-          });
-          
-          setIgnoredChecklists(prev => {
-            const merged = new Set([...prev, ...(remoteDraft.ignored_checklists || [])]);
-            return merged;
-          });
+          // Atualizar SEMPRE com dados remotos (quem salvou primeiro no Supabase vence)
+          setFormData(remoteDraft.form_data || {});
+          setImages(remoteDraft.images || {});
+          setSignatures(remoteDraft.signatures || {});
+          setIgnoredChecklists(new Set(remoteDraft.ignored_checklists || []));
+          lastRemoteUpdateRef.current = Date.now();
         }
       } catch (error) {
         console.error('❌ Erro na sincronização:', error);
       }
-    }, 2000); // 2 segundos
+    }, 3000); // 3 segundos - sincronização contínua
     
     return () => clearInterval(syncInterval);
-  }, [currentUser]);
+  }, [currentUser, draftLoaded]);
 
-  // Auto-Save Draft APENAS no Supabase (sem localStorage) + Merge inteligente
-  const lastSavedTimestampRef = useRef<number>(0);
-  
+  // Auto-Save imediato no Supabase - SEM debounce, SEM merge
   useEffect(() => {
-    if (currentUser && !isLoadingData && !isSavingCriticalDataRef.current) {
+    if (currentUser && !isLoadingData && draftLoaded) {
       // Cancel previous save if exists
       if (saveDraftAbortControllerRef.current) {
         saveDraftAbortControllerRef.current.abort();
@@ -931,65 +885,38 @@ const App: React.FC = () => {
       const abortController = new AbortController();
       saveDraftAbortControllerRef.current = abortController;
       
-      // Save to Supabase (async, with 500ms debounce)
-      const timeoutId = setTimeout(async () => {
-        // Check if aborted before saving
-        if (!abortController.signal.aborted) {
-          setSyncStatus('saving');
-          console.log('💾 Auto-save iniciado:', {
-            email: currentUser.email,
-            formData: Object.keys(formData).length + ' checklists',
-            images: Object.keys(images).length + ' seções com imagens',
-            signatures: Object.keys(signatures).length + ' checklists com assinaturas'
-          });
-          
-          // ANTES de salvar, buscar versão atual do Supabase para fazer MERGE
-          const currentDraft = await SupabaseService.fetchDraft(currentUser.email);
-          
-          let mergedData = {
-            form_data: formData,
-            images: images,
-            signatures: signatures,
-            ignored_checklists: Array.from(ignoredChecklists)
-          };
-          
-          // Se houver draft no Supabase, fazer MERGE inteligente
-          if (currentDraft) {
-            console.log('🔀 Fazendo merge com dados do Supabase');
-            mergedData = {
-              form_data: { ...(currentDraft.form_data || {}), ...formData },
-              images: { ...(currentDraft.images || {}), ...images },
-              signatures: { ...(currentDraft.signatures || {}), ...signatures },
-              ignored_checklists: Array.from(new Set([
-                ...(currentDraft.ignored_checklists || []),
-                ...ignoredChecklists
-              ]))
-            };
-          }
-          
-          const success = await SupabaseService.saveDraft({
-            user_email: currentUser.email,
-            ...mergedData
-          });
-          
-          if (success) {
-            console.log('✅ Auto-save concluído com sucesso (com merge)');
-            lastSavedTimestampRef.current = Date.now();
-            setSyncStatus('saved');
-          } else {
-            console.error('❌ Auto-save falhou');
-            setSyncStatus('idle');
-          }
-          setTimeout(() => setSyncStatus('idle'), 2000);
+      // Save IMEDIATAMENTE (sem debounce)
+      const saveNow = async () => {
+        if (abortController.signal.aborted || isSavingRef.current) return;
+        
+        isSavingRef.current = true;
+        setSyncStatus('saving');
+        
+        const success = await SupabaseService.saveDraft({
+          user_email: currentUser.email,
+          form_data: formData,
+          images: images,
+          signatures: signatures,
+          ignored_checklists: Array.from(ignoredChecklists)
+        });
+        
+        if (success) {
+          setSyncStatus('saved');
+          setTimeout(() => setSyncStatus('idle'), 1000);
+        } else {
+          setSyncStatus('idle');
         }
-      }, 500); // 500ms - salva rápido
+        
+        isSavingRef.current = false;
+      };
+      
+      saveNow();
       
       return () => {
-        clearTimeout(timeoutId);
         abortController.abort();
       };
     }
-  }, [formData, images, signatures, ignoredChecklists, currentUser, isLoadingData]);
+  }, [formData, images, signatures, ignoredChecklists, currentUser, isLoadingData, draftLoaded]);
 
   // Save Config to Supabase AND LocalStorage
   useEffect(() => {
@@ -1459,29 +1386,6 @@ const App: React.FC = () => {
                     // Imagens salvas APENAS no Supabase via auto-save effect
                     // LocalStorage não armazena imagens para evitar QuotaExceededError
                     
-                    // Salvar IMEDIATAMENTE no Supabase (não esperar debounce)
-                    if (currentUser) {
-                      // BLOQUEAR reload durante salvamento de imagem
-                      isSavingCriticalDataRef.current = true;
-                      
-                      SupabaseService.saveDraft({
-                        user_email: currentUser.email,
-                        form_data: formData,
-                        images: newImages,
-                        signatures: signatures,
-                        ignored_checklists: Array.from(ignoredChecklists)
-                      }).then(() => {
-                        console.log('✅ Imagem salva no Supabase');
-                        // DESBLOQUEAR reload após salvar
-                        setTimeout(() => {
-                          isSavingCriticalDataRef.current = false;
-                        }, 500);
-                      }).catch((error) => {
-                        console.error('❌ Erro ao salvar imagem:', error);
-                        isSavingCriticalDataRef.current = false;
-                      });
-                    }
-                    
                     return newImages;
                 });
                 
@@ -1528,59 +1432,17 @@ const App: React.FC = () => {
       });
   };
 
-  const handleSignature = async (role: string, dataUrl: string) => {
-      // BLOQUEAR reload durante salvamento crítico
-      isSavingCriticalDataRef.current = true;
-      
-      const updated = {
-          ...signatures,
-          [activeChecklistId]: {
-              ...(signatures[activeChecklistId] || {}),
-              [role]: dataUrl
-          }
-      };
-      
-      // Atualizar estado ANTES de salvar
-      setSignatures(updated);
-      
-      // Salvar IMEDIATAMENTE no Supabase (assinatura é crítica)
-      if (currentUser) {
-        // CANCELAR auto-save pendente para evitar sobrescrever
-        if (saveDraftAbortControllerRef.current) {
-          saveDraftAbortControllerRef.current.abort();
-          console.log('🛑 Auto-save cancelado para salvar assinatura');
-        }
-        
-        console.log('✍️ Salvando assinatura no Supabase:', role);
-        setSyncStatus('saving');
-        
-        try {
-          const success = await SupabaseService.saveDraft({
-            user_email: currentUser.email,
-            form_data: formData,
-            images: images,
-            signatures: updated, // nova assinatura
-            ignored_checklists: Array.from(ignoredChecklists)
-          });
-          
-          if (success) {
-            console.log('✅ Assinatura salva com sucesso no Supabase');
-            setSyncStatus('saved');
-            setTimeout(() => setSyncStatus('idle'), 2000);
-          } else {
-            console.error('❌ Falha ao salvar assinatura');
-            setSyncStatus('error');
-          }
-        } catch (error) {
-          console.error('❌ Erro ao salvar assinatura:', error);
-          setSyncStatus('error');
-        } finally {
-          // DESBLOQUEAR reload após salvar
-          setTimeout(() => {
-            isSavingCriticalDataRef.current = false;
-          }, 500); // 500ms de segurança
-        }
-      }
+  const handleSignature = (role: string, dataUrl: string) => {
+      setSignatures(prev => {
+          const updated = {
+              ...prev,
+              [activeChecklistId]: {
+                  ...(prev[activeChecklistId] || {}),
+                  [role]: dataUrl
+              }
+          };
+          return updated;
+      });
   };
 
   // Helper to get data source (Draft or History Item)
