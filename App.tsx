@@ -1314,9 +1314,11 @@ const App: React.FC = () => {
         return;
       }
       
-      // Limite de 15MB por imagem
+      // Suportar até 15MB por imagem
       if (file.size > 15 * 1024 * 1024) {
-        alert('⚠️ Imagem muito grande (máximo 15MB). Será comprimida automaticamente.');
+        alert('⚠️ Imagem muito grande (máximo 15MB). Tente uma foto menor ou com menos zoom.');
+        e.target.value = '';
+        return;
       }
       
       try {
@@ -1342,11 +1344,14 @@ const App: React.FC = () => {
                 let width = img.width;
                 let height = img.height;
                 
-                // Máximo 1600px de largura
-                const maxWidth = 1600;
-                if (width > maxWidth) {
-                  height = (height * maxWidth) / width;
-                  width = maxWidth;
+                // Redimensionar para máximo 800px (menor dimensão para câmeras de alta qualidade)
+                const maxDimension = 800;
+                if (width > height && width > maxDimension) {
+                  height = (height * maxDimension) / width;
+                  width = maxDimension;
+                } else if (height > maxDimension) {
+                  width = (width * maxDimension) / height;
+                  height = maxDimension;
                 }
                 
                 canvas.width = width;
@@ -1361,18 +1366,19 @@ const App: React.FC = () => {
                 
                 ctx.drawImage(img, 0, 0, width, height);
                 
-                // Reduzir qualidade progressivamente até ficar sob 2MB
-                let quality = 0.9;
+                // Compressão agressiva: começar com 60% de qualidade e reduzir até 800KB
+                let quality = 0.6;
                 let compressedBase64 = canvas.toDataURL('image/jpeg', quality);
-                const targetSize = 2 * 1024 * 1024;
+                const targetSize = 800 * 1024; // 800KB target
                 
-                while (compressedBase64.length > targetSize && quality > 0.5) {
+                while (compressedBase64.length > targetSize && quality > 0.2) {
                   quality -= 0.05;
                   compressedBase64 = canvas.toDataURL('image/jpeg', quality);
                 }
                 
-                if (compressedBase64.length > 3 * 1024 * 1024) {
-                  alert('⚠️ Não foi possível comprimir a imagem o suficiente. Tente uma imagem menor.');
+                // Limite absoluto de 1.5MB após compressão
+                if (compressedBase64.length > 1.5 * 1024 * 1024) {
+                  alert('⚠️ Não foi possível comprimir a imagem o suficiente.\n\nDicas:\n• Tire a foto com menos zoom\n• Aproxime-se do objeto\n• Evite fotos com muitos detalhes');
                   e.target.value = '';
                   return;
                 }
