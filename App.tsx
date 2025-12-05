@@ -871,25 +871,21 @@ const App: React.FC = () => {
         }
     }, [users]);
 
-  // Auto-Save Draft to Supabase AND LocalStorage
+  // Auto-Save Draft to Supabase (PRINCIPAL) - LocalStorage só metadata
   useEffect(() => {
     if (currentUser && !isLoadingData) {
-      // Try to save to LocalStorage (best-effort, may fail if quota exceeded)
+      // Save ONLY metadata to LocalStorage (sem imagens para evitar quota)
       try {
         const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
         allDrafts[currentUser.email] = {
           formData,
-          images,
+          images: {}, // NÃO salvar imagens no localStorage
           signatures,
           ignoredChecklists: Array.from(ignoredChecklists)
         };
         localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
       } catch (storageError: any) {
-        if (storageError.name === 'QuotaExceededError') {
-          console.warn('⚠️ localStorage cheio - salvando apenas no Supabase');
-        } else {
-          console.error('Erro ao salvar no localStorage:', storageError);
-        }
+        console.error('Erro ao salvar metadata no localStorage:', storageError);
       }
       
       // Cancel previous save if exists
@@ -1352,8 +1348,8 @@ const App: React.FC = () => {
                 let width = img.width;
                 let height = img.height;
                 
-                // Redimensionar para máximo 800px (menor dimensão para câmeras de alta qualidade)
-                const maxDimension = 800;
+                // Redimensionar para máximo 600px (compacto, 400KB target)
+                const maxDimension = 600;
                 if (width > height && width > maxDimension) {
                   height = (height * maxDimension) / width;
                   width = maxDimension;
@@ -1374,19 +1370,19 @@ const App: React.FC = () => {
                 
                 ctx.drawImage(img, 0, 0, width, height);
                 
-                // Compressão agressiva: começar com 60% de qualidade e reduzir até 800KB
-                let quality = 0.6;
+                // Compressão agressiva: começar com 50% de qualidade e reduzir até 400KB
+                let quality = 0.5;
                 let compressedBase64 = canvas.toDataURL('image/jpeg', quality);
-                const targetSize = 800 * 1024; // 800KB target
+                const targetSize = 400 * 1024; // 400KB target
                 
                 while (compressedBase64.length > targetSize && quality > 0.2) {
                   quality -= 0.05;
                   compressedBase64 = canvas.toDataURL('image/jpeg', quality);
                 }
                 
-                // Limite absoluto de 1.5MB após compressão
-                if (compressedBase64.length > 1.5 * 1024 * 1024) {
-                  alert('⚠️ Não foi possível comprimir a imagem o suficiente.\n\nDicas:\n• Tire a foto com menos zoom\n• Aproxime-se do objeto\n• Evite fotos com muitos detalhes');
+                // Limite absoluto de 1MB após compressão
+                if (compressedBase64.length > 1024 * 1024) {
+                  alert('⚠️ Não foi possível comprimir a imagem o suficiente.\n\nDicas:\n• Tire a foto com menos zoom\n• Aproxime-se do objeto\n• Use menor resolução na câmera');
                   e.target.value = '';
                   return;
                 }
@@ -1402,24 +1398,8 @@ const App: React.FC = () => {
                         }
                     };
                     
-                    if (currentUser) {
-                      try {
-                        const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
-                        allDrafts[currentUser.email] = {
-                          formData: formData,
-                          images: newImages,
-                          signatures: signatures,
-                          ignoredChecklists: Array.from(ignoredChecklists)
-                        };
-                        localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
-                      } catch (storageError: any) {
-                        if (storageError.name === 'QuotaExceededError') {
-                          console.warn('⚠️ localStorage cheio - imagens salvas no Supabase');
-                        } else {
-                          console.error('Erro ao salvar no localStorage:', storageError);
-                        }
-                      }
-                    }
+                    // Imagens salvas APENAS no Supabase via auto-save effect
+                    // LocalStorage não armazena imagens para evitar QuotaExceededError
                     
                     return newImages;
                 });
