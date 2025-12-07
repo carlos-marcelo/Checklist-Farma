@@ -13,6 +13,22 @@ export interface DbUser {
   rejected?: boolean;
   photo?: string;
   preferred_theme?: 'red' | 'green' | 'blue' | 'yellow';
+  company_id?: string | null;
+  created_at?: string;
+}
+
+export interface CompanyArea {
+  name: string;
+  branches: string[];
+}
+
+export interface DbCompany {
+  id?: string;
+  name: string;
+  cnpj?: string;
+  phone?: string;
+  logo?: string;
+  areas?: CompanyArea[]; // JSONB column
   created_at?: string;
 }
 
@@ -54,7 +70,7 @@ export async function fetchUsers(): Promise<DbUser[]> {
       .from('users')
       .select('*')
       .order('created_at', { ascending: false });
-    
+
     if (error) throw error;
     return data || [];
   } catch (error) {
@@ -76,11 +92,12 @@ export async function createUser(user: DbUser): Promise<DbUser | null> {
         approved: user.approved,
         rejected: user.rejected || false,
         photo: user.photo,
-        preferred_theme: user.preferred_theme || 'blue'
+        preferred_theme: user.preferred_theme || 'blue',
+        company_id: user.company_id
       }])
       .select()
       .single();
-    
+
     if (error) throw error;
     return data;
   } catch (error) {
@@ -95,7 +112,7 @@ export async function updateUser(email: string, updates: Partial<DbUser>): Promi
       .from('users')
       .update(updates)
       .eq('email', email);
-    
+
     if (error) throw error;
     return true;
   } catch (error) {
@@ -110,7 +127,7 @@ export async function deleteUser(email: string): Promise<boolean> {
       .from('users')
       .delete()
       .eq('email', email);
-    
+
     if (error) throw error;
     return true;
   } catch (error) {
@@ -119,7 +136,88 @@ export async function deleteUser(email: string): Promise<boolean> {
   }
 }
 
+// ==================== COMPANIES ====================
+
+export async function fetchCompanies(): Promise<DbCompany[]> {
+  try {
+    const { data, error } = await supabase
+      .from('companies')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching companies:', error);
+    return [];
+  }
+}
+
+export async function createCompany(company: DbCompany): Promise<DbCompany | null> {
+  try {
+    const { data, error } = await supabase
+      .from('companies')
+      .insert([{
+        name: company.name,
+        cnpj: company.cnpj,
+        phone: company.phone,
+        logo: company.logo
+      }])
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error creating company:', error);
+    return null;
+  }
+}
+
+export async function deleteCompany(id: string): Promise<boolean> {
+  try {
+    // Verificar se existem usuários vinculados
+    const { count, error: checkError } = await supabase
+      .from('users')
+      .select('id', { count: 'exact', head: true })
+      .eq('company_id', id);
+
+    if (checkError) throw checkError;
+
+    if (count && count > 0) {
+      alert('Não é possível excluir esta empresa pois existem usuários vinculados a ela.');
+      return false;
+    }
+
+    const { error } = await supabase
+      .from('companies')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error deleting company:', error);
+    return false;
+  }
+}
+
 // ==================== CONFIGS ====================
+
+export async function updateCompany(id: string, updates: Partial<DbCompany>): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('companies')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error updating company:', error);
+    return false;
+  }
+}
 
 export async function fetchConfig(): Promise<DbConfig | null> {
   try {
@@ -129,7 +227,7 @@ export async function fetchConfig(): Promise<DbConfig | null> {
       .order('updated_at', { ascending: false })
       .limit(1)
       .single();
-    
+
     if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows
     return data;
   } catch (error) {
@@ -142,7 +240,7 @@ export async function saveConfig(config: DbConfig): Promise<boolean> {
   try {
     // Verificar se já existe config
     const existing = await fetchConfig();
-    
+
     if (existing && existing.id) {
       // Update
       const { error } = await supabase
@@ -153,7 +251,7 @@ export async function saveConfig(config: DbConfig): Promise<boolean> {
           updated_at: new Date().toISOString()
         })
         .eq('id', existing.id);
-      
+
       if (error) throw error;
     } else {
       // Insert
@@ -163,10 +261,10 @@ export async function saveConfig(config: DbConfig): Promise<boolean> {
           pharmacy_name: config.pharmacy_name,
           logo: config.logo
         }]);
-      
+
       if (error) throw error;
     }
-    
+
     return true;
   } catch (error) {
     console.error('Error saving config:', error);
@@ -182,7 +280,7 @@ export async function fetchReports(): Promise<DbReport[]> {
       .from('reports')
       .select('*')
       .order('created_at', { ascending: false });
-    
+
     if (error) throw error;
     return data || [];
   } catch (error) {
@@ -207,7 +305,7 @@ export async function createReport(report: DbReport): Promise<DbReport | null> {
       }])
       .select()
       .single();
-    
+
     if (error) throw error;
     return data;
   } catch (error) {
@@ -221,7 +319,7 @@ export async function reportExists(report: DbReport): Promise<boolean> {
   try {
     // Verificar se já existe relatório do mesmo usuário/farmácia/nota nos últimos 5 minutos
     const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-    
+
     const { data, error } = await supabase
       .from('reports')
       .select('id, score')
@@ -230,7 +328,7 @@ export async function reportExists(report: DbReport): Promise<boolean> {
       .eq('score', report.score)
       .gte('created_at', fiveMinutesAgo)
       .limit(1);
-      
+
     if (error) throw error;
     return !!(data && data.length > 0);
   } catch (error) {
@@ -245,7 +343,7 @@ export async function deleteReport(id: string): Promise<boolean> {
       .from('reports')
       .delete()
       .eq('id', id);
-    
+
     if (error) throw error;
     return true;
   } catch (error) {
@@ -263,7 +361,7 @@ export async function fetchDraft(userEmail: string): Promise<DbDraft | null> {
       .select('*')
       .eq('user_email', userEmail)
       .single();
-    
+
     if (error && error.code !== 'PGRST116') throw error;
     return data;
   } catch (error) {
@@ -287,7 +385,7 @@ export async function saveDraft(draft: DbDraft): Promise<boolean> {
       }, {
         onConflict: 'user_email'
       });
-    
+
     if (error) throw error;
     return true;
   } catch (error) {
@@ -302,7 +400,7 @@ export async function deleteDraft(userEmail: string): Promise<boolean> {
       .from('drafts')
       .delete()
       .eq('user_email', userEmail);
-    
+
     if (error) throw error;
     return true;
   } catch (error) {
@@ -405,7 +503,7 @@ export function exportLocalStorageBackup() {
     history: localStorage.getItem('APP_HISTORY'),
     drafts: localStorage.getItem('APP_DRAFTS')
   };
-  
+
   const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

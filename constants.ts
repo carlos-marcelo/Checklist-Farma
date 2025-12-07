@@ -6,8 +6,10 @@ const INFO_BASICA_SECTION = {
   id: 'info_basica',
   title: 'Informações Básicas',
   items: [
+    { id: 'empresa', text: 'Empresa', type: InputType.TEXT, required: true },
     { id: 'nome_coordenador', text: 'Nome do Coordenador / Aplicador', type: InputType.TEXT, required: true },
     { id: 'filial', text: 'Filial', type: InputType.TEXT, required: true },
+    { id: 'area', text: 'Área', type: InputType.TEXT, required: false }, // Auto-filled
     { id: 'gestor', text: 'Gestor(a)', type: InputType.TEXT, required: true },
     { id: 'data_aplicacao', text: 'Data de Aplicação', type: InputType.DATE, required: true },
   ]

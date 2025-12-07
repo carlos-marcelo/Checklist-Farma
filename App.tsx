@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2 } from 'lucide-react';
+import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2 } from 'lucide-react';
 import { CHECKLISTS } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection } from './types';
 import SignaturePad from './components/SignaturePad';
 import { supabase } from './supabaseClient';
 import * as SupabaseService from './supabaseService';
+import { updateCompany, saveConfig } from './supabaseService';
 
 // --- TYPES & INTERFACES FOR AUTH & CONFIG ---
 
@@ -38,6 +39,11 @@ interface ReportHistoryItem {
     images: Record<string, ChecklistImages>;
     signatures: Record<string, Record<string, string>>;
     ignoredChecklists: string[]; // IDs
+}
+
+interface CompanyArea {
+    name: string;
+    branches: string[];
 }
 
 // Enhanced Themes with gradients and shadows
@@ -283,6 +289,8 @@ const LoginScreen = ({
     const [phoneError, setPhoneError] = useState('');
     const [success, setSuccess] = useState('');
     const [shakeButton, setShakeButton] = useState(false);
+    const [showPassword, setShowPassword] = useState(false);
+    const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
     const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const val = e.target.value.replace(/\D/g, '');
@@ -472,28 +480,46 @@ const LoginScreen = ({
                         {!isForgotPassword && (
                             <div className="group">
                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Senha</label>
-                                <input
-                                    type="password"
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    className={getPasswordInputClass(password)}
-                                    placeholder="••••••••"
-                                    required
-                                />
+                                <div className="relative">
+                                    <input
+                                        type={showPassword ? "text" : "password"}
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        className={getPasswordInputClass(password) + " pr-12"}
+                                        placeholder="••••••••"
+                                        required
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPassword(!showPassword)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                    >
+                                        {showPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                                    </button>
+                                </div>
                             </div>
                         )}
 
                         {isRegistering && (
                             <div className="group">
                                 <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Confirmar Senha</label>
-                                <input
-                                    type="password"
-                                    value={confirmPassword}
-                                    onChange={(e) => setConfirmPassword(e.target.value)}
-                                    className={getPasswordInputClass(confirmPassword)}
-                                    placeholder="••••••••"
-                                    required
-                                />
+                                <div className="relative">
+                                    <input
+                                        type={showConfirmPassword ? "text" : "password"}
+                                        value={confirmPassword}
+                                        onChange={(e) => setConfirmPassword(e.target.value)}
+                                        className={getPasswordInputClass(confirmPassword) + " pr-12"}
+                                        placeholder="••••••••"
+                                        required
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                    >
+                                        {showConfirmPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                                    </button>
+                                </div>
                             </div>
                         )}
 
@@ -566,6 +592,9 @@ const App: React.FC = () => {
         logo: null
     });
 
+    // Companies State
+    const [companies, setCompanies] = useState<any[]>([]);
+
     // App Logic State
     const [activeChecklistId, setActiveChecklistId] = useState<string>(CHECKLISTS[0].id);
     const [formData, setFormData] = useState<Record<string, ChecklistData>>({});
@@ -608,6 +637,13 @@ const App: React.FC = () => {
     const [lastUserActivity, setLastUserActivity] = useState<number>(Date.now());
     const ACTIVITY_TIMEOUT = 5000; // 5 seconds of inactivity before syncing
 
+    // Company Editing State
+    const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
+    const [editCompanyName, setEditCompanyName] = useState('');
+    const [editCompanyCnpj, setEditCompanyCnpj] = useState('');
+    const [editCompanyPhone, setEditCompanyPhone] = useState('');
+    const [editCompanyLogo, setEditCompanyLogo] = useState<string | null>(null);
+    const [editCompanyAreas, setEditCompanyAreas] = useState<CompanyArea[]>([]);
 
     // --- PERSISTENCE & INIT EFFECTS ---
 
@@ -686,6 +722,16 @@ const App: React.FC = () => {
                 } else {
                     console.log('⚠️ Nenhum relatório encontrado no Supabase');
                     setReportHistory([]);
+                }
+
+                // 3.5. Load Companies from Supabase
+                const dbCompanies = await SupabaseService.fetchCompanies();
+                if (dbCompanies.length > 0) {
+                    console.log('🏢 Carregando', dbCompanies.length, 'empresas do Supabase');
+                    setCompanies(dbCompanies);
+                } else {
+                    console.log('⚠️ Nenhuma empresa encontrada no Supabase');
+                    setCompanies([]);
                 }
 
                 // 4. Restore session if exists
@@ -2369,23 +2415,232 @@ const App: React.FC = () => {
                                     <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
                                         <Palette size={24} className={currentTheme.text} />
                                     </div>
-                                    Personalização e Aparência
+                                    Área da Empresa
                                 </h2>
 
                                 <div className="space-y-10">
+                                    {/* Company Selection Dropdown */}
                                     {currentUser.role === 'MASTER' && (
                                         <div>
-                                            <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Nome da Farmácia</label>
-                                            <input
-                                                type="text"
-                                                value={config.pharmacyName}
-                                                onChange={(e) => setConfig({ ...config, pharmacyName: e.target.value })}
-                                                className={`w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:ring-2 ${currentTheme.ring} outline-none shadow-inner-light transition-all`}
-                                            />
-                                            <p className="text-xs text-gray-500 mt-2 font-medium">Exibido no cabeçalho e relatórios.</p>
+                                            <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Selecionar Empresa para Editar</label>
+                                            <select
+                                                value={selectedCompanyId || ''}
+                                                onChange={(e) => {
+                                                    const companyId = e.target.value;
+                                                    setSelectedCompanyId(companyId);
+                                                    if (companyId) {
+                                                        const company = companies.find(c => c.id === companyId);
+                                                        if (company) {
+                                                            setEditCompanyName(company.name);
+                                                            setEditCompanyCnpj(company.cnpj || '');
+                                                            setEditCompanyPhone(company.phone || '');
+                                                            setEditCompanyLogo(company.logo || null);
+                                                            setEditCompanyAreas(company.areas || []);
+                                                        }
+                                                    }
+                                                }}
+                                                className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:ring-2 focus:ring-red-500 outline-none shadow-inner-light transition-all"
+                                            >
+                                                <option value="">-- Selecione uma Empresa --</option>
+                                                {companies.map(company => (
+                                                    <option key={company.id} value={company.id}>{company.name}</option>
+                                                ))}
+                                            </select>
+                                            <p className="text-xs text-gray-500 mt-2 font-medium">Selecione a empresa que deseja editar e configurar áreas/filiais.</p>
                                         </div>
                                     )}
 
+                                    {/* Editable Company Fields (only show if company is selected) */}
+                                    {selectedCompanyId && (
+                                        <>
+                                            {/* Basic Company Info */}
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                                                <div>
+                                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Nome da Empresa</label>
+                                                    <input
+                                                        type="text"
+                                                        value={editCompanyName}
+                                                        onChange={(e) => setEditCompanyName(e.target.value)}
+                                                        placeholder="Nome da Empresa"
+                                                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                                                    />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">CNPJ</label>
+                                                    <input
+                                                        type="text"
+                                                        value={editCompanyCnpj}
+                                                        onChange={(e) => setEditCompanyCnpj(e.target.value)}
+                                                        placeholder="CNPJ (Opcional)"
+                                                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                                                    />
+                                                </div>
+                                                <div className="md:col-span-2">
+                                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Telefone</label>
+                                                    <input
+                                                        type="text"
+                                                        value={editCompanyPhone}
+                                                        onChange={(e) => setEditCompanyPhone(e.target.value)}
+                                                        placeholder="Telefone (Opcional)"
+                                                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            {/* Logo Upload */}
+                                            <div className="col-span-1 md:col-span-2">
+                                                <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Logo da Empresa</label>
+                                                <div className="flex items-center gap-8 bg-gray-50 p-6 rounded-2xl border border-gray-200">
+                                                    <div className="h-28 w-44 bg-white rounded-xl shadow-sm border border-gray-200 flex items-center justify-center overflow-hidden relative">
+                                                        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] opacity-10"></div>
+                                                        {editCompanyLogo ? (
+                                                            <img src={editCompanyLogo} alt="Preview" className="h-full w-full object-contain p-2 relative z-10" />
+                                                        ) : (
+                                                            <ImageIcon className="text-gray-300 relative z-10" size={40} />
+                                                        )}
+                                                    </div>
+                                                    <div className="flex flex-col gap-3">
+                                                        <label className="cursor-pointer inline-flex items-center px-5 py-2.5 border border-gray-300 shadow-sm text-sm font-bold rounded-lg text-gray-700 bg-white hover:bg-gray-50 hover:shadow-md transition-all">
+                                                            <Upload size={18} className="mr-2" />
+                                                            Carregar Imagem
+                                                            <input
+                                                                type="file"
+                                                                className="hidden"
+                                                                accept="image/*"
+                                                                onChange={(e) => {
+                                                                    const file = e.target.files?.[0];
+                                                                    if (file) {
+                                                                        const reader = new FileReader();
+                                                                        reader.onloadend = () => {
+                                                                            setEditCompanyLogo(reader.result as string);
+                                                                        };
+                                                                        reader.readAsDataURL(file);
+                                                                    }
+                                                                }}
+                                                            />
+                                                        </label>
+                                                        {editCompanyLogo && (
+                                                            <button
+                                                                onClick={() => setEditCompanyLogo(null)}
+                                                                className="text-sm text-red-600 hover:text-red-800 font-semibold"
+                                                            >
+                                                                Remover Logo
+                                                            </button>
+                                                        )}
+                                                        <p className="text-xs text-gray-400">Recomendado: PNG Transparente</p>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            {/* Areas and Branches Management */}
+                                            <div>
+                                                <div className="flex justify-between items-center mb-4">
+                                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide">Áreas e Filiais</label>
+                                                    <button
+                                                        onClick={() => {
+                                                            if (editCompanyAreas.length < 5) {
+                                                                setEditCompanyAreas([...editCompanyAreas, { name: '', branches: [] }]);
+                                                            }
+                                                        }}
+                                                        disabled={editCompanyAreas.length >= 5}
+                                                        className={`text-sm font-bold px-4 py-2 rounded-lg transition-all ${editCompanyAreas.length >= 5
+                                                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                                                            : 'bg-blue-600 text-white hover:bg-blue-700'
+                                                            }`}
+                                                    >
+                                                        + Adicionar Área
+                                                    </button>
+                                                </div>
+                                                <div className="space-y-4">
+                                                    {editCompanyAreas.map((area, index) => (
+                                                        <div key={index} className="bg-gray-50 p-4 rounded-lg border border-gray-200 relative group">
+                                                            <button
+                                                                onClick={() => {
+                                                                    setEditCompanyAreas(editCompanyAreas.filter((_, i) => i !== index));
+                                                                }}
+                                                                className="absolute top-2 right-2 text-red-600 hover:text-red-800 opacity-0 group-hover:opacity-100 transition-opacity"
+                                                            >
+                                                                <X size={18} />
+                                                            </button>
+                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                                <div>
+                                                                    <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Nome da Área</label>
+                                                                    <input
+                                                                        type="text"
+                                                                        value={area.name}
+                                                                        onChange={(e) => {
+                                                                            const newAreas = [...editCompanyAreas];
+                                                                            newAreas[index].name = e.target.value;
+                                                                            setEditCompanyAreas(newAreas);
+                                                                        }}
+                                                                        placeholder="Ex: Área 1"
+                                                                        className="w-full border border-gray-200 rounded p-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                                                                    />
+                                                                </div>
+                                                                <div>
+                                                                    <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Filiais (Separadas por ponto e vírgula)</label>
+                                                                    <input
+                                                                        type="text"
+                                                                        defaultValue={area.branches.join('; ')}
+                                                                        onBlur={(e) => {
+                                                                            const newAreas = [...editCompanyAreas];
+                                                                            newAreas[index].branches = e.target.value.split(';').map(b => b.trim()).filter(Boolean);
+                                                                            setEditCompanyAreas(newAreas);
+                                                                        }}
+                                                                        placeholder="Ex: Filial 1; Filial 2; Matriz..."
+                                                                        className="w-full border border-gray-200 rounded p-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+
+                                            {/* Save Button */}
+                                            <div className="flex justify-end pt-4">
+                                                <button
+                                                    onClick={async () => {
+                                                        if (!selectedCompanyId) return;
+                                                        try {
+                                                            // Update company in Supabase
+                                                            await updateCompany(selectedCompanyId, {
+                                                                name: editCompanyName,
+                                                                cnpj: editCompanyCnpj,
+                                                                phone: editCompanyPhone,
+                                                                logo: editCompanyLogo,
+                                                                areas: editCompanyAreas
+                                                            });
+
+                                                            // Update local state
+                                                            setCompanies(companies.map(c =>
+                                                                c.id === selectedCompanyId
+                                                                    ? { ...c, name: editCompanyName, cnpj: editCompanyCnpj, phone: editCompanyPhone, logo: editCompanyLogo, areas: editCompanyAreas }
+                                                                    : c
+                                                            ));
+
+                                                            // Update config if this is the active company
+                                                            if (config.pharmacyName === companies.find(c => c.id === selectedCompanyId)?.name) {
+                                                                const newConfig = { pharmacy_name: editCompanyName, logo: editCompanyLogo };
+                                                                setConfig({ pharmacyName: editCompanyName, logo: editCompanyLogo });
+                                                                await saveConfig(newConfig);
+                                                            }
+
+                                                            alert('Empresa atualizada com sucesso!');
+                                                        } catch (error) {
+                                                            console.error('Erro ao atualizar empresa:', error);
+                                                            alert('Erro ao salvar alterações');
+                                                        }
+                                                    }}
+                                                    className="bg-green-600 hover:bg-green-700 text-white font-bold px-6 py-3 rounded-lg shadow-md hover:shadow-lg transition-all"
+                                                >
+                                                    Salvar Alterações
+                                                </button>
+                                            </div>
+                                        </>
+                                    )}
+
+                                    {/* Theme Color Selection */}
                                     <div>
                                         <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Cor do Tema</label>
                                         <div className="flex gap-4">
@@ -2399,40 +2654,144 @@ const App: React.FC = () => {
                                             ))}
                                         </div>
                                     </div>
+                                </div>
+                            </div>
 
-                                    {currentUser.role === 'MASTER' && (
-                                        <div className="col-span-1 md:col-span-2">
-                                            <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Logo da Empresa</label>
-                                            <div className="flex items-center gap-8 bg-gray-50 p-6 rounded-2xl border border-gray-200">
-                                                <div className="h-28 w-44 bg-white rounded-xl shadow-sm border border-gray-200 flex items-center justify-center overflow-hidden relative">
-                                                    <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] opacity-10"></div>
-                                                    {config.logo ? (
-                                                        <img src={config.logo} alt="Preview" className="h-full w-full object-contain p-2 relative z-10" />
-                                                    ) : (
-                                                        <ImageIcon className="text-gray-300 relative z-10" size={40} />
-                                                    )}
-                                                </div>
-                                                <div className="flex flex-col gap-3">
-                                                    <label className={`cursor-pointer inline-flex items-center px-5 py-2.5 border border-gray-300 shadow-sm text-sm font-bold rounded-lg text-gray-700 bg-white hover:bg-gray-50 hover:shadow-md transition-all`}>
-                                                        <Upload size={18} className="mr-2" />
-                                                        Carregar Imagem
-                                                        <input type="file" className="hidden" accept="image/*" onChange={handleLogoUpload} />
-                                                    </label>
-                                                    {config.logo && (
-                                                        <button
-                                                            onClick={() => setConfig({ ...config, logo: null })}
-                                                            className="text-sm text-red-600 hover:text-red-800 font-semibold"
-                                                        >
-                                                            Remover Logo
-                                                        </button>
-                                                    )}
-                                                    <p className="text-xs text-gray-400">Recomendado: PNG Transparente</p>
+                            {/* Company Management Section (MASTER only) */}
+                            {currentUser.role === 'MASTER' && (
+                                <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
+                                    <h2 className="text-xl font-bold text-gray-800 mb-8 flex items-center gap-3 border-b border-gray-100 pb-4">
+                                        <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
+                                            <Upload size={24} className={currentTheme.text} />
+                                        </div>
+                                        Gerenciamento de Empresas
+                                    </h2>
+
+                                    {/* Company Registration Form */}
+                                    <div className="mb-8 bg-gray-50 p-6 rounded-xl border border-gray-200">
+                                        <h3 className="text-sm font-bold text-gray-700 uppercase mb-4 flex items-center gap-2">
+                                            <UserPlus size={16} /> Cadastrar Nova Empresa
+                                        </h3>
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-600 uppercase mb-2">Nome da Empresa *</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Nome da Empresa"
+                                                    className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs font-bold text-gray-600 uppercase mb-2">CNPJ</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="CNPJ (Opcional)"
+                                                    className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                                                />
+                                            </div>
+                                            <div className="md:col-span-2">
+                                                <label className="block text-xs font-bold text-gray-600 uppercase mb-2">Telefone</label>
+                                                <input
+                                                    type="text"
+                                                    placeholder="Telefone (Opcional)"
+                                                    className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        {/* Logo Upload for New Company */}
+                                        <div className="mb-6">
+                                            <label className="block text-xs font-bold text-gray-600 uppercase mb-2">Logo da Empresa</label>
+                                            <div className="flex items-center gap-4">
+                                                <label className="cursor-pointer inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-bold rounded-lg text-gray-700 bg-white hover:bg-gray-50 transition-all">
+                                                    <Upload size={16} className="mr-2" />
+                                                    Carregar Logo
+                                                    <input type="file" className="hidden" accept="image/*" />
+                                                </label>
+                                                <span className="text-xs text-gray-400">PNG ou JPG (Recomendado: PNG Transparente)</span>
+                                            </div>
+                                        </div>
+
+                                        {/* Areas and Branches for New Company */}
+                                        <div className="mb-6">
+                                            <div className="flex justify-between items-center mb-3">
+                                                <label className="block text-xs font-bold text-gray-600 uppercase">Áreas e Filiais</label>
+                                                <button
+                                                    className="text-sm font-bold px-3 py-1 rounded bg-blue-600 text-white hover:bg-blue-700 transition-all"
+                                                >
+                                                    + Adicionar Área
+                                                </button>
+                                            </div>
+                                            <p className="text-xs text-gray-500 mb-3">Adicione até 5 áreas com suas respectivas filiais</p>
+                                            <div className="space-y-3">
+                                                {/* Example Area */}
+                                                <div className="bg-white p-3 rounded border border-gray-200">
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                        <div>
+                                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Nome da Área</label>
+                                                            <input
+                                                                type="text"
+                                                                placeholder="Ex: Área 1"
+                                                                className="w-full border border-gray-200 rounded p-2 text-sm outline-none focus:border-blue-500"
+                                                            />
+                                                        </div>
+                                                        <div>
+                                                            <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Filiais (Separadas por ponto e vírgula)</label>
+                                                            <input
+                                                                type="text"
+                                                                placeholder="Ex: Filial 1; Filial 2; Matriz..."
+                                                                className="w-full border border-gray-200 rounded p-2 text-sm outline-none focus:border-blue-500"
+                                                            />
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
-                                    )}
+
+                                        <div className="flex justify-end">
+                                            <button
+                                                className="bg-green-600 hover:bg-green-700 text-white font-bold text-sm px-6 py-2.5 rounded-lg shadow-sm transition-all"
+                                            >
+                                                Cadastrar Empresa
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {/* List of Existing Companies */}
+                                    <div>
+                                        <h3 className="text-sm font-bold text-gray-700 uppercase mb-4 flex items-center gap-2">
+                                            <FileText size={16} /> Empresas Cadastradas
+                                        </h3>
+                                        <div className="space-y-3">
+                                            {companies.length === 0 ? (
+                                                <p className="text-sm text-gray-500 text-center py-8">Nenhuma empresa cadastrada ainda.</p>
+                                            ) : (
+                                                companies.map((company: any) => (
+                                                    <div key={company.id} className="bg-gray-50 p-4 rounded-lg border border-gray-200 flex items-center justify-between">
+                                                        <div className="flex items-center gap-4">
+                                                            {company.logo && (
+                                                                <div className="h-12 w-16 bg-white rounded border border-gray-200 flex items-center justify-center p-1">
+                                                                    <img src={company.logo} alt={company.name} className="h-full w-full object-contain" />
+                                                                </div>
+                                                            )}
+                                                            <div>
+                                                                <h4 className="font-bold text-gray-800">{company.name}</h4>
+                                                                {company.cnpj && <p className="text-xs text-gray-500">CNPJ: {company.cnpj}</p>}
+                                                                {company.phone && <p className="text-xs text-gray-500">Tel: {company.phone}</p>}
+                                                            </div>
+                                                        </div>
+                                                        <button
+                                                            className="text-red-600 hover:text-red-800 font-semibold text-sm"
+                                                        >
+                                                            Excluir
+                                                        </button>
+                                                    </div>
+                                                ))
+                                            )}
+                                        </div>
+                                    </div>
                                 </div>
-                            </div>
+                            )}
 
                             {/* Unified Profile & Security Settings */}
                             <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
@@ -2897,7 +3256,73 @@ const App: React.FC = () => {
                                                             {item.helpText && <span className="text-xs text-gray-400 cursor-help" title={item.helpText}><AlertCircle size={12} /></span>}
                                                         </div>
 
-                                                        {item.type === InputType.TEXT && (
+                                                        {/* Custom rendering for Empresa field */}
+                                                        {item.id === 'empresa' ? (
+                                                            <select
+                                                                value={value as string || ''}
+                                                                onChange={(e) => {
+                                                                    handleInputChange(item.id, e.target.value);
+                                                                    // Reset filial and área when empresa changes
+                                                                    handleInputChange('filial', '');
+                                                                    handleInputChange('area', '');
+                                                                }}
+                                                                disabled={isReadOnly}
+                                                                className={`w-full border ${inputClasses} rounded-lg p-3 focus:bg-white focus:ring-2 ${currentTheme.ring} outline-none transition-colors shadow-inner-light ${isReadOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                                                            >
+                                                                <option value="">-- Selecione uma Empresa --</option>
+                                                                {companies.map((company: any) => (
+                                                                    <option key={company.id} value={company.name}>{company.name}</option>
+                                                                ))}
+                                                            </select>
+                                                        ) : item.id === 'filial' ? (
+                                                            /* Custom rendering for Filial field */
+                                                            <select
+                                                                value={value as string || ''}
+                                                                onChange={(e) => {
+                                                                    const selectedFilial = e.target.value;
+                                                                    handleInputChange(item.id, selectedFilial);
+
+                                                                    // Auto-populate área based on selected filial
+                                                                    const empresaValue = getInputValue('empresa');
+                                                                    const selectedCompany = companies.find((c: any) => c.name === empresaValue);
+                                                                    if (selectedCompany && selectedCompany.areas) {
+                                                                        const areaForFilial = selectedCompany.areas.find((area: any) =>
+                                                                            area.branches && area.branches.includes(selectedFilial)
+                                                                        );
+                                                                        if (areaForFilial) {
+                                                                            handleInputChange('area', areaForFilial.name);
+                                                                        }
+                                                                    }
+                                                                }}
+                                                                disabled={isReadOnly || !getInputValue('empresa')}
+                                                                className={`w-full border ${inputClasses} rounded-lg p-3 focus:bg-white focus:ring-2 ${currentTheme.ring} outline-none transition-colors shadow-inner-light ${isReadOnly || !getInputValue('empresa') ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                                                            >
+                                                                <option value="">-- Selecione uma Filial --</option>
+                                                                {(() => {
+                                                                    const empresaValue = getInputValue('empresa');
+                                                                    const selectedCompany = companies.find((c: any) => c.name === empresaValue);
+                                                                    if (selectedCompany && selectedCompany.areas) {
+                                                                        // Flatten all branches from all areas
+                                                                        const allBranches = selectedCompany.areas.flatMap((area: any) => area.branches || []);
+                                                                        return allBranches.map((branch: string, idx: number) => (
+                                                                            <option key={idx} value={branch}>{branch}</option>
+                                                                        ));
+                                                                    }
+                                                                    return null;
+                                                                })()}
+                                                            </select>
+                                                        ) : item.id === 'area' ? (
+                                                            /* Custom rendering for Área field - Read-only, auto-populated */
+                                                            <input
+                                                                type="text"
+                                                                value={value as string || ''}
+                                                                readOnly
+                                                                disabled
+                                                                className="w-full border border-gray-200 bg-gray-100 text-gray-700 rounded-lg p-3 cursor-not-allowed shadow-inner-light"
+                                                                placeholder="Área será preenchida automaticamente"
+                                                            />
+                                                        ) : item.type === InputType.TEXT && (
+                                                            /* Standard TEXT input for other fields */
                                                             <input
                                                                 type="text"
                                                                 value={value as string || ''}
