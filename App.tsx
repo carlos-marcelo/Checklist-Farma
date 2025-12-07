@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock } from 'lucide-react';
+import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2 } from 'lucide-react';
 import { CHECKLISTS } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection } from './types';
 import SignaturePad from './components/SignaturePad';
@@ -581,6 +581,7 @@ const App: React.FC = () => {
     const [reportHistory, setReportHistory] = useState<ReportHistoryItem[]>([]);
     const [viewHistoryItem, setViewHistoryItem] = useState<ReportHistoryItem | null>(null);
     const [historyFilterUser, setHistoryFilterUser] = useState<string>('all');
+    const [isSaving, setIsSaving] = useState(false); // New state for save feedback
 
     // Master User Management State
     const [newUserName, setNewUserName] = useState('');
@@ -1546,6 +1547,7 @@ const App: React.FC = () => {
 
     const handleFinalizeAndSave = async () => {
         if (!currentUser) return;
+        setIsSaving(true);
 
         try {
             // Get active checklists (not marked as "Não se Aplica")
@@ -1562,6 +1564,7 @@ const App: React.FC = () => {
                     "✓ Preencher 100% de pelo menos UM checklist\n\n" +
                     "💡 Dica: Complete um checklist totalmente antes de finalizar."
                 );
+                setIsSaving(false);
                 return;
             }
 
@@ -1639,6 +1642,7 @@ const App: React.FC = () => {
                 }, 300);
 
                 console.log('❌ BLOQUEADO - Nenhum checklist 100% completo');
+                setIsSaving(false);
                 return;
             }
 
@@ -1704,6 +1708,7 @@ const App: React.FC = () => {
                 }, 300);
 
                 console.log('❌ BLOQUEADO - Existem checklists incompletos');
+                setIsSaving(false);
                 return;
             }
 
@@ -1746,6 +1751,7 @@ const App: React.FC = () => {
                 }));
                 setReportHistory(formattedReports);
                 setCurrentView('history');
+                setIsSaving(false);
                 return;
             }
 
@@ -1801,6 +1807,7 @@ const App: React.FC = () => {
             console.log('✅ Finalizando - redirecionando para visualização');
 
             // Redirect to View History (Report View)
+            setIsSaving(false);
             setViewHistoryItem(newReport);
             setCurrentView('view_history');
 
@@ -1809,6 +1816,7 @@ const App: React.FC = () => {
 
         } catch (error) {
             console.error('❌ Erro ao finalizar relatório:', error);
+            setIsSaving(false);
             alert('Erro ao salvar relatório. Por favor, tente novamente ou verifique sua conexão.');
 
             // Em caso de erro, tentar recarregar relatórios do Supabase
@@ -3269,9 +3277,22 @@ const App: React.FC = () => {
                                     <div className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">{calculateGlobalScore()}</div>
                                 </div>
                                 <div className="flex justify-end border-t border-gray-100 pt-6">
-                                    <button onClick={handleFinalizeAndSave} className={`px-8 py-4 rounded-xl text-white font-bold text-lg shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-1 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 shadow-lg shadow-blue-200 flex items-center gap-2`}>
-                                        <Save size={20} />
-                                        FINALIZAR E SALVAR RELATÓRIO
+                                    <button
+                                        onClick={handleFinalizeAndSave}
+                                        disabled={isSaving}
+                                        className={`px-8 py-4 rounded-xl text-white font-bold text-lg shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-1 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 shadow-lg shadow-blue-200 flex items-center gap-2 ${isSaving ? 'opacity-70 cursor-wait' : ''}`}
+                                    >
+                                        {isSaving ? (
+                                            <>
+                                                <Loader2 size={24} className="animate-spin" />
+                                                <span>SALVANDO AGUARDE...</span>
+                                            </>
+                                        ) : (
+                                            <>
+                                                <Save size={20} />
+                                                <span>FINALIZAR E SALVAR RELATÓRIO</span>
+                                            </>
+                                        )}
                                     </button>
                                 </div>
                             </div>
@@ -3498,7 +3519,8 @@ const App: React.FC = () => {
                                         <thead className="text-xs text-gray-500 uppercase bg-gray-50 font-bold tracking-wider">
                                             <tr>
                                                 <th className="px-6 py-4">Data</th>
-                                                <th className="px-6 py-4">Farmácia</th>
+                                                <th className="px-6 py-4">Filial Avaliada</th>
+                                                <th className="px-6 py-4">Gestor(a)</th>
                                                 <th className="px-6 py-4">Responsável</th>
                                                 <th className="px-6 py-4">Nota</th>
                                                 <th className="px-6 py-4 text-right">Ações</th>
@@ -3506,14 +3528,19 @@ const App: React.FC = () => {
                                         </thead>
                                         <tbody className="divide-y divide-gray-100">
                                             {getFilteredHistory().length === 0 ? (
-                                                <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-400">Nenhum relatório encontrado.</td></tr>
+                                                <tr><td colSpan={6} className="px-6 py-8 text-center text-gray-400">Nenhum relatório encontrado.</td></tr>
                                             ) : (
                                                 getFilteredHistory().map(report => (
                                                     <tr key={report.id} className="hover:bg-gray-50 transition-colors group">
                                                         <td className="px-6 py-4 font-medium text-gray-700">
                                                             {new Date(report.date).toLocaleDateString('pt-BR')} <span className="text-gray-400 text-xs ml-1">{new Date(report.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
                                                         </td>
-                                                        <td className="px-6 py-4 font-bold text-gray-800">{report.pharmacyName}</td>
+                                                        <td className="px-6 py-4 font-bold text-gray-800">
+                                                            {report.formData['gerencial']?.filial || report.pharmacyName || 'Sem Filial'}
+                                                        </td>
+                                                        <td className="px-6 py-4 text-gray-700">
+                                                            {report.formData['gerencial']?.gestor || 'N/A'}
+                                                        </td>
                                                         <td className="px-6 py-4">
                                                             <div>{report.userName}</div>
                                                             <div className="text-xs text-gray-400">{report.userEmail}</div>
