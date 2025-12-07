@@ -138,6 +138,21 @@ const MFLogo = ({ className = "w-12 h-12" }: { className?: string }) => (
 
 // Logo Component (Dynamic Dual Display)
 const Logo = ({ config, large = false, companies = [], selectedCompanyId = null }: { config: AppConfig, large?: boolean, companies?: any[], selectedCompanyId?: string | null }) => {
+
+    // Determine which logo/name to show
+    const selectedCompany = companies.find((c: any) => c.id === selectedCompanyId);
+
+    // If no company is selected, FORCE default branding ("Marcelo Far" + System Logo + Slogan, NO custom logo)
+    // If company IS selected, use its logo/name.
+    const displayLogo = selectedCompany ? (selectedCompany.logo || null) : null;
+    const displayName = selectedCompany ? selectedCompany.name : 'Marcelo Far';
+    const showSlogan = !selectedCompanyId; // Always show slogan if no company selected (default state)
+
+    // Divider Logic: Show only if we deviate from the absolute default (No Custom Logo AND Name is 'Marcelo Far')
+    // If we are in default state (!selectedCompanyId), we force displayLogo=null and displayName='Marcelo Far', so divider is hidden.
+    // If company is selected, we likely show divider unless user named their company 'Marcelo Far' and has no logo.
+    const showDivider = !!displayLogo || displayName !== 'Marcelo Far';
+
     return (
         <div className="flex items-center gap-3">
             {/* System Logo (MF) */}
@@ -145,43 +160,31 @@ const Logo = ({ config, large = false, companies = [], selectedCompanyId = null 
                 <MFLogo className="w-full h-full" />
             </div>
 
-            {/* Divider if pharmacy logo exists */}
-            {(config.logo || config.pharmacyName !== 'Marcelo Far') && (
+            {/* Divider if needed */}
+            {showDivider && (
                 <div className={`h-8 w-px ${large ? 'bg-gray-300' : 'bg-white/30'} mx-1`}></div>
             )}
 
             {/* Client/Pharmacy Logo or Name */}
             <div className="flex items-center gap-3">
-                {(() => {
-                    // Determine which logo to show based on selected company
-                    const selectedCompany = companies.find((c: any) => c.id === selectedCompanyId);
-                    const displayLogo = selectedCompany?.logo || config.logo;
-                    const displayName = selectedCompany?.name || config.pharmacyName;
-                    const showSlogan = !selectedCompanyId && config.pharmacyName === 'Marcelo Far';
+                {displayLogo && (
+                    <div className={`${large ? 'h-20 w-auto' : 'h-10 w-auto'} bg-white rounded-md p-1 shadow-sm`}>
+                        <img src={displayLogo} alt="Company Logo" className="h-full w-auto object-contain" />
+                    </div>
+                )}
 
-                    return (
-                        <>
-                            {displayLogo && (
-                                <div className={`${large ? 'h-20 w-auto' : 'h-10 w-auto'} bg-white rounded-md p-1 shadow-sm`}>
-                                    <img src={displayLogo} alt="Company Logo" className="h-full w-auto object-contain" />
-                                </div>
-                            )}
-
-                            {(!displayLogo || large) && (
-                                <div className={`flex flex-col justify-center ${large ? 'text-gray-800' : 'text-white'}`}>
-                                    <span className={`font-black ${large ? 'text-2xl' : 'text-base'} uppercase tracking-tight leading-none`}>
-                                        {displayName}
-                                    </span>
-                                    {showSlogan && (
-                                        <span className={`text-[10px] font-bold uppercase tracking-widest opacity-80 ${large ? 'text-gray-500' : 'text-white'}`}>
-                                            Gestão & Excelência
-                                        </span>
-                                    )}
-                                </div>
-                            )}
-                        </>
-                    );
-                })()}
+                {(!displayLogo || large) && (
+                    <div className={`flex flex-col justify-center ${large ? 'text-gray-800' : 'text-white'}`}>
+                        <span className={`font-black ${large ? 'text-2xl' : 'text-base'} uppercase tracking-tight leading-none`}>
+                            {displayName}
+                        </span>
+                        {showSlogan && (
+                            <span className={`text-[10px] font-bold uppercase tracking-widest opacity-80 ${large ? 'text-gray-500' : 'text-white'}`}>
+                                Gestão & Excelência
+                            </span>
+                        )}
+                    </div>
+                )}
             </div>
         </div>
     );
@@ -651,6 +654,8 @@ const App: React.FC = () => {
     const [newUserPhone, setNewUserPhone] = useState('');
     const [newUserPass, setNewUserPass] = useState('');
     const [newUserConfirmPass, setNewUserConfirmPass] = useState('');
+    const [showNewUserPass, setShowNewUserPass] = useState(false);
+    const [showNewUserConfirmPass, setShowNewUserConfirmPass] = useState(false);
     const [newUserRole, setNewUserRole] = useState<'MASTER' | 'USER'>('USER');
     const [newUserCompanyId, setNewUserCompanyId] = useState('');
     const [newUserArea, setNewUserArea] = useState('');
@@ -664,6 +669,8 @@ const App: React.FC = () => {
     // Change Password State
     const [newPassInput, setNewPassInput] = useState('');
     const [confirmPassInput, setConfirmPassInput] = useState('');
+    const [showNewPassword, setShowNewPassword] = useState(false);
+    const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
     const [saveShake, setSaveShake] = useState(false);
     const [profilePhoneError, setProfilePhoneError] = useState('');
     const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
@@ -1164,12 +1171,12 @@ const App: React.FC = () => {
         setUsers(prev => prev.map(u => u.email === email ? { ...u, approved: false, rejected: true } : u));
     };
 
-    const handleUpdateUserProfile = async (field: keyof User, value: string) => {
+    const handleUpdateUserProfile = async (field: keyof User, value: string | null) => {
         if (!currentUser) return;
 
         // Custom handling for phone in profile to limit 11 digits
         if (field === 'phone') {
-            const val = value.replace(/\D/g, '');
+            const val = (value || '').replace(/\D/g, '');
             if (val.length <= 11) {
                 setProfilePhoneError(''); // clear error on type
                 setUsers(prevUsers => prevUsers.map(u => u.email === currentUser.email ? { ...u, phone: val } : u));
@@ -2977,33 +2984,51 @@ const App: React.FC = () => {
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 bg-gray-50 p-4 rounded-xl border border-gray-100">
                                                 <div>
                                                     <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Nova Senha</label>
-                                                    <input
-                                                        type="password"
-                                                        value={newPassInput}
-                                                        onChange={(e) => setNewPassInput(e.target.value)}
-                                                        placeholder="Preencher apenas para alterar"
-                                                        className={`w-full rounded-lg p-3 outline-none shadow-inner-light transition-all ${newPassInput && confirmPassInput && newPassInput !== confirmPassInput
-                                                            ? 'bg-red-50 border border-red-500 text-red-900 focus:ring-2 focus:ring-red-200'
-                                                            : newPassInput && confirmPassInput && newPassInput === confirmPassInput
-                                                                ? 'bg-green-50 border border-green-500 text-gray-900 focus:ring-2 focus:ring-green-200'
-                                                                : `bg-white border border-gray-300 text-gray-900 focus:ring-2 ${currentTheme.ring}`
-                                                            }`}
-                                                    />
+                                                    <div className="relative">
+                                                        <input
+                                                            type={showNewPassword ? "text" : "password"}
+                                                            value={newPassInput}
+                                                            onChange={(e) => setNewPassInput(e.target.value)}
+                                                            placeholder="Preencher apenas para alterar"
+                                                            className={`w-full rounded-lg p-3 pr-12 outline-none shadow-inner-light transition-all ${newPassInput && confirmPassInput && newPassInput !== confirmPassInput
+                                                                ? 'bg-red-50 border border-red-500 text-red-900 focus:ring-2 focus:ring-red-200'
+                                                                : newPassInput && confirmPassInput && newPassInput === confirmPassInput
+                                                                    ? 'bg-green-50 border border-green-500 text-gray-900 focus:ring-2 focus:ring-green-200'
+                                                                    : `bg-white border border-gray-300 text-gray-900 focus:ring-2 ${currentTheme.ring}`
+                                                                }`}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setShowNewPassword(!showNewPassword)}
+                                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                                        >
+                                                            {showNewPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                                                        </button>
+                                                    </div>
                                                 </div>
                                                 <div>
                                                     <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Confirmar Nova Senha</label>
-                                                    <input
-                                                        type="password"
-                                                        value={confirmPassInput}
-                                                        onChange={(e) => setConfirmPassInput(e.target.value)}
-                                                        placeholder="Confirme a nova senha"
-                                                        className={`w-full rounded-lg p-3 outline-none shadow-inner-light transition-all ${newPassInput && confirmPassInput && newPassInput !== confirmPassInput
-                                                            ? 'bg-red-50 border border-red-500 text-red-900 focus:ring-2 focus:ring-red-200'
-                                                            : newPassInput && confirmPassInput && newPassInput === confirmPassInput
-                                                                ? 'bg-green-50 border border-green-500 text-gray-900 focus:ring-2 focus:ring-green-200'
-                                                                : `bg-white border border-gray-300 text-gray-900 focus:ring-2 ${currentTheme.ring}`
-                                                            }`}
-                                                    />
+                                                    <div className="relative">
+                                                        <input
+                                                            type={showConfirmNewPassword ? "text" : "password"}
+                                                            value={confirmPassInput}
+                                                            onChange={(e) => setConfirmPassInput(e.target.value)}
+                                                            placeholder="Confirme a nova senha"
+                                                            className={`w-full rounded-lg p-3 pr-12 outline-none shadow-inner-light transition-all ${newPassInput && confirmPassInput && newPassInput !== confirmPassInput
+                                                                ? 'bg-red-50 border border-red-500 text-red-900 focus:ring-2 focus:ring-red-200'
+                                                                : newPassInput && confirmPassInput && newPassInput === confirmPassInput
+                                                                    ? 'bg-green-50 border border-green-500 text-gray-900 focus:ring-2 focus:ring-green-200'
+                                                                    : `bg-white border border-gray-300 text-gray-900 focus:ring-2 ${currentTheme.ring}`
+                                                                }`}
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setShowConfirmNewPassword(!showConfirmNewPassword)}
+                                                            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                                        >
+                                                            {showConfirmNewPassword ? <EyeOff size={20} /> : <Eye size={20} />}
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
@@ -3124,21 +3149,39 @@ const App: React.FC = () => {
                                                 className="w-full bg-gray-100 border border-gray-300 rounded-lg p-2.5 text-sm text-gray-700 cursor-not-allowed"
                                             />
 
-                                            <input
-                                                type="password"
-                                                placeholder="Senha Provisória"
-                                                value={newUserPass}
-                                                onChange={(e) => setNewUserPass(e.target.value)}
-                                                className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
-                                            />
+                                            <div className="relative">
+                                                <input
+                                                    type={showNewUserPass ? "text" : "password"}
+                                                    placeholder="Senha Provisória"
+                                                    value={newUserPass}
+                                                    onChange={(e) => setNewUserPass(e.target.value)}
+                                                    className="w-full bg-white border border-gray-300 rounded-lg p-2.5 pr-10 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowNewUserPass(!showNewUserPass)}
+                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                                >
+                                                    {showNewUserPass ? <EyeOff size={18} /> : <Eye size={18} />}
+                                                </button>
+                                            </div>
                                             {/* Added Confirmation Input */}
-                                            <input
-                                                type="password"
-                                                placeholder="Confirmar Senha"
-                                                value={newUserConfirmPass}
-                                                onChange={(e) => setNewUserConfirmPass(e.target.value)}
-                                                className={`w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none ${newUserPass && newUserConfirmPass && newUserPass !== newUserConfirmPass ? 'border-red-500 bg-red-50' : ''}`}
-                                            />
+                                            <div className="relative">
+                                                <input
+                                                    type={showNewUserConfirmPass ? "text" : "password"}
+                                                    placeholder="Confirmar Senha"
+                                                    value={newUserConfirmPass}
+                                                    onChange={(e) => setNewUserConfirmPass(e.target.value)}
+                                                    className={`w-full bg-white border border-gray-300 rounded-lg p-2.5 pr-10 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none ${newUserPass && newUserConfirmPass && newUserPass !== newUserConfirmPass ? 'border-red-500 bg-red-50' : ''}`}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowNewUserConfirmPass(!showNewUserConfirmPass)}
+                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                                >
+                                                    {showNewUserConfirmPass ? <EyeOff size={18} /> : <Eye size={18} />}
+                                                </button>
+                                            </div>
                                             <select
                                                 value={newUserRole}
                                                 onChange={(e) => setNewUserRole(e.target.value as 'MASTER' | 'USER')}
