@@ -26,6 +26,9 @@ interface User {
     rejected?: boolean; // New field to handle "Banned/Refused" state
     photo?: string;
     preferredTheme?: ThemeColor; // Individual theme preference
+    company_id?: string | null; // Company the user works for
+    area?: string | null; // Area within the company
+    filial?: string | null; // Branch within the company
 }
 
 interface ReportHistoryItem {
@@ -134,7 +137,7 @@ const MFLogo = ({ className = "w-12 h-12" }: { className?: string }) => (
 );
 
 // Logo Component (Dynamic Dual Display)
-const Logo = ({ config, large = false }: { config: AppConfig, large?: boolean }) => {
+const Logo = ({ config, large = false, companies = [], selectedCompanyId = null }: { config: AppConfig, large?: boolean, companies?: any[], selectedCompanyId?: string | null }) => {
     return (
         <div className="flex items-center gap-3">
             {/* System Logo (MF) */}
@@ -149,24 +152,36 @@ const Logo = ({ config, large = false }: { config: AppConfig, large?: boolean })
 
             {/* Client/Pharmacy Logo or Name */}
             <div className="flex items-center gap-3">
-                {config.logo && (
-                    <div className={`${large ? 'h-20 w-auto' : 'h-10 w-auto'} bg-white rounded-md p-1 shadow-sm`}>
-                        <img src={config.logo} alt="Pharmacy Logo" className="h-full w-auto object-contain" />
-                    </div>
-                )}
+                {(() => {
+                    // Determine which logo to show based on selected company
+                    const selectedCompany = companies.find((c: any) => c.id === selectedCompanyId);
+                    const displayLogo = selectedCompany?.logo || config.logo;
+                    const displayName = selectedCompany?.name || config.pharmacyName;
+                    const showSlogan = !selectedCompanyId && config.pharmacyName === 'Marcelo Far';
 
-                {(!config.logo || large) && (
-                    <div className={`flex flex-col justify-center ${large ? 'text-gray-800' : 'text-white'}`}>
-                        <span className={`font-black ${large ? 'text-2xl' : 'text-base'} uppercase tracking-tight leading-none`}>
-                            {config.pharmacyName}
-                        </span>
-                        {config.pharmacyName === 'Marcelo Far' && (
-                            <span className={`text-[10px] font-bold uppercase tracking-widest opacity-80 ${large ? 'text-gray-500' : 'text-white'}`}>
-                                Gestão & Excelência
-                            </span>
-                        )}
-                    </div>
-                )}
+                    return (
+                        <>
+                            {displayLogo && (
+                                <div className={`${large ? 'h-20 w-auto' : 'h-10 w-auto'} bg-white rounded-md p-1 shadow-sm`}>
+                                    <img src={displayLogo} alt="Company Logo" className="h-full w-auto object-contain" />
+                                </div>
+                            )}
+
+                            {(!displayLogo || large) && (
+                                <div className={`flex flex-col justify-center ${large ? 'text-gray-800' : 'text-white'}`}>
+                                    <span className={`font-black ${large ? 'text-2xl' : 'text-base'} uppercase tracking-tight leading-none`}>
+                                        {displayName}
+                                    </span>
+                                    {showSlogan && (
+                                        <span className={`text-[10px] font-bold uppercase tracking-widest opacity-80 ${large ? 'text-gray-500' : 'text-white'}`}>
+                                            Gestão & Excelência
+                                        </span>
+                                    )}
+                                </div>
+                            )}
+                        </>
+                    );
+                })()}
             </div>
         </div>
     );
@@ -272,11 +287,13 @@ const DateInput = ({ value, onChange, theme, hasError, disabled }: { value: stri
 const LoginScreen = ({
     onLogin,
     users,
-    onRegister
+    onRegister,
+    companies
 }: {
     onLogin: (u: User) => void,
     users: User[],
-    onRegister: (u: User) => void
+    onRegister: (u: User) => void,
+    companies: any[]
 }) => {
     const [isRegistering, setIsRegistering] = useState(false);
     const [isForgotPassword, setIsForgotPassword] = useState(false);
@@ -285,6 +302,7 @@ const LoginScreen = ({
     const [confirmPassword, setConfirmPassword] = useState('');
     const [name, setName] = useState('');
     const [phone, setPhone] = useState('');
+    const [selectedCompanyForRegistration, setSelectedCompanyForRegistration] = useState('');
     const [error, setError] = useState('');
     const [phoneError, setPhoneError] = useState('');
     const [success, setSuccess] = useState('');
@@ -361,7 +379,7 @@ const LoginScreen = ({
                 setError('E-mail já cadastrado.');
                 return;
             }
-            onRegister({ email, password, name, phone, role: 'USER', approved: false, rejected: false });
+            onRegister({ email, password, name, phone, role: 'USER', approved: false, rejected: false, company_id: selectedCompanyForRegistration || null });
             setSuccess('Solicitação enviada com sucesso! Seu acesso será avaliado por um mediador.');
             setIsRegistering(false);
             setEmail('');
@@ -369,6 +387,7 @@ const LoginScreen = ({
             setConfirmPassword('');
             setName('');
             setPhone('');
+            setSelectedCompanyForRegistration('');
         } else {
             // --- LOGIN FLOW ---
             const user = users.find(u => u.email === email && u.password === password);
@@ -460,6 +479,20 @@ const LoginScreen = ({
                                         required={isRegistering}
                                     />
                                     {phoneError && <p className="text-red-500 text-xs mt-1 ml-1 font-bold">{phoneError}</p>}
+                                </div>
+                                <div className="group">
+                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Empresa que Trabalha</label>
+                                    <select
+                                        value={selectedCompanyForRegistration}
+                                        onChange={(e) => setSelectedCompanyForRegistration(e.target.value)}
+                                        className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3.5 text-gray-900 focus:bg-white focus:ring-2 focus:ring-[#002b5c] focus:border-transparent transition-all outline-none shadow-inner-light"
+                                        required={isRegistering}
+                                    >
+                                        <option value="">-- Selecione a Empresa --</option>
+                                        {companies.map((company: any) => (
+                                            <option key={company.id} value={company.id}>{company.name}</option>
+                                        ))}
+                                    </select>
                                 </div>
                             </>
                         )}
@@ -619,6 +652,9 @@ const App: React.FC = () => {
     const [newUserPass, setNewUserPass] = useState('');
     const [newUserConfirmPass, setNewUserConfirmPass] = useState('');
     const [newUserRole, setNewUserRole] = useState<'MASTER' | 'USER'>('USER');
+    const [newUserCompanyId, setNewUserCompanyId] = useState('');
+    const [newUserArea, setNewUserArea] = useState('');
+    const [newUserFilial, setNewUserFilial] = useState('');
     const [internalShake, setInternalShake] = useState(false);
     const [internalPhoneError, setInternalPhoneError] = useState('');
     // Filters
@@ -1281,7 +1317,10 @@ const App: React.FC = () => {
             password: newUserPass,
             role: newUserRole,
             approved: true, // Internal creation is auto-approved
-            rejected: false
+            rejected: false,
+            company_id: newUserCompanyId || null,
+            area: newUserArea || null,
+            filial: newUserFilial || null
         };
 
         // Save to Supabase first
@@ -1300,6 +1339,9 @@ const App: React.FC = () => {
         setNewUserConfirmPass('');
         setInternalPhoneError('');
         setNewUserRole('USER');
+        setNewUserCompanyId('');
+        setNewUserArea('');
+        setNewUserFilial('');
         alert("Usuário criado com sucesso!");
     };
 
@@ -2199,7 +2241,7 @@ const App: React.FC = () => {
     if (!currentUser) {
         return (
             <>
-                <LoginScreen onLogin={handleLogin} users={users} onRegister={handleRegister} />
+                <LoginScreen onLogin={handleLogin} users={users} onRegister={handleRegister} companies={companies} />
             </>
         );
     }
@@ -2245,7 +2287,7 @@ const App: React.FC = () => {
                 <div className={`h-28 flex items-center justify-center p-4 ${currentTheme.bgGradient} relative overflow-hidden shadow-md group`}>
                     <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
                     <div className="relative z-10 w-full flex justify-center">
-                        <Logo config={displayConfig} />
+                        <Logo config={displayConfig} companies={companies} selectedCompanyId={selectedCompanyId} />
                     </div>
                     {/* Quick Config Button */}
                     <button
@@ -2351,7 +2393,7 @@ const App: React.FC = () => {
 
                 {/* Mobile Header */}
                 <header className={`${currentTheme.bgGradient} shadow-md lg:hidden h-18 flex items-center px-4 justify-between no-print z-20`}>
-                    <Logo config={displayConfig} />
+                    <Logo config={displayConfig} companies={companies} selectedCompanyId={selectedCompanyId} />
                     <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-white p-2 rounded-lg hover:bg-white/10">
                         {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
                     </button>
@@ -2436,6 +2478,18 @@ const App: React.FC = () => {
                                                             setEditCompanyPhone(company.phone || '');
                                                             setEditCompanyLogo(company.logo || null);
                                                             setEditCompanyAreas(company.areas || []);
+
+                                                            // Bidirectional sync: Update empresa in all checklists
+                                                            setFormData(prev => {
+                                                                const newData = { ...prev };
+                                                                CHECKLISTS.forEach(cl => {
+                                                                    newData[cl.id] = {
+                                                                        ...(newData[cl.id] || {}),
+                                                                        empresa: company.name
+                                                                    };
+                                                                });
+                                                                return newData;
+                                                            });
                                                         }
                                                     }
                                                 }}
@@ -2846,6 +2900,76 @@ const App: React.FC = () => {
                                             </div>
                                         </div>
 
+                                        {/* Company, Area, and Filial Fields */}
+                                        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-6 pt-6 border-t border-gray-200">
+                                            <div>
+                                                <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">
+                                                    Empresa <span className="text-red-500">*</span>
+                                                </label>
+                                                <select
+                                                    value={currentUser.company_id || ''}
+                                                    onChange={(e) => {
+                                                        handleUpdateUserProfile('company_id', e.target.value);
+                                                        // Reset area and filial when company changes
+                                                        handleUpdateUserProfile('area', null);
+                                                        handleUpdateUserProfile('filial', null);
+                                                    }}
+                                                    className={`w-full bg-white border border-gray-300 rounded-lg p-3 text-gray-900 focus:ring-2 ${currentTheme.ring} outline-none shadow-inner-light`}
+                                                >
+                                                    <option value="">-- Selecione a Empresa --</option>
+                                                    {companies.map((company: any) => (
+                                                        <option key={company.id} value={company.id}>{company.name}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Filial</label>
+                                                <select
+                                                    value={currentUser.filial || ''}
+                                                    onChange={(e) => {
+                                                        const selectedFilial = e.target.value;
+                                                        handleUpdateUserProfile('filial', selectedFilial);
+
+                                                        // Auto-populate area based on selected filial
+                                                        const selectedCompany = companies.find((c: any) => c.id === currentUser.company_id);
+                                                        if (selectedCompany && selectedCompany.areas) {
+                                                            const areaForFilial = selectedCompany.areas.find((area: any) =>
+                                                                area.branches && area.branches.includes(selectedFilial)
+                                                            );
+                                                            if (areaForFilial) {
+                                                                handleUpdateUserProfile('area', areaForFilial.name);
+                                                            }
+                                                        }
+                                                    }}
+                                                    disabled={!currentUser.company_id}
+                                                    className={`w-full bg-white border border-gray-300 rounded-lg p-3 text-gray-900 focus:ring-2 ${currentTheme.ring} outline-none shadow-inner-light ${!currentUser.company_id ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                                                >
+                                                    <option value="">-- Selecione uma Filial --</option>
+                                                    {(() => {
+                                                        const selectedCompany = companies.find((c: any) => c.id === currentUser.company_id);
+                                                        if (selectedCompany && selectedCompany.areas) {
+                                                            const allBranches = selectedCompany.areas.flatMap((area: any) => area.branches || []);
+                                                            return allBranches.map((branch: string, idx: number) => (
+                                                                <option key={idx} value={branch}>{branch}</option>
+                                                            ));
+                                                        }
+                                                        return null;
+                                                    })()}
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Área</label>
+                                                <input
+                                                    type="text"
+                                                    value={currentUser.area || ''}
+                                                    readOnly
+                                                    disabled
+                                                    placeholder="Preenchida automaticamente"
+                                                    className="w-full bg-gray-100 border border-gray-300 rounded-lg p-3 text-gray-700 cursor-not-allowed shadow-inner-light"
+                                                />
+                                            </div>
+                                        </div>
+
                                         <div className="border-t border-gray-200 pt-6 mt-4">
                                             <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide mb-4 flex items-center gap-2">
                                                 <Lock size={16} className="text-gray-400" /> Alterar Senha (Opcional)
@@ -2938,6 +3062,68 @@ const App: React.FC = () => {
                                                 />
                                                 {internalPhoneError && <p className="text-red-500 text-[10px] absolute -bottom-4 left-0 font-bold">{internalPhoneError}</p>}
                                             </div>
+
+                                            {/* Company Selection */}
+                                            <select
+                                                value={newUserCompanyId}
+                                                onChange={(e) => {
+                                                    setNewUserCompanyId(e.target.value);
+                                                    // Reset area and filial when company changes
+                                                    setNewUserArea('');
+                                                    setNewUserFilial('');
+                                                }}
+                                                className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                                            >
+                                                <option value="">-- Empresa (Opcional) --</option>
+                                                {companies.map((company: any) => (
+                                                    <option key={company.id} value={company.id}>{company.name}</option>
+                                                ))}
+                                            </select>
+
+                                            {/* Filial Selection */}
+                                            <select
+                                                value={newUserFilial}
+                                                onChange={(e) => {
+                                                    const selectedFilial = e.target.value;
+                                                    setNewUserFilial(selectedFilial);
+
+                                                    // Auto-populate area based on selected filial
+                                                    const selectedCompany = companies.find((c: any) => c.id === newUserCompanyId);
+                                                    if (selectedCompany && selectedCompany.areas) {
+                                                        const areaForFilial = selectedCompany.areas.find((area: any) =>
+                                                            area.branches && area.branches.includes(selectedFilial)
+                                                        );
+                                                        if (areaForFilial) {
+                                                            setNewUserArea(areaForFilial.name);
+                                                        }
+                                                    }
+                                                }}
+                                                disabled={!newUserCompanyId}
+                                                className={`w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none ${!newUserCompanyId ? 'bg-gray-100 cursor-not-allowed' : ''}`}
+                                            >
+                                                <option value="">-- Filial (Opcional) --</option>
+                                                {(() => {
+                                                    const selectedCompany = companies.find((c: any) => c.id === newUserCompanyId);
+                                                    if (selectedCompany && selectedCompany.areas) {
+                                                        const allBranches = selectedCompany.areas.flatMap((area: any) => area.branches || []);
+                                                        return allBranches.map((branch: string, idx: number) => (
+                                                            <option key={idx} value={branch}>{branch}</option>
+                                                        ));
+                                                    }
+                                                    return null;
+                                                })()}
+                                            </select>
+
+                                            {/* Area (Read-only, auto-populated) */}
+                                            <input
+                                                type="text"
+                                                placeholder="Área (Automático)"
+                                                value={newUserArea}
+                                                readOnly
+                                                disabled
+                                                className="w-full bg-gray-100 border border-gray-300 rounded-lg p-2.5 text-sm text-gray-700 cursor-not-allowed"
+                                            />
+
                                             <input
                                                 type="password"
                                                 placeholder="Senha Provisória"
@@ -3261,10 +3447,22 @@ const App: React.FC = () => {
                                                             <select
                                                                 value={value as string || ''}
                                                                 onChange={(e) => {
-                                                                    handleInputChange(item.id, e.target.value);
+                                                                    const selectedCompanyName = e.target.value;
+                                                                    handleInputChange(item.id, selectedCompanyName);
                                                                     // Reset filial and área when empresa changes
                                                                     handleInputChange('filial', '');
                                                                     handleInputChange('area', '');
+
+                                                                    // Bidirectional sync: Update selectedCompanyId in Settings
+                                                                    const selectedCompany = companies.find((c: any) => c.name === selectedCompanyName);
+                                                                    if (selectedCompany) {
+                                                                        setSelectedCompanyId(selectedCompany.id);
+                                                                        setEditCompanyName(selectedCompany.name);
+                                                                        setEditCompanyCnpj(selectedCompany.cnpj || '');
+                                                                        setEditCompanyPhone(selectedCompany.phone || '');
+                                                                        setEditCompanyLogo(selectedCompany.logo || null);
+                                                                        setEditCompanyAreas(selectedCompany.areas || []);
+                                                                    }
                                                                 }}
                                                                 disabled={isReadOnly}
                                                                 className={`w-full border ${inputClasses} rounded-lg p-3 focus:bg-white focus:ring-2 ${currentTheme.ring} outline-none transition-colors shadow-inner-light ${isReadOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
