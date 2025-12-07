@@ -818,7 +818,7 @@ const App: React.FC = () => {
                         const loadedSignatures = supabaseDraft.signatures || {};
 
                         // SINCRONIZAR dados básicos entre todos os checklists
-                        const globalFields = ['nome_coordenador', 'filial', 'gestor', 'data_aplicacao'];
+                        const globalFields = ['empresa', 'nome_coordenador', 'filial', 'area', 'gestor', 'data_aplicacao'];
                         const syncedFormData: Record<string, ChecklistData> = {};
 
                         // Encontrar primeiro checklist com dados para usar como fonte
@@ -1333,8 +1333,8 @@ const App: React.FC = () => {
 
         // --- BASIC INFO SYNC LOGIC ---
         // If updating a global field (Name, Filial, Manager, Date), sync it across all checklists
-        // IDs must match those in INFO_BASICA_SECTION (nome_coordenador, filial, gestor, data_aplicacao)
-        const isGlobalField = ['nome_coordenador', 'filial', 'gestor', 'data_aplicacao'].includes(itemId);
+        // IDs must match those in INFO_BASICA_SECTION (empresa, nome_coordenador, filial, area, gestor, data_aplicacao)
+        const isGlobalField = ['empresa', 'nome_coordenador', 'filial', 'area', 'gestor', 'data_aplicacao'].includes(itemId);
 
         setFormData(prev => {
             const newData = { ...prev };
@@ -3734,12 +3734,20 @@ const App: React.FC = () => {
                                 <h3 className={`text-lg font-black uppercase tracking-tight mb-3 pb-1 border-b-2 ${currentTheme.border} ${currentTheme.text}`}>Informações Básicas</h3>
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
-                                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Nome do Coordenador / Aplicador</p>
-                                        <p className="text-lg font-bold text-gray-800">{getInputValue('nome_coordenador', basicInfoSourceChecklist) || '-'}</p>
+                                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Empresa</p>
+                                        <p className="text-lg font-bold text-gray-800">{getInputValue('empresa', basicInfoSourceChecklist) || '-'}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Área</p>
+                                        <p className="text-lg font-bold text-gray-800">{getInputValue('area', basicInfoSourceChecklist) || '-'}</p>
                                     </div>
                                     <div>
                                         <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Filial</p>
                                         <p className="text-lg font-bold text-gray-800">{getInputValue('filial', basicInfoSourceChecklist) || '-'}</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Nome do Coordenador / Aplicador</p>
+                                        <p className="text-lg font-bold text-gray-800">{getInputValue('nome_coordenador', basicInfoSourceChecklist) || '-'}</p>
                                     </div>
                                     <div>
                                         <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Gestor(a)</p>
@@ -3944,6 +3952,8 @@ const App: React.FC = () => {
                                         <thead className="text-xs text-gray-500 uppercase bg-gray-50 font-bold tracking-wider">
                                             <tr>
                                                 <th className="px-6 py-4">Data</th>
+                                                <th className="px-6 py-4">Empresa Avaliada</th>
+                                                <th className="px-6 py-4">Área</th>
                                                 <th className="px-6 py-4">Filial Avaliada</th>
                                                 <th className="px-6 py-4">Gestor(a)</th>
                                                 <th className="px-6 py-4">Responsável</th>
@@ -3953,12 +3963,18 @@ const App: React.FC = () => {
                                         </thead>
                                         <tbody className="divide-y divide-gray-100">
                                             {getFilteredHistory().length === 0 ? (
-                                                <tr><td colSpan={6} className="px-6 py-8 text-center text-gray-400">Nenhum relatório encontrado.</td></tr>
+                                                <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">Nenhum relatório encontrado.</td></tr>
                                             ) : (
                                                 getFilteredHistory().map(report => (
                                                     <tr key={report.id} className="hover:bg-gray-50 transition-colors group">
                                                         <td className="px-6 py-4 font-medium text-gray-700">
                                                             {new Date(report.date).toLocaleDateString('pt-BR')} <span className="text-gray-400 text-xs ml-1">{new Date(report.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
+                                                        </td>
+                                                        <td className="px-6 py-4 font-bold text-gray-800">
+                                                            {report.formData['gerencial']?.empresa || 'Sem Empresa'}
+                                                        </td>
+                                                        <td className="px-6 py-4 text-gray-700">
+                                                            {report.formData['gerencial']?.area || 'N/A'}
                                                         </td>
                                                         <td className="px-6 py-4 font-bold text-gray-800">
                                                             {report.formData['gerencial']?.filial || report.pharmacyName || 'Sem Filial'}
