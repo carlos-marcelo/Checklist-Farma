@@ -499,6 +499,82 @@ export async function migrateLocalStorageToSupabase() {
   }
 }
 
+// ==================== TICKETS (SUPPORT/FEATURES) ====================
+
+export interface DbTicket {
+  id?: string;
+  title: string;
+  description: string;
+  images?: string[]; // array of base64 strings
+  status: 'OPEN' | 'IN_PROGRESS' | 'DONE' | 'IGNORED';
+  user_email: string;
+  user_name: string;
+  admin_response?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function fetchTickets(): Promise<DbTicket[]> {
+  try {
+    const { data, error } = await supabase
+      .from('tickets')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching tickets:', error);
+    return [];
+  }
+}
+
+export async function createTicket(ticket: DbTicket): Promise<DbTicket | null> {
+  try {
+    const { data, error } = await supabase
+      .from('tickets')
+      .insert([{
+        title: ticket.title,
+        description: ticket.description,
+        images: ticket.images || [],
+        status: 'OPEN',
+        user_email: ticket.user_email,
+        user_name: ticket.user_name
+      }])
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error creating ticket:', error);
+    return null;
+  }
+}
+
+export async function updateTicketStatus(id: string, status: string, response?: string): Promise<boolean> {
+  try {
+    const updates: any = {
+      status,
+      updated_at: new Date().toISOString()
+    };
+    if (response !== undefined) {
+      updates.admin_response = response;
+    }
+
+    const { error } = await supabase
+      .from('tickets')
+      .update(updates)
+      .eq('id', id);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error updating ticket:', error);
+    return false;
+  }
+}
+
 export function exportLocalStorageBackup() {
   const backup = {
     timestamp: new Date().toISOString(),
