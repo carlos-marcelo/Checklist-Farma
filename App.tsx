@@ -5,7 +5,7 @@ import { ChecklistData, ChecklistImages, InputType, ChecklistSection } from './t
 import SignaturePad from './components/SignaturePad';
 import { supabase } from './supabaseClient';
 import * as SupabaseService from './supabaseService';
-import { updateCompany, saveConfig, fetchTickets, createTicket, updateTicketStatus, DbTicket } from './supabaseService';
+import { updateCompany, saveConfig, fetchTickets, createTicket, updateTicketStatus, createCompany, DbTicket } from './supabaseService';
 
 // --- TYPES & INTERFACES FOR AUTH & CONFIG ---
 
@@ -766,6 +766,11 @@ const App: React.FC = () => {
                     // logic handled in separate effect, but we can init here? 
                     // Kept consistent with original file structure where separate effect handles it.
                 }
+
+                // 6. Load Tickets (Support)
+                const dbTickets = await SupabaseService.fetchTickets();
+                if (dbTickets.length > 0) setTickets(dbTickets);
+
 
             } catch (error) {
                 console.error('Error initializing:', error);
@@ -3571,15 +3576,22 @@ const App: React.FC = () => {
                                                                 placeholder="Resposta para o usuário..."
                                                                 className="w-full text-sm border border-gray-300 rounded p-2 outline-none focus:border-blue-500"
                                                                 rows={2}
-                                                                id={`response-${ticket.id}`}
+                                                                value={adminResponseInput[ticket.id!] || ''}
+                                                                onChange={(e) => setAdminResponseInput(prev => ({ ...prev, [ticket.id!]: e.target.value }))}
                                                             />
                                                         </div>
                                                         <div className="flex gap-2 justify-end">
                                                             <button
                                                                 onClick={async () => {
-                                                                    const responseText = (document.getElementById(`response-${ticket.id}`) as HTMLTextAreaElement).value;
-                                                                    await updateTicketStatus(ticket.id!, 'IN_PROGRESS', responseText);
-                                                                    setRefreshTickets((prev: number) => prev + 1); // Trigger refresh
+                                                                    const responseText = adminResponseInput[ticket.id!] || '';
+                                                                    const success = await updateTicketStatus(ticket.id!, 'IN_PROGRESS', responseText);
+                                                                    if (success) {
+                                                                        // Optimistic Update
+                                                                        setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, status: 'IN_PROGRESS', admin_response: responseText } : t));
+                                                                        alert('Status alterado para "Em Análise" com sucesso!');
+                                                                    } else {
+                                                                        alert('Erro ao atualizar status.');
+                                                                    }
                                                                 }}
                                                                 className="text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded font-bold hover:bg-blue-200"
                                                             >
@@ -3587,9 +3599,14 @@ const App: React.FC = () => {
                                                             </button>
                                                             <button
                                                                 onClick={async () => {
-                                                                    const responseText = (document.getElementById(`response-${ticket.id}`) as HTMLTextAreaElement).value;
-                                                                    await updateTicketStatus(ticket.id!, 'DONE', responseText);
-                                                                    setRefreshTickets((prev: number) => prev + 1);
+                                                                    const responseText = adminResponseInput[ticket.id!] || '';
+                                                                    const success = await updateTicketStatus(ticket.id!, 'DONE', responseText);
+                                                                    if (success) {
+                                                                        setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, status: 'DONE', admin_response: responseText } : t));
+                                                                        alert('Ticket concluído com sucesso!');
+                                                                    } else {
+                                                                        alert('Erro ao concluir ticket.');
+                                                                    }
                                                                 }}
                                                                 className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded font-bold hover:bg-green-200"
                                                             >
@@ -3597,9 +3614,14 @@ const App: React.FC = () => {
                                                             </button>
                                                             <button
                                                                 onClick={async () => {
-                                                                    const responseText = (document.getElementById(`response-${ticket.id}`) as HTMLTextAreaElement).value;
-                                                                    await updateTicketStatus(ticket.id!, 'IGNORED', responseText);
-                                                                    setRefreshTickets((prev: number) => prev + 1);
+                                                                    const responseText = adminResponseInput[ticket.id!] || '';
+                                                                    const success = await updateTicketStatus(ticket.id!, 'IGNORED', responseText);
+                                                                    if (success) {
+                                                                        setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, status: 'IGNORED', admin_response: responseText } : t));
+                                                                        alert('Ticket arquivado com sucesso!');
+                                                                    } else {
+                                                                        alert('Erro ao arquivar ticket.');
+                                                                    }
                                                                 }}
                                                                 className="text-xs bg-gray-100 text-gray-600 px-3 py-1 rounded font-bold hover:bg-gray-200"
                                                             >
