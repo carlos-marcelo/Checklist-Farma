@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2 } from 'lucide-react';
+import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store } from 'lucide-react';
 import { CHECKLISTS } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection } from './types';
 import SignaturePad from './components/SignaturePad';
@@ -935,7 +935,10 @@ const App: React.FC = () => {
                 if (freshUser.name !== currentUser.name ||
                     freshUser.phone !== currentUser.phone ||
                     freshUser.photo !== currentUser.photo ||
-                    freshUser.preferredTheme !== currentUser.preferredTheme) {
+                    freshUser.preferredTheme !== currentUser.preferredTheme ||
+                    freshUser.company_id !== currentUser.company_id ||
+                    freshUser.area !== currentUser.area ||
+                    freshUser.filial !== currentUser.filial) {
                     setCurrentUser(freshUser);
                 }
             }
@@ -2318,6 +2321,16 @@ const App: React.FC = () => {
                         <div className="flex-1 min-w-0">
                             <p className="text-sm font-bold text-gray-900 truncate">{currentUser.name}</p>
                             <p className="text-xs text-gray-500 truncate uppercase tracking-wider font-semibold">{currentUser.role === 'MASTER' ? 'Administrador' : 'Usuário'}</p>
+                            {(currentUser.company_id || currentUser.area || currentUser.filial) && (
+                                <div className="mt-1 flex flex-col gap-0.5 animate-fade-in">
+                                    {currentUser.company_id && (() => {
+                                        const comp = companies.find((c: any) => c.id === currentUser.company_id);
+                                        return comp ? <p className="text-[10px] text-blue-600 font-bold truncate flex items-center gap-1"><Building2 size={10} /> {comp.name}</p> : null;
+                                    })()}
+                                    {currentUser.area && <p className="text-[10px] text-gray-500 truncate flex items-center gap-1"><MapPin size={10} /> {currentUser.area}</p>}
+                                    {currentUser.filial && <p className="text-[10px] text-gray-500 truncate flex items-center gap-1"><Store size={10} /> {currentUser.filial}</p>}
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -2438,6 +2451,9 @@ const App: React.FC = () => {
                     </h1>
 
                     <div className="flex items-center gap-4">
+                        <div className="mr-4 opacity-90 hover:opacity-100 transition-opacity scale-90 origin-right hidden xl:block">
+                            <Logo config={displayConfig} companies={companies} selectedCompanyId={currentUser.company_id} />
+                        </div>
                         {currentView === 'checklist' && currentUser?.role === 'MASTER' && (
                             <button
                                 onClick={handleResetChecklist}
@@ -2453,6 +2469,50 @@ const App: React.FC = () => {
 
                 {/* Main Body */}
                 <main className="flex-1 overflow-y-auto p-4 lg:p-10 z-10 scroll-smooth">
+                    {/* Prominent Pending Users Alert at Top */}
+                    {currentUser.role === 'MASTER' && pendingUsersCount > 0 && (
+                        <div className="mb-8 bg-red-600 rounded-2xl p-6 text-white shadow-2xl shadow-red-200 relative overflow-hidden group transform hover:-translate-y-1 transition-all max-w-2xl mx-auto">
+                            <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/diagonal-stripes.png')] opacity-10"></div>
+
+                            <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+                                <div className="flex items-center gap-4">
+                                    <div className="w-12 h-12 rounded-full bg-white text-red-600 flex items-center justify-center font-black text-xl shadow-inner animate-pulse shrink-0">
+                                        {pendingUsersCount}
+                                    </div>
+                                    <div>
+                                        <h3 className="text-xl font-black uppercase tracking-tight mb-1">Aprovação Pendente</h3>
+                                        <p className="text-red-100 font-medium text-sm">Usuários aguardando liberação de acesso.</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Inline List of Pending Users */}
+                            <div className="relative z-10 mt-6 space-y-3">
+                                {pendingUsers.map(u => (
+                                    <div key={u.email} className="bg-white/10 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3 border border-white/20">
+                                        <div className="flex flex-col text-center sm:text-left">
+                                            <span className="font-bold text-sm">{u.name}</span>
+                                            <span className="text-xs opacity-80">{u.email}</span>
+                                        </div>
+                                        <div className="flex items-center gap-2 w-full sm:w-auto">
+                                            <button
+                                                onClick={() => updateUserStatus(u.email, true)}
+                                                className="flex-1 sm:flex-none bg-green-500 hover:bg-green-400 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm"
+                                            >
+                                                Aprovar
+                                            </button>
+                                            <button
+                                                onClick={() => handleRejectUser(u.email)}
+                                                className="flex-1 sm:flex-none bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+                                            >
+                                                Recusar
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     {/* --- SETTINGS VIEW --- */}
                     {currentView === 'settings' && (
@@ -2468,7 +2528,76 @@ const App: React.FC = () => {
                                 </h2>
 
                                 <div className="space-y-10">
-                                    {/* Company Selection Dropdown */}
+                                    {/* Company View for Standard Users (Read Only) */}
+                                    {currentUser.role !== 'MASTER' && currentUser.company_id && (() => {
+                                        const userCompany = companies.find(c => c.id === currentUser.company_id);
+                                        if (!userCompany) return (
+                                            <div className="bg-yellow-50 text-yellow-800 p-4 rounded-lg flex items-center gap-2">
+                                                <AlertTriangle size={20} />
+                                                <p className="text-sm font-medium">Você está vinculado a uma empresa, mas os dados dela não foram encontrados.</p>
+                                            </div>
+                                        );
+
+                                        return (
+                                            <div className="space-y-6 animate-fade-in">
+                                                {/* Read Only Header */}
+                                                <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 flex items-center gap-3">
+                                                    <Building2 className="text-blue-600" size={24} />
+                                                    <div>
+                                                        <p className="text-sm font-bold text-blue-900 uppercase tracking-wide">Sua Empresa</p>
+                                                        <p className="text-xs text-blue-700">Você está visualizando os dados da empresa vinculada à sua conta.</p>
+                                                    </div>
+                                                </div>
+
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                    <div>
+                                                        <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Nome da Empresa</label>
+                                                        <input
+                                                            type="text"
+                                                            value={userCompany.name}
+                                                            disabled
+                                                            className="w-full bg-gray-100 border border-gray-300 rounded-lg p-2.5 text-sm text-gray-600 cursor-not-allowed shadow-inner-light"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">CNPJ</label>
+                                                        <input
+                                                            type="text"
+                                                            value={userCompany.cnpj || '-'}
+                                                            disabled
+                                                            className="w-full bg-gray-100 border border-gray-300 rounded-lg p-2.5 text-sm text-gray-600 cursor-not-allowed shadow-inner-light"
+                                                        />
+                                                    </div>
+                                                    <div className="md:col-span-2">
+                                                        <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Telefone</label>
+                                                        <input
+                                                            type="text"
+                                                            value={userCompany.phone || '-'}
+                                                            disabled
+                                                            className="w-full bg-gray-100 border border-gray-300 rounded-lg p-2.5 text-sm text-gray-600 cursor-not-allowed shadow-inner-light"
+                                                        />
+                                                    </div>
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Logo da Empresa</label>
+                                                    <div className="h-32 w-48 bg-gray-100 rounded-xl border border-gray-300 flex items-center justify-center overflow-hidden relative shadow-inner">
+                                                        {userCompany.logo ? (
+                                                            <img src={userCompany.logo} alt="Logo da Empresa" className="max-h-full max-w-full object-contain p-2" />
+                                                        ) : (
+                                                            <div className="text-center text-gray-400">
+                                                                <ImageIcon size={32} className="mx-auto mb-1 opacity-50" />
+                                                                <span className="text-xs block">Sem Logo</span>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div className="h-px bg-gray-200 my-6"></div>
+                                            </div>
+                                        );
+                                    })()}
+
+                                    {/* Company Selection Dropdown (MASTER ONLY) */}
                                     {currentUser.role === 'MASTER' && (
                                         <div>
                                             <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Selecionar Empresa para Editar</label>
@@ -3321,50 +3450,7 @@ const App: React.FC = () => {
                                 </div>
                             )}
 
-                            {/* Prominent Pending Users Alert at Bottom (Compact Version with Inline Actions) */}
-                            {currentUser.role === 'MASTER' && pendingUsersCount > 0 && (
-                                <div className="mt-8 bg-red-600 rounded-2xl p-6 text-white shadow-2xl shadow-red-200 relative overflow-hidden group transform hover:-translate-y-1 transition-all max-w-2xl mx-auto">
-                                    <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/diagonal-stripes.png')] opacity-10"></div>
 
-                                    <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-                                        <div className="flex items-center gap-4">
-                                            <div className="w-12 h-12 rounded-full bg-white text-red-600 flex items-center justify-center font-black text-xl shadow-inner animate-pulse shrink-0">
-                                                {pendingUsersCount}
-                                            </div>
-                                            <div>
-                                                <h3 className="text-xl font-black uppercase tracking-tight mb-1">Aprovação Pendente</h3>
-                                                <p className="text-red-100 font-medium text-sm">Usuários aguardando liberação de acesso.</p>
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* Inline List of Pending Users */}
-                                    <div className="relative z-10 mt-6 space-y-3">
-                                        {pendingUsers.map(u => (
-                                            <div key={u.email} className="bg-white/10 rounded-xl p-3 flex flex-col sm:flex-row items-center justify-between gap-3 border border-white/20">
-                                                <div className="flex flex-col text-center sm:text-left">
-                                                    <span className="font-bold text-sm">{u.name}</span>
-                                                    <span className="text-xs opacity-80">{u.email}</span>
-                                                </div>
-                                                <div className="flex items-center gap-2 w-full sm:w-auto">
-                                                    <button
-                                                        onClick={() => updateUserStatus(u.email, true)}
-                                                        className="flex-1 sm:flex-none bg-green-500 hover:bg-green-400 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors shadow-sm"
-                                                    >
-                                                        Aprovar
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleRejectUser(u.email)}
-                                                        className="flex-1 sm:flex-none bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
-                                                    >
-                                                        Recusar
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-                            )}
                         </div>
                     )}
 

@@ -14,6 +14,8 @@ export interface DbUser {
   photo?: string;
   preferred_theme?: 'red' | 'green' | 'blue' | 'yellow';
   company_id?: string | null;
+  area?: string | null;
+  filial?: string | null;
   created_at?: string;
 }
 
@@ -93,7 +95,9 @@ export async function createUser(user: DbUser): Promise<DbUser | null> {
         rejected: user.rejected || false,
         photo: user.photo,
         preferred_theme: user.preferred_theme || 'blue',
-        company_id: user.company_id
+        company_id: user.company_id,
+        area: user.area,
+        filial: user.filial
       }])
       .select()
       .single();
