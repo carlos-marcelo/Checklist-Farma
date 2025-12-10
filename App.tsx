@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote } from 'lucide-react';
+import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package } from 'lucide-react';
 import { CHECKLISTS } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection } from './types';
 import SignaturePad from './components/SignaturePad';
+import { StockConference } from './components/StockConference';
 import { supabase } from './supabaseClient';
 import * as SupabaseService from './supabaseService';
 import { updateCompany, saveConfig, fetchTickets, createTicket, updateTicketStatus, createCompany, DbTicket } from './supabaseService';
@@ -637,7 +638,7 @@ const App: React.FC = () => {
     const [signatures, setSignatures] = useState<Record<string, Record<string, string>>>({});
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [showErrors, setShowErrors] = useState(false);
-    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history' | 'support'>('checklist');
+    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock'>('checklist');
     const [ignoredChecklists, setIgnoredChecklists] = useState<Set<string>>(new Set());
     const errorBoxRef = useRef<HTMLDivElement>(null);
 
@@ -2268,6 +2269,17 @@ const App: React.FC = () => {
                     </button>
 
                     <button
+                        onClick={() => handleViewChange('stock')}
+                        className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'stock'
+                            ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
+                            : 'text-gray-600 hover:bg-gray-50'
+                            }`}
+                    >
+                        <Package className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'stock' ? '' : 'text-gray-400'}`} />
+                        Conferência de Estoque
+                    </button>
+
+                    <button
                         onClick={() => handleViewChange('settings')}
                         className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'settings'
                             ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
@@ -2403,6 +2415,13 @@ const App: React.FC = () => {
                                     </div>
                                 ))}
                             </div>
+                        </div>
+                    )}
+
+                    {/* --- STOCK CONFERENCE VIEW --- */}
+                    {currentView === 'stock' && (
+                        <div className="h-full animate-fade-in relative pb-24">
+                            <StockConference />
                         </div>
                     )}
 

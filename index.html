@@ -1,233 +1,287 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Checklists Digitais</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Bibliotecas para geração de PDF -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
-    <script>
-      tailwind.config = {
-        theme: {
-          extend: {
-            fontFamily: {
-              sans: ['Inter', 'sans-serif'],
-            },
-            boxShadow: {
-              'soft': '0 4px 20px -2px rgba(0, 0, 0, 0.05)',
-              'card': '0 10px 40px -10px rgba(0,0,0,0.08)',
-              'inner-light': 'inset 0 2px 4px 0 rgba(0, 0, 0, 0.02)',
-              'floating': '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
-              'glow': '0 0 15px rgba(220, 38, 38, 0.15)',
-            },
-            colors: {
-              gray: {
-                50: '#F9FAFB',
-                100: '#F3F4F6',
-                200: '#E5E7EB',
-                300: '#D1D5DB',
-                800: '#1F2937',
-                900: '#111827',
-              }
-            },
-            animation: {
-              'shake': 'shake 0.5s cubic-bezier(.36,.07,.19,.97) both',
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Checklists Digitais</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <!-- SheetJS for Excel support -->
+  <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+  <!-- jsPDF for PDF generation -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          },
+          boxShadow: {
+            'soft': '0 4px 20px -2px rgba(0, 0, 0, 0.05)',
+            'card': '0 10px 40px -10px rgba(0,0,0,0.08)',
+            'inner-light': 'inset 0 2px 4px 0 rgba(0, 0, 0, 0.02)',
+            'floating': '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+            'glow': '0 0 15px rgba(220, 38, 38, 0.15)',
+          },
+          colors: {
+            gray: {
+              50: '#F9FAFB',
+              100: '#F3F4F6',
+              200: '#E5E7EB',
+              300: '#D1D5DB',
+              800: '#1F2937',
+              900: '#111827',
             }
+          },
+          animation: {
+            'shake': 'shake 0.5s cubic-bezier(.36,.07,.19,.97) both',
           }
         }
       }
-    </script>
-    <style>
+    }
+  </script>
+  <style>
+    body {
+      background-color: #F3F4F6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* Smooth scrolling */
+    html {
+      scroll-behavior: smooth;
+    }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #D1D5DB;
+      border-radius: 4px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #9CA3AF;
+    }
+
+    /* Shake Animation */
+    @keyframes shake {
+
+      0%,
+      100% {
+        transform: translateX(0);
+      }
+
+      10%,
+      30%,
+      50%,
+      70%,
+      90% {
+        transform: translateX(-5px);
+      }
+
+      20%,
+      40%,
+      60%,
+      80% {
+        transform: translateX(5px);
+      }
+    }
+
+    @keyframes highlight-pulse {
+
+      0%,
+      100% {
+        box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7);
+      }
+
+      50% {
+        box-shadow: 0 0 0 15px rgba(239, 68, 68, 0);
+      }
+    }
+
+    .highlight-missing {
+      animation: highlight-pulse 1s ease-in-out 3 !important;
+      border: 2px solid #ef4444 !important;
+      background-color: #fee2e2 !important;
+      transition: all 0.3s ease !important;
+    }
+
+    @media print {
+      @page {
+        size: A4;
+        margin: 3mm;
+        /* Margens reduzidas */
+      }
+
+      .no-print {
+        display: none !important;
+      }
+
+      .print-only {
+        display: block !important;
+      }
+
+      html,
       body {
-        background-color: #F3F4F6;
-        -webkit-font-smoothing: antialiased;
-        -moz-osx-font-smoothing: grayscale;
-      }
-      /* Smooth scrolling */
-      html { scroll-behavior: smooth; }
-      
-      /* Custom Scrollbar */
-      ::-webkit-scrollbar {
-        width: 8px;
-        height: 8px;
-      }
-      ::-webkit-scrollbar-track {
-        background: transparent; 
-      }
-      ::-webkit-scrollbar-thumb {
-        background: #D1D5DB; 
-        border-radius: 4px;
-      }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #9CA3AF; 
+        height: auto;
+        overflow: visible !important;
       }
 
-      /* Shake Animation */
-      @keyframes shake {
-        0%, 100% { transform: translateX(0); }
-        10%, 30%, 50%, 70%, 90% { transform: translateX(-5px); }
-        20%, 40%, 60%, 80% { transform: translateX(5px); }
+      body {
+        background: white !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+        margin: 0 !important;
+        padding: 0 !important;
       }
 
-      @keyframes highlight-pulse {
-        0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
-        50% { box-shadow: 0 0 0 15px rgba(239, 68, 68, 0); }
-      }
-      
-      .highlight-missing {
-        animation: highlight-pulse 1s ease-in-out 3 !important;
-        border: 2px solid #ef4444 !important;
-        background-color: #fee2e2 !important;
-        transition: all 0.3s ease !important;
+      #root {
+        padding: 0 !important;
+        margin: 0 !important;
+        max-width: 100% !important;
       }
 
-      @media print {
-        @page { 
-          size: A4; 
-          margin: 3mm; /* Margens reduzidas */
-        }
-        
-        .no-print { display: none !important; }
-        .print-only { display: block !important; }
-        
-        html, body { 
-          height: auto; 
-          overflow: visible !important;
-        }
-        
-        body { 
-          background: white !important; 
-          -webkit-print-color-adjust: exact; 
-          print-color-adjust: exact;
-          margin: 0 !important; 
-          padding: 0 !important;
-        }
-        
-        #root { 
-          padding: 0 !important; 
-          margin: 0 !important;
-          max-width: 100% !important;
-        }
-        
-        /* Expandir container principal para usar toda largura */
-        .max-w-5xl {
-          max-width: 100% !important;
-          padding: 0.25rem !important;
-        }
-        
-        .page-break { page-break-before: always; }
-        .shadow-card, .shadow-floating, .shadow-soft, .shadow-2xl { box-shadow: none !important; }
-        .bg-gradient-to-br { background: none !important; }
-        
-        .break-inside-avoid { 
-          break-inside: avoid;
-          page-break-inside: avoid;
-        }
-        
-        img { 
-          max-width: 100%; 
-          height: auto;
-          page-break-inside: avoid;
-          display: block;
-        }
-        
-        /* Grid de imagens no relatório - NUNCA cortar */
-        .grid-cols-2 {
-          display: grid !important;
-          grid-template-columns: repeat(2, 1fr) !important;
-          gap: 0.5rem !important;
-          page-break-inside: avoid !important;
-          break-inside: avoid !important;
-          margin: 0.5rem 0 !important;
-        }
-        
-        .report-image-container {
-          break-inside: avoid !important;
-          page-break-inside: avoid !important;
-          page-break-before: auto !important;
-          page-break-after: auto !important;
-          height: 200px !important;
-          display: block !important;
-          padding: 4px !important;
-          background: white !important;
-          border: 1px solid #d1d5db !important;
-          border-radius: 4px !important;
-        }
-        
-        .report-image-container img {
-          width: 100% !important;
-          height: 100% !important;
-          object-fit: contain !important;
-          display: block !important;
-          max-width: 100% !important;
-          max-height: 100% !important;
-        }
-        
-        /* Manter espaçamentos originais */
-        .mt-4 {
-          margin-top: 1rem !important;
-        }
-        
-        .mb-6 {
-          margin-bottom: 1.5rem !important;
-        }
-        
-        .space-y-8 > * + * {
-          margin-top: 2rem !important;
-        }
-        
-        * {
-          overflow: visible !important;
-        }
-        
-        .space-y-6 > *:last-child,
-        .space-y-8 > *:last-child {
-          margin-bottom: 0 !important;
-        }
-        
-        /* Evitar quebra de página dentro de seções */
-        .space-y-8 > div {
-          break-inside: avoid;
-          page-break-inside: avoid;
-        }
-        
-        /* Garantir que cada checklist comece em nova página se necessário */
-        .space-y-12 > div {
-          break-inside: avoid;
-          page-break-inside: avoid;
-        }
-        
-        .space-y-12 {
-          gap: 1.5rem !important;
-        }
-        
-        /* Reduzir padding do container para aproveitar espaço */
-        .p-10 {
-          padding: 1.5rem !important;
-        }
-        
-        /* Manter bordas levemente arredondadas */
-        .rounded-3xl {
-          border-radius: 0.5rem !important;
-        }
-        
-        .rounded-2xl {
-          border-radius: 0.5rem !important;
-        }
-        
-        .rounded-xl {
-          border-radius: 0.375rem !important;
-        }
-        
-        .rounded-lg {
-          border-radius: 0.25rem !important;
-        }
+      /* Expandir container principal para usar toda largura */
+      .max-w-5xl {
+        max-width: 100% !important;
+        padding: 0.25rem !important;
       }
-      .print-only { display: none; }
-    </style>
+
+      .page-break {
+        page-break-before: always;
+      }
+
+      .shadow-card,
+      .shadow-floating,
+      .shadow-soft,
+      .shadow-2xl {
+        box-shadow: none !important;
+      }
+
+      .bg-gradient-to-br {
+        background: none !important;
+      }
+
+      .break-inside-avoid {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+
+      img {
+        max-width: 100%;
+        height: auto;
+        page-break-inside: avoid;
+        display: block;
+      }
+
+      /* Grid de imagens no relatório - NUNCA cortar */
+      .grid-cols-2 {
+        display: grid !important;
+        grid-template-columns: repeat(2, 1fr) !important;
+        gap: 0.5rem !important;
+        page-break-inside: avoid !important;
+        break-inside: avoid !important;
+        margin: 0.5rem 0 !important;
+      }
+
+      .report-image-container {
+        break-inside: avoid !important;
+        page-break-inside: avoid !important;
+        page-break-before: auto !important;
+        page-break-after: auto !important;
+        height: 200px !important;
+        display: block !important;
+        padding: 4px !important;
+        background: white !important;
+        border: 1px solid #d1d5db !important;
+        border-radius: 4px !important;
+      }
+
+      .report-image-container img {
+        width: 100% !important;
+        height: 100% !important;
+        object-fit: contain !important;
+        display: block !important;
+        max-width: 100% !important;
+        max-height: 100% !important;
+      }
+
+      /* Manter espaçamentos originais */
+      .mt-4 {
+        margin-top: 1rem !important;
+      }
+
+      .mb-6 {
+        margin-bottom: 1.5rem !important;
+      }
+
+      .space-y-8>*+* {
+        margin-top: 2rem !important;
+      }
+
+      * {
+        overflow: visible !important;
+      }
+
+      .space-y-6>*:last-child,
+      .space-y-8>*:last-child {
+        margin-bottom: 0 !important;
+      }
+
+      /* Evitar quebra de página dentro de seções */
+      .space-y-8>div {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+
+      /* Garantir que cada checklist comece em nova página se necessário */
+      .space-y-12>div {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+
+      .space-y-12 {
+        gap: 1.5rem !important;
+      }
+
+      /* Reduzir padding do container para aproveitar espaço */
+      .p-10 {
+        padding: 1.5rem !important;
+      }
+
+      /* Manter bordas levemente arredondadas */
+      .rounded-3xl {
+        border-radius: 0.5rem !important;
+      }
+
+      .rounded-2xl {
+        border-radius: 0.5rem !important;
+      }
+
+      .rounded-xl {
+        border-radius: 0.375rem !important;
+      }
+
+      .rounded-lg {
+        border-radius: 0.25rem !important;
+      }
+    }
+
+    .print-only {
+      display: none;
+    }
+  </style>
   <script type="importmap">
 {
   "imports": {
@@ -239,8 +293,10 @@
 }
 </script>
 </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/index.tsx"></script>
-  </body>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+
 </html>
