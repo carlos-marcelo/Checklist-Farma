@@ -26,8 +26,11 @@ import {
   Lock,
   Unlock,
   User,
-  Building
+  Building,
+  PenTool,
+  X
 } from 'lucide-react';
+import SignaturePad from './SignaturePad';
 
 // --- Types ---
 
@@ -240,6 +243,10 @@ export const StockConference = () => {
   const [masterProducts, setMasterProducts] = useState<Map<string, Product>>(new Map()); // Key: ReducedCode
   const [barcodeIndex, setBarcodeIndex] = useState<Map<string, string>>(new Map()); // Key: Barcode, Value: ReducedCode
   const [inventory, setInventory] = useState<Map<string, StockItem>>(new Map()); // Key: ReducedCode
+
+  // Signatures State
+  const [pharmSignature, setPharmSignature] = useState<string | null>(null);
+  const [managerSignature, setManagerSignature] = useState<string | null>(null);
 
   // Recount State (Phase 2)
   const [recountTargets, setRecountTargets] = useState<Set<string>>(new Set());
@@ -1199,11 +1206,12 @@ export const StockConference = () => {
   };
 
   const renderReport = () => {
-    // Generate simple report logic
     const allItems: StockItem[] = Array.from(inventory.values());
     const matched = allItems.filter(i => i.status === 'matched').length;
     const divergent = allItems.filter(i => i.status === 'divergent').length;
     const pending = allItems.filter(i => i.status === 'pending').length;
+
+    const signaturesComplete = pharmSignature && managerSignature;
 
     const exportCSV = () => {
       const headers = "Codigo Reduzido;Descricao;Estoque Sistema;Contagem;Diferenca;Status\n";
@@ -1217,7 +1225,7 @@ export const StockConference = () => {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `conferencia_${new Date().toISOString().slice(0, 10)}.csv`;
+      a.download = `conferencia_${branch.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`;
       a.click();
     };
 
@@ -1234,16 +1242,21 @@ export const StockConference = () => {
       // Header
       doc.setFontSize(18);
       doc.text("Relatório de Conferência de Estoque", 14, 20);
+
       doc.setFontSize(10);
-      doc.text(`Data: ${dateStr}`, 14, 28);
+      doc.text(`Filial: ${branch}`, 14, 28);
+      doc.text(`Data: ${dateStr}`, 14, 33);
+      doc.text(`Farmacêutico(a): ${pharmacist}`, 14, 38);
+      doc.text(`Gestor(a): ${manager}`, 14, 43);
 
       // Statistics
-      doc.text(`Total Itens: ${allItems.length}`, 14, 36);
-      doc.text(`Corretos: ${matched}`, 14, 41);
+      doc.text(`Total Itens: ${allItems.length}`, 14, 53);
+      doc.setTextColor(0, 128, 0);
+      doc.text(`Corretos: ${matched}`, 14, 58);
       doc.setTextColor(200, 0, 0);
-      doc.text(`Divergentes: ${divergent}`, 14, 46);
+      doc.text(`Divergentes: ${divergent}`, 60, 58);
       doc.setTextColor(100, 100, 100);
-      doc.text(`Não Contados: ${pending}`, 14, 51);
+      doc.text(`Não Contados: ${pending}`, 110, 58);
       doc.setTextColor(0, 0, 0);
 
       // Table Data
@@ -1271,71 +1284,145 @@ export const StockConference = () => {
           item.systemQty.toString(),
           item.countedQty.toString(),
           diff.toString(),
-          statusMap[item.status]
+          (statusMap as any)[item.status]
         ];
         tableRows.push(rowData);
       });
 
       (doc as any).autoTable({
-        startY: 55,
+        startY: 65,
         head: [tableColumn],
         body: tableRows,
         theme: 'grid',
         styles: { fontSize: 8 },
-        headStyles: { fillColor: [66, 133, 244] }, // Google Blue
-        rowStyles: (row: any) => {
-          // Logic handled in didParseCell
-        },
+        headStyles: { fillColor: [66, 133, 244] },
         didParseCell: (data: any) => {
           if (data.section === 'body') {
             const diffVal = parseFloat(data.row.raw[4]);
-            // Color Code the Difference Column or Status
             if (data.column.index === 4 || data.column.index === 5) {
               if (diffVal > 0) {
-                data.cell.styles.textColor = [0, 0, 255]; // Blue
+                data.cell.styles.textColor = [0, 0, 255];
                 data.cell.styles.fontStyle = 'bold';
               } else if (diffVal < 0) {
-                data.cell.styles.textColor = [200, 0, 0]; // Red
+                data.cell.styles.textColor = [200, 0, 0];
                 data.cell.styles.fontStyle = 'bold';
               } else {
-                data.cell.styles.textColor = [0, 128, 0]; // Green
+                data.cell.styles.textColor = [0, 128, 0];
               }
             }
           }
         }
       });
 
-      doc.save(`relatorio_conferencia_${new Date().toISOString().slice(0, 10)}.pdf`);
+      // Signatures Footer
+      const finalY = (doc as any).lastAutoTable.finalY + 20;
+
+      // Page break if needed
+      if (finalY > 250) {
+        doc.addPage();
+        doc.text("Assinaturas", 14, 20);
+      }
+
+      const sigY = finalY > 250 ? 30 : finalY;
+
+      // Add Pharmacist Sig
+      if (pharmSignature) {
+        doc.addImage(pharmSignature, 'PNG', 20, sigY, 60, 30);
+        doc.line(20, sigY + 30, 80, sigY + 30);
+        doc.setFontSize(8);
+        doc.text("Farmacêutico(a) Responsável", 20, sigY + 35);
+        doc.text(pharmacist, 20, sigY + 39);
+      }
+
+      // Add Manager Sig
+      if (managerSignature) {
+        doc.addImage(managerSignature, 'PNG', 110, sigY, 60, 30);
+        doc.line(110, sigY + 30, 170, sigY + 30);
+        doc.setFontSize(8);
+        doc.text("Gestor(a) Responsável", 110, sigY + 35);
+        doc.text(manager, 110, sigY + 39);
+      }
+
+      doc.save(`relatorio_${branch.replace(/\s+/g, '_')}.pdf`);
     };
 
     return (
-      <div className="flex flex-col h-full bg-white">
+      <div className="flex flex-col h-full bg-white overflow-y-auto w-full">
         <div className="max-w-4xl mx-auto w-full p-8 flex flex-col items-center">
-          <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-6">
-            <FileText className="w-10 h-10" />
+          <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-6">
+            <FileText className="w-8 h-8" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900 mb-2">Conferência Finalizada</h1>
-          <p className="text-gray-500 mb-10">Resumo da operação de estoque.</p>
+          <h1 className="text-2xl font-bold text-gray-900 mb-2">Conferência Finalizada</h1>
+          <p className="text-gray-500 mb-8">Resumo da operação de estoque.</p>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full mb-10">
-            <div className="p-6 bg-green-50 rounded-xl border border-green-100 text-center">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 w-full mb-8">
+            <div className="p-4 bg-green-50 rounded-xl border border-green-100 text-center">
               <span className="text-green-600 font-semibold uppercase text-xs tracking-wider">Corretos</span>
-              <p className="text-4xl font-bold text-gray-800 mt-2">{matched}</p>
+              <p className="text-3xl font-bold text-gray-800 mt-2">{matched}</p>
             </div>
-            <div className="p-6 bg-red-50 rounded-xl border border-red-100 text-center">
+            <div className="p-4 bg-red-50 rounded-xl border border-red-100 text-center">
               <span className="text-red-600 font-semibold uppercase text-xs tracking-wider">Divergentes</span>
-              <p className="text-4xl font-bold text-gray-800 mt-2">{divergent}</p>
+              <p className="text-3xl font-bold text-gray-800 mt-2">{divergent}</p>
             </div>
-            <div className="p-6 bg-gray-50 rounded-xl border border-gray-100 text-center">
+            <div className="p-4 bg-gray-50 rounded-xl border border-gray-100 text-center">
               <span className="text-gray-500 font-semibold uppercase text-xs tracking-wider">Não Contados</span>
-              <p className="text-4xl font-bold text-gray-800 mt-2">{pending}</p>
+              <p className="text-3xl font-bold text-gray-800 mt-2">{pending}</p>
+            </div>
+          </div>
+
+          <div className="w-full bg-gray-50 p-6 rounded-xl border border-gray-100 mb-8">
+            <h3 className="font-bold text-gray-800 mb-4 flex items-center">
+              <PenTool className="w-5 h-5 mr-2" />
+              Coleta de Assinaturas
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              <div>
+                <p className="text-sm font-semibold text-gray-600 mb-2">Farmacêutico: {pharmacist}</p>
+                {pharmSignature ? (
+                  <div className="relative border rounded-lg overflow-hidden bg-white h-40 flex items-center justify-center">
+                    <img src={pharmSignature} alt="Assinatura Farmacêutico" className="max-h-full" />
+                    <button
+                      onClick={() => setPharmSignature(null)}
+                      className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
+                      title="Apagar assinatura"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <SignaturePad label="Farmacêutico(a)" onEnd={setPharmSignature} />
+                )}
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-600 mb-2">Gestor: {manager}</p>
+                {managerSignature ? (
+                  <div className="relative border rounded-lg overflow-hidden bg-white h-40 flex items-center justify-center">
+                    <img src={managerSignature} alt="Assinatura Gestor" className="max-h-full" />
+                    <button
+                      onClick={() => setManagerSignature(null)}
+                      className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
+                      title="Apagar assinatura"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ) : (
+                  <SignaturePad label="Gestor(a)" onEnd={setManagerSignature} />
+                )}
+              </div>
             </div>
           </div>
 
           <div className="grid grid-cols-1 gap-4 w-full md:w-auto">
+            {!signaturesComplete && (
+              <div className="text-center text-red-500 font-medium mb-2 bg-red-50 p-2 rounded">
+                Colete ambas as assinaturas para liberar o download.
+              </div>
+            )}
             <button
               onClick={exportPDF}
-              className="flex items-center justify-center space-x-2 bg-red-600 text-white px-8 py-4 rounded-xl text-lg font-bold shadow-lg hover:bg-red-700 transition w-full"
+              disabled={!signaturesComplete}
+              className={`flex items-center justify-center space-x-2 px-8 py-4 rounded-xl text-lg font-bold shadow-lg transition w-full ${signaturesComplete ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
             >
               <Printer className="w-5 h-5" />
               <span>Baixar Relatório (PDF)</span>
@@ -1343,7 +1430,8 @@ export const StockConference = () => {
 
             <button
               onClick={exportCSV}
-              className="flex items-center justify-center space-x-2 bg-blue-600 text-white px-8 py-4 rounded-xl text-lg font-bold shadow-lg hover:bg-blue-700 transition w-full"
+              disabled={!signaturesComplete}
+              className={`flex items-center justify-center space-x-2 px-8 py-4 rounded-xl text-lg font-bold shadow-lg transition w-full ${signaturesComplete ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
             >
               <Download className="w-5 h-5" />
               <span>Baixar Relatório (CSV)</span>
