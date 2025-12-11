@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, FileText, CheckSquare, Printer, Clipboard, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package } from 'lucide-react';
+import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package } from 'lucide-react';
 import { CHECKLISTS } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection } from './types';
 import SignaturePad from './components/SignaturePad';
@@ -136,6 +136,256 @@ const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceRep
             createdAt: rep.created_at || new Date().toISOString()
         };
     });
+};
+
+type StockReportItem = SupabaseService.DbStockConferenceReport['items'][number];
+
+interface StockConferenceReportViewerProps {
+    report: SupabaseService.DbStockConferenceReport;
+    onClose: () => void;
+}
+
+const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportViewerProps) => {
+    const items = report.items || [];
+    const summary = report.summary || { total: items.length, matched: 0, divergent: 0, pending: 0, percent: 0 };
+    const createdAt = report.created_at ? new Date(report.created_at) : new Date();
+    const summaryTotals = {
+        total: summary.total ?? items.length,
+        matched: summary.matched ?? 0,
+        divergent: summary.divergent ?? 0,
+        pending: summary.pending ?? 0,
+        percent: summary.percent ?? 0
+    };
+
+    const statusOrder: Record<'divergent' | 'pending' | 'matched', number> = {
+        divergent: 0,
+        pending: 1,
+        matched: 2
+    };
+
+    const sortedItems = [...items].sort((a, b) => {
+        const aOrder = statusOrder[(a.status || 'pending') as 'divergent' | 'pending' | 'matched'] ?? 3;
+        const bOrder = statusOrder[(b.status || 'pending') as 'divergent' | 'pending' | 'matched'] ?? 3;
+        return aOrder - bOrder;
+    });
+
+    const exportCSV = () => {
+        const headers = 'Codigo Reduzido;Descricao;Estoque Sistema;Contagem;Diferenca;Status\n';
+        const rows = sortedItems.map(item => {
+            const diff = (item.counted_qty ?? 0) - (item.system_qty ?? 0);
+            const statusLabel = item.status?.toUpperCase() || 'PENDENTE';
+            return `${item.reduced_code};"${item.description || ''}";${item.system_qty ?? 0};${item.counted_qty ?? 0};${diff};${statusLabel}`;
+        }).join('\n');
+
+        const blob = new Blob([headers + rows], { type: 'text/csv' });
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        const fileName = `conferencia_${(report.branch || 'sem_filial').replace(/\s+/g, '_')}_${createdAt.toISOString().slice(0, 10)}.csv`;
+        a.href = url;
+        a.download = fileName;
+        a.click();
+        window.URL.revokeObjectURL(url);
+    };
+
+    const exportPDF = () => {
+        const jsPDF = (window as any).jspdf?.jsPDF;
+        if (!jsPDF) {
+            alert('Biblioteca de PDF não carregada.');
+            return;
+        }
+
+        const doc = new jsPDF();
+        const dateStr = createdAt.toLocaleDateString('pt-BR');
+        const timeStr = createdAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+
+        doc.setFontSize(18);
+        doc.text('Relatório de Conferência de Estoque', 14, 20);
+        doc.setFontSize(10);
+        doc.text(`Filial: ${report.branch || 'Sem filial'}`, 14, 28);
+        doc.text(`Farmacêutico(a): ${report.pharmacist || '-'}`, 14, 33);
+        doc.text(`Gestor(a): ${report.manager || '-'}`, 14, 38);
+        doc.text(`Responsável: ${report.userName || report.user_email}`, 14, 43);
+        doc.text(`Data: ${dateStr} às ${timeStr}`, 14, 48);
+        doc.text(`Total itens: ${summaryTotals.total}`, 14, 54);
+        doc.setTextColor(0, 128, 0);
+        doc.text(`Corretos: ${summaryTotals.matched}`, 14, 59);
+        doc.setTextColor(200, 0, 0);
+        doc.text(`Divergentes: ${summaryTotals.divergent}`, 70, 59);
+        doc.setTextColor(255, 165, 0);
+        doc.text(`Pendentes: ${summaryTotals.pending}`, 120, 59);
+        doc.setTextColor(0, 0, 0);
+
+        const tableColumn = ['Reduzido', 'Descrição', 'Sistema', 'Contagem', 'Diferença', 'Status'];
+        const tableRows: any[] = [];
+        sortedItems.forEach(item => {
+            const diff = (item.counted_qty ?? 0) - (item.system_qty ?? 0);
+            const statusLabels: Record<string, string> = {
+                matched: 'OK',
+                divergent: 'DIVERGENTE',
+                pending: 'PENDENTE'
+            };
+            tableRows.push([
+                item.reduced_code,
+                item.description || '',
+                (item.system_qty ?? 0).toString(),
+                (item.counted_qty ?? 0).toString(),
+                diff.toString(),
+                statusLabels[item.status || 'pending']
+            ]);
+        });
+
+        (doc as any).autoTable({
+            startY: 66,
+            head: [tableColumn],
+            body: tableRows,
+            theme: 'grid',
+            styles: { fontSize: 8 },
+            headStyles: { fillColor: [66, 133, 244] },
+            didParseCell: (data: any) => {
+                if (data.section === 'body' && data.column.index === 4) {
+                    const diffVal = parseFloat(data.row.raw[4]);
+                    if (diffVal > 0) {
+                        data.cell.styles.textColor = [0, 0, 255];
+                        data.cell.styles.fontStyle = 'bold';
+                    } else if (diffVal < 0) {
+                        data.cell.styles.textColor = [200, 0, 0];
+                        data.cell.styles.fontStyle = 'bold';
+                    } else {
+                        data.cell.styles.textColor = [0, 128, 0];
+                    }
+                }
+            }
+        });
+
+        const fileName = `conferencia_${(report.branch || 'sem_filial').replace(/\s+/g, '_')}_${createdAt.toISOString().slice(0, 10)}.pdf`;
+        doc.save(fileName);
+    };
+
+    const statusStyles: Record<'divergent' | 'pending' | 'matched', { badge: string; border: string }> = {
+        divergent: { badge: 'bg-red-50 text-red-600', border: 'border-red-100' },
+        pending: { badge: 'bg-yellow-50 text-yellow-700', border: 'border-yellow-100' },
+        matched: { badge: 'bg-green-50 text-green-600', border: 'border-green-100' },
+    };
+
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
+            <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose}></div>
+            <div className="relative z-10 w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-3xl bg-white border border-gray-100 shadow-2xl">
+                <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-gray-100">
+                    <div>
+                        <p className="text-xs uppercase tracking-widest text-gray-400 mb-1">Conferência de Estoque</p>
+                        <h3 className="text-xl font-bold text-gray-900">{report.branch || 'Filial não informada'}</h3>
+                        <p className="text-sm text-gray-500">
+                            {report.pharmacist || 'Farmacêutico não informado'} · {report.manager || 'Gestor não informado'}
+                        </p>
+                        <p className="text-xs text-gray-400 mt-1">
+                            {createdAt.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })} às {createdAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        </p>
+                        <p className="text-xs text-gray-400">Registrado por {report.userName || report.user_email}</p>
+                    </div>
+                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 rounded-full p-2 transition">
+                        <X size={20} />
+                    </button>
+                </div>
+                <div className="px-6 py-6 space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-center">
+                            <p className="text-[10px] uppercase tracking-widest text-gray-500">Total</p>
+                            <p className="text-3xl font-bold text-gray-900">{summaryTotals.total}</p>
+                        </div>
+                        <div className="rounded-2xl border border-green-100 bg-green-50 p-4 text-center">
+                            <p className="text-[10px] uppercase tracking-widest text-green-600">Corretos</p>
+                            <p className="text-3xl font-bold text-green-800">{summaryTotals.matched}</p>
+                        </div>
+                        <div className="rounded-2xl border border-red-100 bg-red-50 p-4 text-center">
+                            <p className="text-[10px] uppercase tracking-widest text-red-600">Divergentes</p>
+                            <p className="text-3xl font-bold text-red-800">{summaryTotals.divergent}</p>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="rounded-2xl border border-yellow-100 bg-yellow-50 p-4 text-center">
+                            <p className="text-[10px] uppercase tracking-widest text-yellow-700">Pendentes</p>
+                            <p className="text-3xl font-bold text-yellow-800">{summaryTotals.pending}</p>
+                        </div>
+                        <div className="rounded-2xl border border-blue-100 bg-blue-50 p-4 text-center">
+                            <p className="text-[10px] uppercase tracking-widest text-blue-600">Progresso</p>
+                            <p className="text-3xl font-bold text-blue-800">{Math.round(summaryTotals.percent)}%</p>
+                        </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 text-[11px] text-gray-500">
+                        <span className="inline-flex items-center px-3 py-1 border border-gray-200 rounded-full bg-gray-50">Responsável: {report.userName || report.user_email}</span>
+                        <span className="inline-flex items-center px-3 py-1 border border-gray-200 rounded-full bg-gray-50">Farmacêutico: {report.pharmacist || '-'}</span>
+                        <span className="inline-flex items-center px-3 py-1 border border-gray-200 rounded-full bg-gray-50">Gestor: {report.manager || '-'}</span>
+                    </div>
+
+                    <div className="overflow-x-auto border border-gray-100 rounded-2xl">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-widest">
+                                <tr>
+                                    <th className="px-4 py-3">Reduzido</th>
+                                    <th className="px-4 py-3">Descrição</th>
+                                    <th className="px-4 py-3 text-center">Sistema</th>
+                                    <th className="px-4 py-3 text-center">Contagem</th>
+                                    <th className="px-4 py-3 text-center">Diferença</th>
+                                    <th className="px-4 py-3 text-center">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-100 text-gray-700">
+                                {sortedItems.length === 0 && (
+                                    <tr>
+                                        <td colSpan={6} className="px-4 py-6 text-center text-gray-400">
+                                            Nenhum item registrado nessa conferência.
+                                        </td>
+                                    </tr>
+                                )}
+                                {sortedItems.map(item => {
+                                    const diff = (item.counted_qty ?? 0) - (item.system_qty ?? 0);
+                                    const statusKey = (item.status || 'pending') as 'divergent' | 'pending' | 'matched';
+                                    const badge = statusStyles[statusKey];
+                                    return (
+                                        <tr key={`${item.reduced_code}-${item.system_qty}-${item.counted_qty}`}>
+                                            <td className="px-4 py-3 font-mono">{item.reduced_code}</td>
+                                            <td className="px-4 py-3">{item.description || 'Sem descrição'}</td>
+                                            <td className="px-4 py-3 text-center font-mono">{item.system_qty ?? 0}</td>
+                                            <td className="px-4 py-3 text-center font-mono">{item.counted_qty ?? 0}</td>
+                                            <td className="px-4 py-3 text-center font-mono">
+                                                <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${diff > 0 ? 'text-blue-600' : diff < 0 ? 'text-red-600' : 'text-green-600'}`}>
+                                                    {diff > 0 ? `+${diff}` : diff}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 text-center">
+                                                <span className={`text-[10px] font-bold rounded-full px-3 py-1 border ${badge.border} ${badge.badge}`}>
+                                                    {statusKey.toUpperCase()}
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-end gap-3">
+                        <button
+                            onClick={exportPDF}
+                            className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 text-white rounded-lg px-5 py-3 text-sm font-bold shadow-lg hover:brightness-110 transition"
+                        >
+                            <Printer size={16} />
+                            <span>Baixar PDF</span>
+                        </button>
+                        <button
+                            onClick={exportCSV}
+                            className="flex items-center gap-2 border border-gray-200 rounded-lg px-5 py-3 text-sm font-bold text-gray-700 hover:bg-gray-50 transition"
+                        >
+                            <ClipboardList size={16} />
+                            <span>Baixar CSV</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
 };
 
 // --- FALLBACK USERS (usado apenas se Supabase falhar) ---
@@ -683,7 +933,6 @@ const App: React.FC = () => {
     const [viewHistoryItem, setViewHistoryItem] = useState<ReportHistoryItem | null>(null);
     const [historyFilterUser, setHistoryFilterUser] = useState<string>('all');
     const [isSaving, setIsSaving] = useState(false);
-    const [stockConferenceHistory, setStockConferenceHistory] = useState<StockConferenceHistoryItem[]>([]);
     const [stockConferenceReportsRaw, setStockConferenceReportsRaw] = useState<SupabaseService.DbStockConferenceReport[]>([]);
     const [viewingStockConferenceReport, setViewingStockConferenceReport] = useState<SupabaseService.DbStockConferenceReport | null>(null);
 
@@ -756,6 +1005,15 @@ const App: React.FC = () => {
     const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceReport[]) => {
         setStockConferenceHistory(mapStockConferenceReports(reports));
         setStockConferenceReportsRaw(reports);
+    };
+
+    const handleViewStockConferenceReport = (historyId: string) => {
+        const report = stockConferenceReportsRaw.find(r => r.id === historyId);
+        if (!report) {
+            alert('Não foi possível localizar o relatório de conferência solicitado.');
+            return;
+        }
+        setViewingStockConferenceReport(report);
     };
 
     // MAIN INITIALIZATION - Load all data from Supabase on mount (was cut off, restoring generic structure found in previous views)
@@ -4647,6 +4905,15 @@ const App: React.FC = () => {
                                                         <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Farmacêutico: {item.pharmacist}</span>
                                                         <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Gestor: {item.manager}</span>
                                                     </div>
+                                                    <div className="mt-4 flex justify-end">
+                                                        <button
+                                                            onClick={() => handleViewStockConferenceReport(item.id)}
+                                                            className="flex items-center gap-2 rounded-2xl px-4 py-2 bg-blue-600 text-white text-sm font-bold shadow-lg hover:bg-blue-700 transition"
+                                                        >
+                                                            <FileText size={16} />
+                                                            Ver Conferência
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             );
                                         })}
@@ -4654,6 +4921,13 @@ const App: React.FC = () => {
                                 )}
                             </div>
                         </div>
+                    )}
+
+                    {viewingStockConferenceReport && (
+                        <StockConferenceReportViewer
+                            report={viewingStockConferenceReport}
+                            onClose={() => setViewingStockConferenceReport(null)}
+                        />
                     )}
 
                 </main>

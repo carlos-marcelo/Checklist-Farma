@@ -477,13 +477,23 @@ const recountPendingList = useMemo(() => {
     };
     saveLocalStockSession(userEmail, payload);
 
+    console.debug('Persistindo sessão de conferência de estoque', {
+      userEmail,
+      step: payload.step,
+      inventoryItems: payload.inventory.length,
+      products: payload.products.length
+    });
+
     try {
       const saved = await SupabaseService.upsertStockConferenceSession(payload);
       if (saved?.id) {
         setSessionId(saved.id);
+      } else {
+        console.warn('Sessão de estoque gravada sem id retornado pelo Supabase', saved);
       }
     } catch (error) {
       console.error('Erro ao persistir sessão de conferência:', error);
+      console.error('Payload enviado durante o erro:', payload);
     }
   };
 
