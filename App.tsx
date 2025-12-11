@@ -268,9 +268,9 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center px-4 py-6">
-            <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose}></div>
-            <div className="relative z-10 w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-3xl bg-white border border-gray-100 shadow-2xl">
+        <div className="fixed inset-0 z-[70] flex items-center justify-center px-4 py-6">
+            <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+            <div className="relative z-10 w-full max-w-[calc(100vw-2rem)] lg:max-w-[calc(100vw-20rem-2rem)] max-h-[90vh] overflow-y-auto rounded-3xl bg-white border border-gray-100 shadow-2xl lg:ml-72">
                 <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-gray-100">
                     <div>
                         <p className="text-xs uppercase tracking-widest text-gray-400 mb-1">Conferência de Estoque</p>
