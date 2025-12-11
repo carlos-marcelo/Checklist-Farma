@@ -32,6 +32,40 @@ import {
   Pill
 } from 'lucide-react';
 import SignaturePad from './SignaturePad';
+import * as SupabaseService from '../supabaseService';
+
+const LOCAL_STOCK_SESSION_PREFIX = 'STOCK_SESSION_';
+const buildLocalSessionKey = (email: string) => `${LOCAL_STOCK_SESSION_PREFIX}${email}`;
+
+const loadLocalStockSession = (email: string): SupabaseService.DbStockConferenceSession | null => {
+  if (typeof window === 'undefined' || !email) return null;
+  try {
+    const raw = window.localStorage.getItem(buildLocalSessionKey(email));
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error('Erro ao carregar sessão local de conferência:', error);
+    return null;
+  }
+};
+
+const saveLocalStockSession = (email: string, session: SupabaseService.DbStockConferenceSession) => {
+  if (typeof window === 'undefined' || !email) return;
+  try {
+    window.localStorage.setItem(buildLocalSessionKey(email), JSON.stringify(session));
+  } catch (error) {
+    console.error('Erro ao salvar sessão local de conferência:', error);
+  }
+};
+
+const clearLocalStockSession = (email: string) => {
+  if (typeof window === 'undefined' || !email) return;
+  try {
+    window.localStorage.removeItem(buildLocalSessionKey(email));
+  } catch (error) {
+    console.error('Erro ao limpar sessão local de conferência:', error);
+  }
+};
 
 // --- Types ---
 
@@ -50,6 +84,11 @@ interface StockItem {
 }
 
 type AppStep = 'setup' | 'conference' | 'divergence' | 'report';
+
+interface StockConferenceProps {
+  userEmail?: string;
+  userName?: string;
+}
 
 // --- Audio Helper ---
 
@@ -232,7 +271,7 @@ const safeParseFloat = (value: any): number => {
 
 // --- Main Component ---
 
-export const StockConference = () => {
+export const StockConference = ({ userEmail, userName }: StockConferenceProps) => {
   const [step, setStep] = useState<AppStep>('setup');
 
   // Header Info State
@@ -264,8 +303,12 @@ export const StockConference = () => {
   const [activeItem, setActiveItem] = useState<Product | null>(null);
   const [countInput, setCountInput] = useState('');
   const [lastScanned, setLastScanned] = useState<{ item: StockItem, product: Product } | null>(null);
+  const [accumulationMode, setAccumulationMode] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const countRef = useRef<HTMLInputElement>(null);
+  const [isSavingStockReport, setIsSavingStockReport] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const manualSessionStartedRef = useRef(false);
 
   // --- Effects ---
 
@@ -308,22 +351,141 @@ export const StockConference = () => {
     };
   }, [inventory, recountTargets]);
 
-  const recountPendingList = useMemo(() => {
-    if (!stats.isRecount) return [];
-    const list: { code: string, barcode: string, desc: string }[] = [];
-    recountTargets.forEach(key => {
-      const item = inventory.get(key);
-      if (item && item.lastUpdated === null) {
-        const prod = masterProducts.get(key);
-        list.push({
-          code: key,
-          barcode: prod?.barcode || '-',
-          desc: prod?.description || key
-        });
+const recountPendingList = useMemo(() => {
+  if (!stats.isRecount) return [];
+  const list: { code: string, barcode: string, desc: string }[] = [];
+  recountTargets.forEach(key => {
+    const item = inventory.get(key);
+    if (item && item.lastUpdated === null) {
+      const prod = masterProducts.get(key);
+      list.push({
+        code: key,
+        barcode: prod?.barcode || '-',
+        desc: prod?.description || key
+      });
+    }
+  });
+  return list;
+  }, [inventory, recountTargets, stats.isRecount, masterProducts]);
+
+  const restoreSessionFromData = (session: SupabaseService.DbStockConferenceSession): boolean => {
+    if (!session) return false;
+    const prodMap = new Map<string, Product>();
+    const barcodeMap = new Map<string, string>();
+    (session.products || []).forEach(prod => {
+      if (!prod || !prod.reduced_code) return;
+      prodMap.set(prod.reduced_code, {
+        reducedCode: prod.reduced_code,
+        barcode: prod.barcode || '',
+        description: prod.description || 'Sem descrição'
+      });
+      if (prod.barcode) {
+        barcodeMap.set(prod.barcode, prod.reduced_code);
       }
     });
-    return list;
-  }, [inventory, recountTargets, stats.isRecount, masterProducts]);
+
+    const inventoryMap = new Map<string, StockItem>();
+    (session.inventory || []).forEach(entry => {
+      if (!entry || !entry.reduced_code) return;
+      inventoryMap.set(entry.reduced_code, {
+        reducedCode: entry.reduced_code,
+        systemQty: entry.system_qty,
+        countedQty: entry.counted_qty,
+        status: entry.status,
+        lastUpdated: entry.last_updated ? new Date(entry.last_updated) : null
+      });
+    });
+
+    if (!prodMap.size || !inventoryMap.size) return false;
+
+    setMasterProducts(prodMap);
+    setBarcodeIndex(barcodeMap);
+    setInventory(inventoryMap);
+    setBranch(session.branch || '');
+    setPharmacist(session.pharmacist || '');
+    setManager(session.manager || '');
+    setRecountTargets(new Set(session.recount_targets || []));
+    const restoredStep = session.step && session.step !== 'report' ? session.step as AppStep : 'conference';
+    setStep(restoredStep);
+    setSessionId(session.id || null);
+    manualSessionStartedRef.current = true;
+
+    return true;
+  };
+
+  useEffect(() => {
+    if (!userEmail) return;
+    let isMounted = true;
+    const loadSession = async () => {
+      if (manualSessionStartedRef.current) return;
+      try {
+        const session = await SupabaseService.fetchStockConferenceSession(userEmail);
+        if (!isMounted || !session) return;
+        const restored = restoreSessionFromData(session);
+        if (restored) return;
+      } catch (error) {
+        console.error('Erro ao restaurar sessão de conferência:', error);
+      }
+
+      if (manualSessionStartedRef.current) return;
+      const localSession = loadLocalStockSession(userEmail);
+      if (localSession) {
+        restoreSessionFromData(localSession);
+      }
+    };
+
+    loadSession();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [userEmail]);
+
+  const persistSession = async (options?: {
+    step?: AppStep;
+    inventoryOverride?: Map<string, StockItem>;
+    productOverride?: Map<string, Product>;
+    recountOverride?: Set<string>;
+  }) => {
+    if (!userEmail) return;
+    const productSource = options?.productOverride || masterProducts;
+    const inventorySource = options?.inventoryOverride || inventory;
+    if (productSource.size === 0 && inventorySource.size === 0) return;
+
+    const now = new Date().toISOString();
+    const payload: SupabaseService.DbStockConferenceSession = {
+      id: sessionId || undefined,
+      user_email: userEmail,
+      branch: branch || 'Filial não informada',
+      pharmacist: pharmacist || 'Farmacêutico não informado',
+      manager: manager || 'Gestor não informado',
+      products: Array.from(productSource.values()).map(prod => ({
+        reduced_code: prod.reducedCode,
+        barcode: prod.barcode || null,
+        description: prod.description || null
+      })),
+      inventory: Array.from(inventorySource.values()).map(item => ({
+        reduced_code: item.reducedCode,
+        system_qty: item.systemQty,
+        counted_qty: item.countedQty,
+        status: item.status,
+        last_updated: item.lastUpdated ? item.lastUpdated.toISOString() : null
+      })),
+      recount_targets: Array.from(options?.recountOverride || recountTargets),
+      step: options?.step || step,
+      updated_at: now
+    };
+    saveLocalStockSession(userEmail, payload);
+
+    try {
+      const saved = await SupabaseService.upsertStockConferenceSession(payload);
+      if (saved?.id) {
+        setSessionId(saved.id);
+      }
+    } catch (error) {
+      console.error('Erro ao persistir sessão de conferência:', error);
+    }
+  };
 
 
   // --- Handlers: File Upload ---
@@ -358,6 +520,7 @@ export const StockConference = () => {
     // Start Loading
     setIsLoading(true);
     setErrorMsg('');
+    manualSessionStartedRef.current = true;
 
     // Small timeout to allow UI to render the loading state before heavy processing
     setTimeout(async () => {
@@ -469,6 +632,12 @@ export const StockConference = () => {
         setInventory(iMap);
         setRecountTargets(new Set()); // Clear recount on new upload
         setStep('conference');
+        await persistSession({
+          step: 'conference',
+          inventoryOverride: iMap,
+          productOverride: pMap,
+          recountOverride: new Set()
+        });
       } catch (e: any) {
         console.error("Erro:", e);
         setErrorMsg(e.message || "Erro desconhecido.");
@@ -504,6 +673,15 @@ export const StockConference = () => {
         return;
       }
 
+      if (accumulationMode) {
+        applyAccumulation(product);
+        setActiveItem(null);
+        setCountInput('');
+        setScanInput('');
+        setTimeout(() => inputRef.current?.focus(), 50);
+        return;
+      }
+
       setActiveItem(product);
       setScanInput('');
       setCountInput('');
@@ -513,6 +691,29 @@ export const StockConference = () => {
       alert("Produto não encontrado na base de cadastro!");
       setScanInput('');
     }
+  };
+
+  const applyAccumulation = (product: Product) => {
+    const currentStock = inventory.get(product.reducedCode);
+    if (!currentStock) return;
+
+    const nextQty = (currentStock.countedQty || 0) + 1;
+    const status = nextQty === currentStock.systemQty ? 'matched' : 'divergent';
+
+    const updatedItem: StockItem = {
+      ...currentStock,
+      countedQty: nextQty,
+      status,
+      lastUpdated: new Date()
+    };
+
+    const updatedInventory = new Map(inventory);
+    updatedInventory.set(product.reducedCode, updatedItem);
+
+    setInventory(updatedInventory);
+    setLastScanned({ item: updatedItem, product });
+    playSound(status === 'matched' ? 'success' : 'error');
+    void persistSession({ inventoryOverride: updatedInventory, step: 'conference' });
   };
 
   const handleQuantitySubmit = (e: React.FormEvent) => {
@@ -536,39 +737,20 @@ export const StockConference = () => {
       lastUpdated: new Date(),
       status: status
     };
-
-    setInventory(new Map<string, StockItem>(inventory.set(activeItem.reducedCode, newItem)));
+    const updatedInventory = new Map(inventory);
+    updatedInventory.set(activeItem.reducedCode, newItem);
+    setInventory(updatedInventory);
     setLastScanned({ item: newItem, product: activeItem });
 
     setActiveItem(null);
     setCountInput('');
     setTimeout(() => inputRef.current?.focus(), 50);
+    void persistSession({ inventoryOverride: updatedInventory, step: 'conference' });
   };
 
   const handleZeroPending = () => {
-    if (!window.confirm("Atenção: Você está prestes a definir a contagem de todos os itens PENDENTES como 0 (zero).\n\nIsso significa que você assumiu que esses itens não existem fisicamente no estoque.\n\nDeseja continuar e encerrar a 1ª fase de contagem?")) return;
-
-    const newInventory = new Map<string, StockItem>(inventory);
-    let changed = 0;
-
-    newInventory.forEach((item, key) => {
-      if (item.status === 'pending') {
-        const systemQty = item.systemQty;
-        const counted = 0;
-        const status = systemQty === 0 ? 'matched' : 'divergent';
-
-        newInventory.set(key, {
-          ...item,
-          countedQty: counted,
-          status: status,
-          lastUpdated: new Date()
-        });
-        changed++;
-      }
-    });
-
-    setInventory(newInventory);
-    playSound('success');
+    alert('Ação bloqueada! Não é permitido zerar a 1ª fase.');
+    playSound('error');
   };
 
   const handleRecountAllDivergences = () => {
@@ -616,12 +798,13 @@ export const StockConference = () => {
     setActiveItem(null);
     setScanInput('');
     setStep('conference');
+    void persistSession({ inventoryOverride: newInventory, step: 'conference', recountOverride: divergentKeys });
 
     // 5. Focus
     setTimeout(() => inputRef.current?.focus(), 100);
   };
 
-  const handleFinalize = () => {
+  const handleFinalize = async () => {
     // 1. Strict Check: Phase 1 Completion (No Pending items allowed)
     // This applies to both Phase 1 (Initial) and Phase 2 (Recount) because recount resets items to pending.
     const pendingCount = Array.from(inventory.values()).filter((i: StockItem) => i.status === 'pending').length;
@@ -644,8 +827,63 @@ export const StockConference = () => {
       return;
     }
 
-    // If passed all checks:
-    setStep('report');
+    // If passed all checks, persist to Supabase before showing final report
+    const allItems = Array.from(inventory.values());
+    const matched = allItems.filter(item => item.status === 'matched').length;
+    const divergent = allItems.filter(item => item.status === 'divergent').length;
+    const pending = allItems.filter(item => item.status === 'pending').length;
+    const summary = {
+      total: allItems.length,
+      matched,
+      divergent,
+      pending,
+      percent: stats.percent
+    };
+
+    const inventorySnapshot = allItems.map(item => {
+      const product = masterProducts.get(item.reducedCode);
+      return {
+        reduced_code: item.reducedCode,
+        barcode: product?.barcode || null,
+        description: product?.description || null,
+        system_qty: item.systemQty,
+        counted_qty: item.countedQty,
+        status: item.status,
+        difference: item.countedQty - item.systemQty,
+        last_updated: item.lastUpdated ? item.lastUpdated.toISOString() : null
+      };
+    });
+
+    const payload = {
+      user_email: userEmail?.trim() || 'desconhecido@empresa.com',
+      user_name: userName?.trim() || 'Operador',
+      branch: branch || 'Filial não informada',
+      pharmacist: pharmacist || 'Farmacêutico não informado',
+      manager: manager || 'Gestor não informado',
+      summary,
+      items: inventorySnapshot
+    };
+
+    setIsSavingStockReport(true);
+    try {
+      await SupabaseService.createStockConferenceReport(payload);
+    } catch (error) {
+      console.error('Erro ao salvar conferência de estoque:', error);
+      alert('Não foi possível salvar o relatório no Supabase. O resultado será exibido localmente.');
+    } finally {
+      setIsSavingStockReport(false);
+      manualSessionStartedRef.current = false;
+      setSessionId(null);
+      if (userEmail) {
+        clearLocalStockSession(userEmail);
+        try {
+          await SupabaseService.deleteStockConferenceSession(userEmail);
+        } catch (deleteError) {
+          console.warn('Falha ao limpar sessão local após finalização:', deleteError);
+        }
+      }
+      setStep('report');
+    }
   };
 
   // Helper to determine display color for divergence
@@ -828,9 +1066,18 @@ export const StockConference = () => {
               {!activeItem ? (
                 // State: Scan Product
                 <div className="flex flex-col h-full justify-center">
-                  <div className="mb-2 flex items-center justify-between">
-                    <label className="text-gray-500 text-sm font-semibold uppercase">Bipar Código de Barras ou Reduzido</label>
-                    {stats.isRecount && <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-[10px] font-bold uppercase border border-orange-200">Modo Recontagem</span>}
+                  <div className="mb-2 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <label className="text-gray-500 text-sm font-semibold uppercase">Bipar Codigo de Barras ou Reduzido</label>
+                    <div className="flex items-center gap-2">
+                      {stats.isRecount && <span className="bg-orange-100 text-orange-700 px-2 py-0.5 rounded text-[10px] font-bold uppercase border border-orange-200">Modo Recontagem</span>}
+                      <button
+                        type="button"
+                        onClick={() => setAccumulationMode(prev => !prev)}
+                        className={`text-[10px] font-bold uppercase tracking-wide px-3 py-1 rounded-full border transition focus:outline-none ${accumulationMode ? 'bg-emerald-50 border-emerald-300 text-emerald-700 shadow-sm' : 'bg-white border-gray-200 text-gray-500 hover:border-blue-200 hover:text-blue-600'}`}
+                      >
+                        {accumulationMode ? 'ACUMULO ATIVO' : 'ATIVAR ACUMULO'}
+                      </button>
+                    </div>
                   </div>
                   <form onSubmit={handleScanSubmit} className="relative">
                     <Barcode className="absolute left-4 top-1/2 transform -translate-y-1/2 text-gray-400 w-6 h-6" />
@@ -844,6 +1091,11 @@ export const StockConference = () => {
                       className={`w-full pl-12 pr-4 py-6 text-2xl font-mono border-2 rounded-xl focus:ring transition outline-none text-gray-800 placeholder-gray-300 ${stats.isRecount ? 'border-orange-200 bg-orange-50/30 focus:border-orange-500 focus:ring-orange-200' : 'border-blue-100 bg-blue-50/30 focus:border-blue-500 focus:ring-blue-200'}`}
                     />
                   </form>
+                  {accumulationMode && (
+                    <p className="mt-3 text-center text-xs text-emerald-600">
+                      Cada bip soma 1 unidade ao produto atual automaticamente.
+                    </p>
+                  )}
                   <p className="mt-4 text-center text-gray-400 text-sm">
                     Pressione Enter após digitar se não estiver usando scanner.
                   </p>
@@ -1042,34 +1294,35 @@ export const StockConference = () => {
             </button>
             <h1 className="font-bold text-gray-800">Fase 2: Divergências & Conferência</h1>
           </div>
-          <div className="flex gap-2">
-            {divergentItems.length > 0 && (
+            <div className="flex gap-2">
+              {divergentItems.length > 0 && (
+                <button
+                  onClick={handleRecountAllDivergences}
+                  className={`border px-4 py-2 rounded-lg text-sm font-medium transition flex items-center shadow-sm ${pendingItems.length > 0
+                    ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
+                    : 'bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-200'
+                    }`}
+                  title={pendingItems.length > 0 ? "Termine os itens pendentes antes de recontar" : "Iniciar recontagem"}
+                >
+                  {pendingItems.length > 0 && <Ban className="w-4 h-4 mr-2" />}
+                  {!pendingItems.length && <RefreshCw className="w-4 h-4 mr-2" />}
+                  Recontar Todas as Divergências
+                </button>
+              )}
               <button
-                onClick={handleRecountAllDivergences}
-                className={`border px-4 py-2 rounded-lg text-sm font-medium transition flex items-center shadow-sm ${pendingItems.length > 0
-                  ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
-                  : 'bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-200'
+                onClick={handleFinalize}
+                disabled={isFinalizeBlocked || isSavingStockReport}
+                className={`px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm flex items-center ${isFinalizeBlocked || isSavingStockReport
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed hover:bg-gray-300'
+                  : 'bg-green-600 text-white hover:bg-green-700'
                   }`}
-                title={pendingItems.length > 0 ? "Termine os itens pendentes antes de recontar" : "Iniciar recontagem"}
+                title={isFinalizeBlocked ? "Conclua todas as pendências e recontagens para liberar" : (isSavingStockReport ? "Salvando relatório..." : "Gerar Relatório Final")}
               >
-                {pendingItems.length > 0 && <Ban className="w-4 h-4 mr-2" />}
-                {!pendingItems.length && <RefreshCw className="w-4 h-4 mr-2" />}
-                Recontar Todas as Divergências
+                {!isSavingStockReport && (isFinalizeBlocked ? <Lock className="w-4 h-4 mr-2" /> : <Unlock className="w-4 h-4 mr-2" />)}
+                {isSavingStockReport ? 'Salvando relatório...' : 'Finalizar e Gerar Relatório'}
               </button>
-            )}
-            <button
-              onClick={handleFinalize}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition shadow-sm flex items-center ${isFinalizeBlocked
-                ? 'bg-gray-300 text-gray-500 cursor-not-allowed hover:bg-gray-300'
-                : 'bg-green-600 text-white hover:bg-green-700'
-                }`}
-              title={isFinalizeBlocked ? "Conclua todas as pendências e recontagens para liberar" : "Gerar Relatório Final"}
-            >
-              {isFinalizeBlocked ? <Lock className="w-4 h-4 mr-2" /> : <Unlock className="w-4 h-4 mr-2" />}
-              Finalizar e Gerar Relatório
-            </button>
-          </div>
-        </header>
+            </div>
+          </header>
 
         <main className="flex-1 overflow-y-auto p-6 max-w-6xl mx-auto w-full">
 
@@ -1148,8 +1401,8 @@ export const StockConference = () => {
                     Itens Pendentes ({pendingItems.length})
                   </h2>
                   <button
-                    onClick={handleZeroPending}
-                    className="text-xs font-bold text-orange-700 bg-white border border-orange-200 px-3 py-1.5 rounded hover:bg-orange-100 transition flex items-center"
+                      disabled
+                      className="text-xs font-bold text-orange-400 bg-gray-200 border border-gray-100 px-3 py-1.5 rounded cursor-not-allowed flex items-center"
                   >
                     <Eraser className="w-3 h-3 mr-1" />
                     Zerar Pendentes (Finalizar 1ª Fase)

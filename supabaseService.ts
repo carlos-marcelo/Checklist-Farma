@@ -54,6 +54,56 @@ export interface DbReport {
   created_at?: string;
 }
 
+export interface DbStockConferenceSession {
+  id?: string;
+  user_email: string;
+  branch: string;
+  pharmacist: string;
+  manager: string;
+  step: 'setup' | 'conference' | 'divergence' | 'report';
+  products: {
+    reduced_code: string;
+    barcode?: string | null;
+    description?: string | null;
+  }[];
+  inventory: {
+    reduced_code: string;
+    system_qty: number;
+    counted_qty: number;
+    status: 'pending' | 'matched' | 'divergent';
+    last_updated?: string | null;
+  }[];
+  recount_targets?: string[];
+  updated_at?: string;
+}
+
+export interface DbStockConferenceReport {
+  id?: string;
+  user_email: string;
+  user_name: string;
+  branch: string;
+  pharmacist: string;
+  manager: string;
+  summary: {
+    total: number;
+    matched: number;
+    divergent: number;
+    pending: number;
+    percent: number;
+  };
+  items: {
+    reduced_code: string;
+    barcode?: string | null;
+    description?: string | null;
+    system_qty: number;
+    counted_qty: number;
+    status: 'pending' | 'matched' | 'divergent';
+    difference: number;
+    last_updated?: string | null;
+  }[];
+  created_at?: string;
+}
+
 export interface DbDraft {
   id?: string;
   user_email: string;
@@ -318,6 +368,45 @@ export async function createReport(report: DbReport): Promise<DbReport | null> {
   }
 }
 
+export async function fetchStockConferenceReports(): Promise<DbStockConferenceReport[]> {
+  try {
+    const { data, error } = await supabase
+      .from('stock_conference_reports')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching stock conference reports:', error);
+    return [];
+  }
+}
+
+export async function createStockConferenceReport(report: DbStockConferenceReport): Promise<DbStockConferenceReport | null> {
+  try {
+    const { data, error } = await supabase
+      .from('stock_conference_reports')
+      .insert([{
+        user_email: report.user_email,
+        user_name: report.user_name,
+        branch: report.branch,
+        pharmacist: report.pharmacist,
+        manager: report.manager,
+        summary: report.summary,
+        items: report.items
+      }])
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error creating stock conference report:', error);
+    return null;
+  }
+}
+
 // Check if a similar report already exists to avoid duplicates
 export async function reportExists(report: DbReport): Promise<boolean> {
   try {
@@ -352,6 +441,66 @@ export async function deleteReport(id: string): Promise<boolean> {
     return true;
   } catch (error) {
     console.error('Error deleting report:', error);
+    return false;
+  }
+}
+
+export async function fetchStockConferenceSession(userEmail: string): Promise<DbStockConferenceSession | null> {
+  try {
+    const { data, error } = await supabase
+      .from('stock_conference_sessions')
+      .select('*')
+      .eq('user_email', userEmail)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error fetching stock conference session:', error);
+    return null;
+  }
+}
+
+export async function upsertStockConferenceSession(session: DbStockConferenceSession): Promise<DbStockConferenceSession | null> {
+  try {
+    const { data, error } = await supabase
+      .from('stock_conference_sessions')
+      .upsert([{
+        id: session.id,
+        user_email: session.user_email,
+        branch: session.branch,
+        pharmacist: session.pharmacist,
+        manager: session.manager,
+        step: session.step,
+        products: session.products,
+        inventory: session.inventory,
+        recount_targets: session.recount_targets || [],
+        updated_at: session.updated_at || new Date().toISOString()
+      }], { onConflict: 'id' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error upserting stock conference session:', error);
+    return null;
+  }
+}
+
+export async function deleteStockConferenceSession(userEmail: string): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('stock_conference_sessions')
+      .delete()
+      .eq('user_email', userEmail);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error deleting stock conference session:', error);
     return false;
   }
 }

@@ -45,6 +45,21 @@ interface ReportHistoryItem {
     ignoredChecklists: string[]; // IDs
 }
 
+interface StockConferenceHistoryItem {
+    id: string;
+    userEmail: string;
+    userName: string;
+    branch: string;
+    pharmacist: string;
+    manager: string;
+    total: number;
+    matched: number;
+    divergent: number;
+    pending: number;
+    percent: number;
+    createdAt: string;
+}
+
 interface CompanyArea {
     name: string;
     branches: string[];
@@ -101,6 +116,26 @@ const THEMES: Record<ThemeColor, {
         button: 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 shadow-lg shadow-amber-200',
         accent: 'border-amber-500'
     },
+};
+
+const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceReport[]): StockConferenceHistoryItem[] => {
+    return reports.map(rep => {
+        const summary = rep.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
+        return {
+            id: rep.id || `${rep.user_email}_${rep.created_at || Date.now()}`,
+            userEmail: rep.user_email,
+            userName: rep.user_name,
+            branch: rep.branch,
+            pharmacist: rep.pharmacist,
+            manager: rep.manager,
+            total: summary.total,
+            matched: summary.matched,
+            divergent: summary.divergent,
+            pending: summary.pending,
+            percent: summary.percent,
+            createdAt: rep.created_at || new Date().toISOString()
+        };
+    });
 };
 
 // --- FALLBACK USERS (usado apenas se Supabase falhar) ---
@@ -644,9 +679,13 @@ const App: React.FC = () => {
 
     // History State
     const [reportHistory, setReportHistory] = useState<ReportHistoryItem[]>([]);
+    const [stockConferenceHistory, setStockConferenceHistory] = useState<StockConferenceHistoryItem[]>([]);
     const [viewHistoryItem, setViewHistoryItem] = useState<ReportHistoryItem | null>(null);
     const [historyFilterUser, setHistoryFilterUser] = useState<string>('all');
     const [isSaving, setIsSaving] = useState(false);
+    const [stockConferenceHistory, setStockConferenceHistory] = useState<StockConferenceHistoryItem[]>([]);
+    const [stockConferenceReportsRaw, setStockConferenceReportsRaw] = useState<SupabaseService.DbStockConferenceReport[]>([]);
+    const [viewingStockConferenceReport, setViewingStockConferenceReport] = useState<SupabaseService.DbStockConferenceReport | null>(null);
 
     // Master User Management State
     const [newUserName, setNewUserName] = useState('');
@@ -714,6 +753,11 @@ const App: React.FC = () => {
 
     // --- PERSISTENCE & INIT EFFECTS ---
 
+    const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceReport[]) => {
+        setStockConferenceHistory(mapStockConferenceReports(reports));
+        setStockConferenceReportsRaw(reports);
+    };
+
     // MAIN INITIALIZATION - Load all data from Supabase on mount (was cut off, restoring generic structure found in previous views)
     useEffect(() => {
         const initializeData = async () => {
@@ -756,6 +800,8 @@ const App: React.FC = () => {
                         ignoredChecklists: r.ignored_checklists
                     })));
                 }
+                const dbStockReports = await SupabaseService.fetchStockConferenceReports();
+                handleStockReportsLoaded(dbStockReports);
 
                 // 4. Load Companies
                 const dbCompanies = await SupabaseService.fetchCompanies();
@@ -1729,7 +1775,9 @@ const App: React.FC = () => {
                     signatures: r.signatures || {},
                     ignoredChecklists: r.ignored_checklists || []
                 }));
-                setReportHistory(formattedReports);
+                    setReportHistory(formattedReports);
+                    const dbStockReports = await SupabaseService.fetchStockConferenceReports();
+                    setStockConferenceHistory(mapStockConferenceReports(dbStockReports));
                 setCurrentView('history');
                 setIsSaving(false);
                 return;
@@ -1773,6 +1821,8 @@ const App: React.FC = () => {
                 ignoredChecklists: r.ignored_checklists || []
             }));
             setReportHistory(formattedReports);
+            const dbStockReports = await SupabaseService.fetchStockConferenceReports();
+            setStockConferenceHistory(mapStockConferenceReports(dbStockReports));
             console.log('✅ Relatórios atualizados:', formattedReports.length, 'itens');
 
             // Clear Draft from state
@@ -1815,6 +1865,8 @@ const App: React.FC = () => {
                     ignoredChecklists: r.ignored_checklists || []
                 }));
                 setReportHistory(formattedReports);
+                const dbStockReports = await SupabaseService.fetchStockConferenceReports();
+                setStockConferenceHistory(mapStockConferenceReports(dbStockReports));
                 setCurrentView('history');
             } catch (reloadError) {
                 console.error('❌ Erro ao recarregar relatórios:', reloadError);
@@ -2421,7 +2473,7 @@ const App: React.FC = () => {
                     {/* --- STOCK CONFERENCE VIEW --- */}
                     {currentView === 'stock' && (
                         <div className="h-full animate-fade-in relative pb-24">
-                            <StockConference />
+                            <StockConference userEmail={currentUser?.email || ''} userName={currentUser?.name || ''} />
                         </div>
                     )}
 
@@ -4442,6 +4494,8 @@ const App: React.FC = () => {
                                                     ignoredChecklists: r.ignored_checklists || []
                                                 }));
                                                 setReportHistory(formattedReports);
+                                                const dbStockReports = await SupabaseService.fetchStockConferenceReports();
+                                                setStockConferenceHistory(mapStockConferenceReports(dbStockReports));
                                                 console.log('✅ Relatórios recarregados:', formattedReports.length);
                                                 alert(`Atualizado! ${formattedReports.length} relatório(s) encontrado(s).`);
                                             } catch (error) {
@@ -4538,6 +4592,66 @@ const App: React.FC = () => {
                                         </tbody>
                                     </table>
                                 </div>
+                            </div>
+                            <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
+                                <div className="flex items-center justify-between mb-6">
+                                    <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">
+                                        <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
+                                            <Package size={24} className={currentTheme.text} />
+                                        </div>
+                                        Histórico de Conferências de Estoque
+                                    </h2>
+                                </div>
+                                {stockConferenceHistory.length === 0 ? (
+                                    <div className="text-center py-12 text-sm text-gray-500">
+                                        Nenhuma conferência de estoque registrada ainda.
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4">
+                                        {stockConferenceHistory.map(item => {
+                                            const createdDate = new Date(item.createdAt);
+                                            return (
+                                                <div key={item.id} className="border border-gray-100 rounded-2xl p-4 shadow-sm bg-white">
+                                                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                                        <div>
+                                                            <p className="text-xs uppercase tracking-widest text-gray-400">Filial</p>
+                                                            <p className="text-base font-bold text-gray-800">{item.branch}</p>
+                                                            <p className="text-xs text-gray-500 mt-1">
+                                                                {createdDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })} às {createdDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                            </p>
+                                                        </div>
+                                                        <div className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[11px] font-bold">
+                                                            {Math.round(item.percent)}% concluído
+                                                        </div>
+                                                    </div>
+                                                    <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-center text-sm">
+                                                        <div className="bg-gray-50 rounded-xl py-3 border border-gray-100">
+                                                            <p className="text-[10px] uppercase text-gray-400">Total</p>
+                                                            <p className="text-lg font-bold text-gray-800">{item.total}</p>
+                                                        </div>
+                                                        <div className="bg-green-50 rounded-xl py-3 border border-green-100">
+                                                            <p className="text-[10px] uppercase text-green-500">Corretos</p>
+                                                            <p className="text-lg font-bold text-green-700">{item.matched}</p>
+                                                        </div>
+                                                        <div className="bg-red-50 rounded-xl py-3 border border-red-100">
+                                                            <p className="text-[10px] uppercase text-red-500">Divergentes</p>
+                                                            <p className="text-lg font-bold text-red-600">{item.divergent}</p>
+                                                        </div>
+                                                        <div className="bg-yellow-50 rounded-xl py-3 border border-yellow-100">
+                                                            <p className="text-[10px] uppercase text-yellow-600">Pendente</p>
+                                                            <p className="text-lg font-bold text-yellow-700">{item.pending}</p>
+                                                        </div>
+                                                    </div>
+                                                    <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-gray-500">
+                                                        <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Responsável: {item.userName}</span>
+                                                        <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Farmacêutico: {item.pharmacist}</span>
+                                                        <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Gestor: {item.manager}</span>
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
