@@ -169,6 +169,16 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
         return aOrder - bOrder;
     });
 
+    useEffect(() => {
+        const handleKey = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                onClose();
+            }
+        };
+        window.addEventListener('keydown', handleKey);
+        return () => window.removeEventListener('keydown', handleKey);
+    }, [onClose]);
+
     const exportCSV = () => {
         const headers = 'Codigo Reduzido;Descricao;Estoque Sistema;Contagem;Diferenca;Status\n';
         const rows = sortedItems.map(item => {
@@ -271,19 +281,25 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
         <div className="fixed inset-0 z-[70] flex items-center justify-center px-4 py-6">
             <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
             <div className="relative z-10 w-full max-w-[calc(100vw-2rem)] lg:max-w-[calc(100vw-20rem-2rem)] max-h-[90vh] overflow-y-auto rounded-3xl bg-white border border-gray-100 shadow-2xl lg:ml-72">
-                <div className="flex items-start justify-between gap-4 px-6 py-4 border-b border-gray-100">
-                    <div>
-                        <p className="text-xs uppercase tracking-widest text-gray-400 mb-1">Conferência de Estoque</p>
-                        <h3 className="text-xl font-bold text-gray-900">{report.branch || 'Filial não informada'}</h3>
-                        <p className="text-sm text-gray-500">
-                            {report.pharmacist || 'Farmacêutico não informado'} · {report.manager || 'Gestor não informado'}
-                        </p>
-                        <p className="text-xs text-gray-400 mt-1">
-                            {createdAt.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })} às {createdAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                        </p>
-                        <p className="text-xs text-gray-400">Registrado por {report.userName || report.user_email}</p>
+                <div className="relative border-b border-gray-100">
+                    <div className="flex items-start justify-between gap-4 px-6 py-4">
+                        <div>
+                            <p className="text-xs uppercase tracking-widest text-gray-400 mb-1">Conferência de Estoque</p>
+                            <h3 className="text-xl font-bold text-gray-900">{report.branch || 'Filial não informada'}</h3>
+                            <p className="text-sm text-gray-500">
+                                {report.pharmacist || 'Farmacêutico não informado'} · {report.manager || 'Gestor não informado'}
+                            </p>
+                            <p className="text-xs text-gray-400 mt-1">
+                                {createdAt.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })} às {createdAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                            <p className="text-xs text-gray-400">Registrado por {report.userName || report.user_email}</p>
+                        </div>
                     </div>
-                    <button onClick={onClose} className="text-gray-400 hover:text-gray-600 rounded-full p-2 transition">
+                    <button
+                        onClick={onClose}
+                        className="absolute top-3 right-3 h-10 w-10 rounded-full bg-white text-gray-500 hover:text-gray-800 shadow-md flex items-center justify-center transition"
+                        aria-label="Fechar visualização"
+                    >
                         <X size={20} />
                     </button>
                 </div>
