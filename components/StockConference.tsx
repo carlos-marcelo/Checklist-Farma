@@ -532,6 +532,37 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
     }
   };
 
+  const resetConferenceState = () => {
+    setMasterProducts(new Map());
+    setBarcodeIndex(new Map());
+    setInventory(new Map());
+    setRecountTargets(new Set());
+    setActiveItem(null);
+    setLastScanned(null);
+    setAccumulationMode(false);
+    setScanInput('');
+    setCountInput('');
+    setSessionId(null);
+    setProductFile(null);
+    setStockFile(null);
+    setIsControlledStock(false);
+    setErrorMsg('');
+    manualSessionStartedRef.current = false;
+  };
+
+  const handleRestartSession = async () => {
+    if (!window.confirm('Atenção: recomeçar a contagem perderá todos os itens bipados. Deseja continuar?')) {
+      return;
+    }
+
+    resetConferenceState();
+    clearLocalStockSession(userEmail || '');
+    if (userEmail) {
+      void SupabaseService.deleteStockConferenceSession(userEmail);
+    }
+
+    setStep('setup');
+  };
 
   // --- Handlers: File Upload ---
 
@@ -1090,13 +1121,24 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
             </div>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={() => setStep('divergence')}
-              className="bg-indigo-50 text-indigo-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-100 transition border border-indigo-200 whitespace-nowrap"
-            >
-              Ver Conferência
-            </button>
+          <div className="flex flex-col items-end space-y-1">
+            <div className="flex items-center space-x-2">
+              <button
+                onClick={handleRestartSession}
+                className="bg-red-50 text-red-600 border border-red-200 px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wide hover:bg-red-100 transition disabled:opacity-70"
+              >
+                Recomeçar contagem
+              </button>
+              <button
+                onClick={() => setStep('divergence')}
+                className="bg-indigo-50 text-indigo-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-100 transition border border-indigo-200 whitespace-nowrap"
+              >
+                Ver Conferência
+              </button>
+            </div>
+            <p className="text-[10px] text-red-500 uppercase tracking-wide">
+              Aviso: tudo que foi bipado será perdido ao reiniciar.
+            </p>
           </div>
         </header>
 
