@@ -1318,27 +1318,44 @@ const recountPendingList = useMemo(() => {
     const isRecountBlocking = divergentItems.length > 0 && !stats.isRecount;
     const isFinalizeBlocked = isPendingBlocking || isRecountBlocking;
 
+    const handleReturnToConference = () => {
+      setStep('conference');
+      setActiveItem(null);
+      setScanInput('');
+      setTimeout(() => inputRef.current?.focus(), 50);
+    };
+
     return (
       <div className="flex flex-col h-full bg-gray-50">
-        <header className="bg-white shadow-sm p-4 flex justify-between items-center">
-          <div className="flex items-center">
-            <button onClick={() => setStep('conference')} className="mr-4 p-2 hover:bg-gray-100 rounded-full transition">
-              <RotateCcw className="w-5 h-5 text-gray-600" />
-            </button>
-            <h1 className="font-bold text-gray-800">Fase 2: Divergências & Conferência</h1>
-          </div>
-            <div className="flex gap-2">
+        <header className="bg-white shadow-sm p-4">
+          <div className="flex flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleReturnToConference}
+                  className="flex items-center gap-2 rounded-2xl px-4 py-2 bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-semibold shadow-lg hover:from-indigo-700 hover:to-blue-700 transition"
+                >
+                  <RotateCcw className="w-5 h-5" />
+                  Voltar para Contagem
+                </button>
+                <h1 className="font-bold text-gray-800 text-lg">Fase 2: Divergências & Conferência</h1>
+              </div>
+              <p className="text-xs text-gray-500 max-w-xl">
+                Este botão leva de volta à etapa de conferência para ajustar manualmente os itens com divergência antes de finalizar.
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               {divergentItems.length > 0 && (
                 <button
                   onClick={handleRecountAllDivergences}
-                  className={`border px-4 py-2 rounded-lg text-sm font-medium transition flex items-center shadow-sm ${pendingItems.length > 0
+                  className={`flex items-center gap-2 rounded-2xl border px-4 py-2 text-sm font-bold transition shadow-lg ${pendingItems.length > 0
                     ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
-                    : 'bg-orange-100 text-orange-700 border-orange-200 hover:bg-orange-200'
+                    : 'bg-gradient-to-r from-amber-500 to-amber-600 text-white border-transparent hover:from-amber-600 hover:to-amber-700'
                     }`}
                   title={pendingItems.length > 0 ? "Termine os itens pendentes antes de recontar" : "Iniciar recontagem"}
                 >
-                  {pendingItems.length > 0 && <Ban className="w-4 h-4 mr-2" />}
-                  {!pendingItems.length && <RefreshCw className="w-4 h-4 mr-2" />}
+                  {!pendingItems.length ? <RefreshCw className="w-4 h-4" /> : <Ban className="w-4 h-4" />}
                   Recontar Todas as Divergências
                 </button>
               )}
@@ -1355,7 +1372,8 @@ const recountPendingList = useMemo(() => {
                 {isSavingStockReport ? 'Salvando relatório...' : 'Finalizar e Gerar Relatório'}
               </button>
             </div>
-          </header>
+          </div>
+        </header>
 
         <main className="flex-1 overflow-y-auto p-6 max-w-6xl mx-auto w-full">
 
