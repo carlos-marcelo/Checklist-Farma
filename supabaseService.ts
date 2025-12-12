@@ -464,6 +464,7 @@ export async function fetchStockConferenceSession(userEmail: string): Promise<Db
 }
 
 export async function upsertStockConferenceSession(session: DbStockConferenceSession): Promise<DbStockConferenceSession | null> {
+  // console.log('🔄 Attempting to upsert stock session:', session.id, 'for user:', session.user_email);
   try {
     const { data, error } = await supabase
       .from('stock_conference_sessions')
@@ -478,14 +479,18 @@ export async function upsertStockConferenceSession(session: DbStockConferenceSes
         inventory: session.inventory,
         recount_targets: session.recount_targets || [],
         updated_at: session.updated_at || new Date().toISOString()
-      }], { onConflict: 'id' })
+      }], { onConflict: 'user_email' })
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      console.error('❌ Supabase Upsert Error:', error);
+      throw error;
+    }
+    // console.log('✅ Stock session persisted to Supabase:', data?.id);
     return data;
   } catch (error) {
-    console.error('Error upserting stock conference session:', error);
+    console.error('❌ Error upserting stock conference session:', error);
     return null;
   }
 }

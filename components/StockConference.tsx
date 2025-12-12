@@ -374,21 +374,21 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
     };
   }, [inventory, recountTargets]);
 
-const recountPendingList = useMemo(() => {
-  if (!stats.isRecount) return [];
-  const list: { code: string, barcode: string, desc: string }[] = [];
-  recountTargets.forEach(key => {
-    const item = inventory.get(key);
-    if (item && item.lastUpdated === null) {
-      const prod = masterProducts.get(key);
-      list.push({
-        code: key,
-        barcode: prod?.barcode || '-',
-        desc: prod?.description || key
-      });
-    }
-  });
-  return list;
+  const recountPendingList = useMemo(() => {
+    if (!stats.isRecount) return [];
+    const list: { code: string, barcode: string, desc: string }[] = [];
+    recountTargets.forEach(key => {
+      const item = inventory.get(key);
+      if (item && item.lastUpdated === null) {
+        const prod = masterProducts.get(key);
+        list.push({
+          code: key,
+          barcode: prod?.barcode || '-',
+          desc: prod?.description || key
+        });
+      }
+    });
+    return list;
   }, [inventory, recountTargets, stats.isRecount, masterProducts]);
 
   const restoreSessionFromData = (session: SupabaseService.DbStockConferenceSession): boolean => {
@@ -433,6 +433,7 @@ const recountPendingList = useMemo(() => {
     setSessionId(session.id || null);
     manualSessionStartedRef.current = true;
 
+    console.log('✅ Session restored from data:', { id: session.id, products: prodMap.size, inventory: inventoryMap.size });
     return true;
   };
 
@@ -470,10 +471,19 @@ const recountPendingList = useMemo(() => {
     productOverride?: Map<string, Product>;
     recountOverride?: Set<string>;
   }) => {
-    if (!userEmail) return;
+    if (!userEmail) {
+      console.error('❌ persistSession blocked: userEmail is missing.');
+      return;
+    }
     const productSource = options?.productOverride || masterProducts;
     const inventorySource = options?.inventoryOverride || inventory;
-    if (productSource.size === 0 && inventorySource.size === 0) return;
+
+    // Allow saving empty session if step implies we are setting up, or prevent saving nothing?
+    // If clearing, we might want to save an empty state. But here we check size > 0.
+    if (productSource.size === 0 && inventorySource.size === 0) {
+      console.warn('⚠️ persistSession ignored: No products or inventory to save.');
+      return;
+    }
 
     const now = new Date().toISOString();
     const payload: SupabaseService.DbStockConferenceSession = {
@@ -500,23 +510,25 @@ const recountPendingList = useMemo(() => {
     };
     saveLocalStockSession(userEmail, payload);
 
-    console.debug('Persistindo sessão de conferência de estoque', {
-      userEmail,
-      step: payload.step,
-      inventoryItems: payload.inventory.length,
-      products: payload.products.length
+    console.log('🔄 Persisting stock session...', {
+      email: userEmail,
+      id: sessionId,
+      products: payload.products.length,
+      inventory: payload.inventory.length
     });
 
     try {
       const saved = await SupabaseService.upsertStockConferenceSession(payload);
       if (saved?.id) {
         setSessionId(saved.id);
+        console.log('✅ Stock session saved to Supabase! ID:', saved.id);
       } else {
-        console.warn('Sessão de estoque gravada sem id retornado pelo Supabase', saved);
+        console.warn('⚠️ Session saved but no ID returned (check network/RSL).', saved);
       }
     } catch (error) {
-      console.error('Erro ao persistir sessão de conferência:', error);
-      console.error('Payload enviado durante o erro:', payload);
+      console.error('❌ Error persisting session to Supabase:', error);
+      // Optional: alert user only on critical failure? 
+      // alert('Aviso: Falha ao salvar progresso na nuvem. Verifique sua conexão.');
     }
   };
 
@@ -1452,8 +1464,8 @@ const recountPendingList = useMemo(() => {
                     Itens Pendentes ({pendingItems.length})
                   </h2>
                   <button
-                      disabled
-                      className="text-xs font-bold text-orange-400 bg-gray-200 border border-gray-100 px-3 py-1.5 rounded cursor-not-allowed flex items-center"
+                    disabled
+                    className="text-xs font-bold text-orange-400 bg-gray-200 border border-gray-100 px-3 py-1.5 rounded cursor-not-allowed flex items-center"
                   >
                     <Eraser className="w-3 h-3 mr-1" />
                     Zerar Pendentes (Finalizar 1ª Fase)
