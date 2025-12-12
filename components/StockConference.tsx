@@ -52,9 +52,34 @@ const loadLocalStockSession = (email: string): SupabaseService.DbStockConference
 const saveLocalStockSession = (email: string, session: SupabaseService.DbStockConferenceSession) => {
   if (typeof window === 'undefined' || !email) return;
   try {
+    // Limpar outras sessões antigas para liberar espaço
+    const allKeys = Object.keys(window.localStorage);
+    allKeys.forEach(key => {
+      if (key.startsWith(LOCAL_STOCK_SESSION_PREFIX) && key !== buildLocalSessionKey(email)) {
+        window.localStorage.removeItem(key);
+      }
+    });
+
     window.localStorage.setItem(buildLocalSessionKey(email), JSON.stringify(session));
   } catch (error) {
-    console.error('Erro ao salvar sessão local de conferência:', error);
+    console.error('❌ Erro ao salvar sessão local:', error);
+    // Se falhar por quota, tentar limpar tudo e salvar novamente
+    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+      try {
+        // Limpar TODAS as sessões de estoque antigas
+        const allKeys = Object.keys(window.localStorage);
+        allKeys.forEach(key => {
+          if (key.startsWith(LOCAL_STOCK_SESSION_PREFIX)) {
+            window.localStorage.removeItem(key);
+          }
+        });
+        // Tentar salvar novamente
+        window.localStorage.setItem(buildLocalSessionKey(email), JSON.stringify(session));
+        console.log('✅ Sessão salva após limpeza de espaço');
+      } catch (retryError) {
+        console.error('❌ Falha mesmo após limpeza:', retryError);
+      }
+    }
   }
 };
 
@@ -330,6 +355,7 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
   const inputRef = useRef<HTMLInputElement>(null);
   const countRef = useRef<HTMLInputElement>(null);
   const [isSavingStockReport, setIsSavingStockReport] = useState(false);
+  const [isSavingSession, setIsSavingSession] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const manualSessionStartedRef = useRef(false);
 
@@ -339,6 +365,21 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
     // Re-initialize icons when component updates significantly
     if ((window as any).lucide) (window as any).lucide.createIcons();
   }, [step, activeItem]);
+
+  // Auto-save session periodically during conference
+  useEffect(() => {
+    if (step !== 'conference' && step !== 'divergence') return;
+    if (!userEmail) return;
+    if (masterProducts.size === 0 || inventory.size === 0) return;
+
+    // Save every 30 seconds
+    const interval = setInterval(() => {
+      console.log('⏰ Auto-saving session...');
+      void persistSession();
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [step, userEmail, masterProducts.size, inventory.size]);
 
   // --- Calculations (Memoized for performance and Hook Stability) ---
 
@@ -438,23 +479,54 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
   };
 
   useEffect(() => {
-    if (!userEmail) return;
+    if (!userEmail) {
+      console.log('⚠️ No userEmail, skipping session load');
+      return;
+    }
+
     let isMounted = true;
     const loadSession = async () => {
-      if (manualSessionStartedRef.current) return;
-      try {
-        const session = await SupabaseService.fetchStockConferenceSession(userEmail);
-        if (!isMounted || !session) return;
-        const restored = restoreSessionFromData(session);
-        if (restored) return;
-      } catch (error) {
-        console.error('Erro ao restaurar sessão de conferência:', error);
+      console.log('🔍 Attempting to load session for:', userEmail, 'manualStarted:', manualSessionStartedRef.current);
+
+      if (manualSessionStartedRef.current) {
+        console.log('⏭️ Skipping load - manual session already started');
+        return;
       }
 
-      if (manualSessionStartedRef.current) return;
-      const localSession = loadLocalStockSession(userEmail);
-      if (localSession) {
-        restoreSessionFromData(localSession);
+      // Try Supabase first
+      try {
+        console.log('📡 Fetching session from Supabase...');
+        const session = await SupabaseService.fetchStockConferenceSession(userEmail);
+
+        if (!isMounted) {
+          console.log('⚠️ Component unmounted, aborting');
+          return;
+        }
+
+        if (session) {
+          console.log('✅ Session found in Supabase:', session.id);
+          const restored = restoreSessionFromData(session);
+          if (restored) {
+            console.log('✅ Session successfully restored from Supabase');
+            return;
+          }
+        } else {
+          console.log('⚠️ No session found in Supabase');
+        }
+      } catch (error) {
+        console.error('❌ Error loading session from Supabase:', error);
+      }
+
+      // Try LocalStorage as fallback
+      if (!manualSessionStartedRef.current) {
+        console.log('💾 Trying LocalStorage fallback...');
+        const localSession = loadLocalStockSession(userEmail);
+        if (localSession) {
+          console.log('✅ Session found in LocalStorage');
+          restoreSessionFromData(localSession);
+        } else {
+          console.log('⚠️ No session found in LocalStorage either');
+        }
       }
     };
 
@@ -485,6 +557,7 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
       return;
     }
 
+    setIsSavingSession(true);
     const now = new Date().toISOString();
     const payload: SupabaseService.DbStockConferenceSession = {
       id: sessionId || undefined,
@@ -492,12 +565,12 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
       branch: branch || 'Filial não informada',
       pharmacist: pharmacist || 'Farmacêutico não informado',
       manager: manager || 'Gestor não informado',
-      products: Array.from(productSource.values()).map(prod => ({
+      products: Array.from(productSource.values()).map((prod: Product) => ({
         reduced_code: prod.reducedCode,
         barcode: prod.barcode || null,
         description: prod.description || null
       })),
-      inventory: Array.from(inventorySource.values()).map(item => ({
+      inventory: Array.from(inventorySource.values()).map((item: StockItem) => ({
         reduced_code: item.reducedCode,
         system_qty: item.systemQty,
         counted_qty: item.countedQty,
@@ -508,9 +581,12 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
       step: options?.step || step,
       updated_at: now
     };
-    saveLocalStockSession(userEmail, payload);
 
-    console.log('🔄 Persisting stock session...', {
+    // Save to LocalStorage first (always works)
+    saveLocalStockSession(userEmail, payload);
+    console.log('💾 Session saved to LocalStorage');
+
+    console.log('🔄 Persisting stock session to Supabase...', {
       email: userEmail,
       id: sessionId,
       products: payload.products.length,
@@ -523,12 +599,18 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
         setSessionId(saved.id);
         console.log('✅ Stock session saved to Supabase! ID:', saved.id);
       } else {
-        console.warn('⚠️ Session saved but no ID returned (check network/RSL).', saved);
+        console.error('❌ Supabase returned null - check error details');
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('❌ Error persisting session to Supabase:', error);
-      // Optional: alert user only on critical failure? 
-      // alert('Aviso: Falha ao salvar progresso na nuvem. Verifique sua conexão.');
+      console.error('Error details:', {
+        message: error?.message,
+        details: error?.details,
+        hint: error?.hint,
+        code: error?.code
+      });
+    } finally {
+      setIsSavingSession(false);
     }
   };
 
@@ -769,7 +851,7 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
     }
   };
 
-  const applyAccumulation = (product: Product) => {
+  const applyAccumulation = async (product: Product) => {
     const currentStock = inventory.get(product.reducedCode);
     if (!currentStock) return;
 
@@ -789,10 +871,12 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
     setInventory(updatedInventory);
     setLastScanned({ item: updatedItem, product });
     playAccumulationBeep();
-    void persistSession({ inventoryOverride: updatedInventory, step: 'conference' });
+
+    // Auto-save after accumulation
+    await persistSession({ inventoryOverride: updatedInventory, step: 'conference' });
   };
 
-  const handleQuantitySubmit = (e: React.FormEvent) => {
+  const handleQuantitySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeItem) return;
 
@@ -820,8 +904,11 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
 
     setActiveItem(null);
     setCountInput('');
+
+    // Auto-save after each item counted
+    await persistSession({ inventoryOverride: updatedInventory, step: 'conference' });
+
     setTimeout(() => inputRef.current?.focus(), 50);
-    void persistSession({ inventoryOverride: updatedInventory, step: 'conference' });
   };
 
   const handleZeroPending = () => {
@@ -1118,6 +1205,20 @@ export const StockConference = ({ userEmail, userName }: StockConferenceProps) =
               >
                 {stats.percent > 10 && `${stats.percent}%`}
               </div>
+            </div>
+            {/* Auto-save indicator */}
+            <div className="flex items-center justify-end mt-1">
+              {isSavingSession ? (
+                <span className="text-[10px] text-blue-600 flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  Salvando...
+                </span>
+              ) : sessionId ? (
+                <span className="text-[10px] text-green-600 flex items-center gap-1">
+                  <CheckCircle className="w-3 h-3" />
+                  Salvo automaticamente
+                </span>
+              ) : null}
             </div>
           </div>
 
