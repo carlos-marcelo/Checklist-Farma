@@ -444,16 +444,14 @@ const Logo = ({ config, large = false, companies = [], selectedCompanyId = null 
     // Determine which logo/name to show
     const selectedCompany = companies.find((c: any) => c.id === selectedCompanyId);
 
-    // If no company is selected, FORCE default branding ("Marcelo Far" + System Logo + Slogan, NO custom logo)
-    // If company IS selected, use its logo/name.
+    // If no company is selected, we fall back to the system logo and slogan only.
+    // If a company is selected, use its logo/name.
     const displayLogo = selectedCompany ? (selectedCompany.logo || null) : null;
-    const displayName = selectedCompany ? selectedCompany.name : 'Marcelo Far';
+    const displayName = selectedCompany ? selectedCompany.name : '';
     const showSlogan = !selectedCompanyId; // Always show slogan if no company selected (default state)
 
-    // Divider Logic: Show only if we deviate from the absolute default (No Custom Logo AND Name is 'Marcelo Far')
-    // If we are in default state (!selectedCompanyId), we force displayLogo=null and displayName='Marcelo Far', so divider is hidden.
-    // If company is selected, we likely show divider unless user named their company 'Marcelo Far' and has no logo.
-    const showDivider = !!displayLogo || displayName !== 'Marcelo Far';
+    // Divider Logic: Show only when we actually have a logo or company name to highlight.
+    const showDivider = !!displayLogo || !!displayName;
 
     return (
         <div className="flex items-center gap-3">
@@ -736,7 +734,7 @@ const LoginScreen = ({
                             <MFLogo className="w-full h-full" />
                         </div>
                     </div>
-                    <h1 className="text-3xl font-extrabold text-gray-800 uppercase tracking-wide">Marcelo Far</h1>
+                    <h1 className="text-3xl font-extrabold text-gray-800 uppercase tracking-wide"></h1>
                     <p className="text-gray-500 font-bold tracking-widest text-xs mt-1 uppercase">Gestão & Excelência</p>
                 </div>
 
