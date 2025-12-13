@@ -456,7 +456,7 @@ const Logo = ({ config, large = false, companies = [], selectedCompanyId = null 
     return (
         <div className="flex items-center gap-3">
             {/* System Logo (MF) */}
-            <div className={`relative ${large ? 'w-20 h-20' : 'w-10 h-10'} flex-shrink-0 filter drop-shadow-md`}>
+        <div className={`relative ${large ? 'w-[6.666rem] h-[6.666rem]' : 'w-10 h-10'} flex-shrink-0 filter drop-shadow-md`}>
                 <MFLogo className="w-full h-full" />
             </div>
 
@@ -730,7 +730,7 @@ const LoginScreen = ({
             <div className="bg-white rounded-3xl shadow-floating w-full max-w-lg overflow-hidden relative z-10 border border-gray-100">
                 <div className="pt-10 pb-6 text-center">
                     <div className="flex justify-center mb-4">
-                        <div className="w-20 h-20 filter drop-shadow-md">
+                        <div className="w-[6.666rem] h-[6.666rem] filter drop-shadow-md">
                             <MFLogo className="w-full h-full" />
                         </div>
                     </div>
@@ -2443,7 +2443,7 @@ const App: React.FC = () => {
         return (
             <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center">
                 <div className="text-center">
-                    <div className="w-20 h-20 mx-auto mb-6">
+                    <div className="w-[6.666rem] h-[6.666rem] mx-auto mb-6">
                         <MFLogo className="w-full h-full animate-pulse" />
                     </div>
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
