@@ -414,28 +414,8 @@ const INITIAL_USERS: User[] = [
 
 // Custom MF Shield Logo
 const MFLogo = ({ className = "w-12 h-12" }: { className?: string }) => (
-    <svg viewBox="0 0 100 120" className={className} fill="none" xmlns="http://www.w3.org/2000/svg">
-        <defs>
-            <linearGradient id="gradBlue" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#002b5c" />
-                <stop offset="100%" stopColor="#004a8f" />
-            </linearGradient>
-            <linearGradient id="gradRed" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#8a0000" />
-                <stop offset="100%" stopColor="#cc0000" />
-            </linearGradient>
-        </defs>
-        {/* Shield Background Left (Blue) */}
-        <path d="M50 115 C20 105 5 80 5 30 L50 10 Z" fill="url(#gradBlue)" />
-        {/* Shield Background Right (Red) */}
-        <path d="M50 115 C80 105 95 80 95 30 L50 10 Z" fill="url(#gradRed)" />
-
-        {/* Stylized M (Left Side) */}
-        <path d="M25 40 L25 80 L35 80 L35 55 L50 70 L50 40 L40 40 L40 60 L35 55 L35 40 Z" fill="white" />
-
-        {/* Stylized F (Right Side) */}
-        <path d="M60 40 L60 80 L70 80 L70 65 L80 65 L80 55 L70 55 L70 50 L85 50 L85 40 Z" fill="white" />
-    </svg>
+    // Replace the image file under `public/logos/mf-shield.svg` to swap the logo globally.
+    <img src="/logos/mf-shield.svg" alt="MF Shield" className={className} loading="lazy" />
 );
 
 // Logo Component (Dynamic Dual Display)
