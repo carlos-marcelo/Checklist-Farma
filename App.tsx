@@ -1075,6 +1075,19 @@ const App: React.FC = () => {
     const [newCompanyAreas, setNewCompanyAreas] = useState<CompanyArea[]>([]);
     const [accessMatrix, setAccessMatrix] = useState<Record<AccessLevelId, Record<string, boolean>>>(() => createInitialAccessMatrix());
 
+    const getAccessLevelForRole = (role?: User['role']): AccessLevelId => {
+        if (role === 'MASTER') return 'MASTER';
+        if (role === 'ADMINISTRATIVO') return 'ADMINISTRATIVO';
+        if (role === 'OPERACIONAL') return 'OPERACIONAL';
+        return 'USER';
+    };
+
+    const hasModuleAccess = (moduleId: string, levelOverride?: AccessLevelId): boolean => {
+        const level = levelOverride || getAccessLevelForRole(currentUser?.role);
+        if (level === 'MASTER') return true;
+        return !!accessMatrix[level]?.[moduleId];
+    };
+
 
 
     // Draft Loading
@@ -2563,7 +2576,13 @@ const App: React.FC = () => {
     }
 
     // Determine if we are in "Read Only" mode (History View)
-    const isReadOnly = currentView === 'view_history' || currentUser?.role === 'USER' || currentUser?.role === 'ADMINISTRATIVO';
+    const canControlChecklists = hasModuleAccess('checklistControl');
+    const canEditCompanies = hasModuleAccess('companyEditing');
+    const canManageUsers = hasModuleAccess('userManagement');
+    const canRespondTickets = hasModuleAccess('supportTickets');
+    const canModerateHistory = hasModuleAccess('historyModeration');
+    const canApproveUsers = hasModuleAccess('userApproval');
+    const isReadOnly = currentView === 'view_history' || !canControlChecklists;
 
     // Dynamic Header Logic: Use 'filial' input if available, otherwise default config
     const getDynamicPharmacyName = () => {
@@ -2813,7 +2832,7 @@ const App: React.FC = () => {
                 {/* Main Body */}
                 <main className="flex-1 overflow-y-auto p-4 lg:p-10 z-10 scroll-smooth">
                     {/* Prominent Pending Users Alert at Top */}
-                    {currentUser.role === 'MASTER' && pendingUsersCount > 0 && (
+                    {canApproveUsers && pendingUsersCount > 0 && (
                         <div className="mb-8 bg-red-600 rounded-2xl p-6 text-white shadow-2xl shadow-red-200 relative overflow-hidden group transform hover:-translate-y-1 transition-all max-w-2xl mx-auto">
                             <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/diagonal-stripes.png')] opacity-10"></div>
 
@@ -2948,7 +2967,7 @@ const App: React.FC = () => {
                                     })()}
 
                                     {/* Company Selection Dropdown (MASTER ONLY) */}
-                                    {currentUser.role === 'MASTER' && (
+                                    {canEditCompanies && (
                                         <div>
                                             <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Selecionar Empresa para Editar</label>
                                             <select
@@ -2991,7 +3010,7 @@ const App: React.FC = () => {
                                     )}
 
                                     {/* Editable Company Fields (only show if company is selected AND user is MASTER) */}
-                                    {selectedCompanyId && currentUser.role === 'MASTER' && (
+                                    {selectedCompanyId && canEditCompanies && (
                                         <>
                                             {/* Basic Company Info */}
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -3198,7 +3217,7 @@ const App: React.FC = () => {
                             </div>
 
                             {/* Company Management Section (MASTER only) */}
-                            {currentUser.role === 'MASTER' && (
+                            {canEditCompanies && (
                                 <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
                                     <h2 className="text-xl font-bold text-gray-800 mb-8 flex items-center gap-3 border-b border-gray-100 pb-4">
                                         <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
@@ -3607,7 +3626,7 @@ const App: React.FC = () => {
                             </div>
 
                             {/* Master User Management */}
-                            {currentUser.role === 'MASTER' && (
+                            {canManageUsers && (
                                 <div id="user-management" className="bg-white rounded-2xl shadow-card border border-gray-100 p-8 mt-10">
                                     <h2 className="text-xl font-bold text-gray-800 mb-8 flex items-center gap-3 border-b border-gray-100 pb-4">
                                         <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
@@ -4028,7 +4047,7 @@ const App: React.FC = () => {
                                                 )}
 
                                                 {/* Admin Actions (Master Only) */}
-                                                {currentUser && currentUser.role === 'MASTER' && (
+                                                {canRespondTickets && (
                                                     <div className="mt-4 pt-4 border-t border-gray-100">
                                                         <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Responder / Alterar Status</label>
                                                         <div className="flex gap-2 mb-2">
@@ -4968,7 +4987,7 @@ const App: React.FC = () => {
                                 </div>
 
                                 {/* Filters for Master */}
-                                {currentUser.role === 'MASTER' && (
+                                {canModerateHistory && (
                                     <div className="mb-6 flex items-center gap-4 bg-gray-50 p-4 rounded-xl border border-gray-200">
                                         <Filter size={18} className="text-gray-400" />
                                         <span className="text-sm font-bold text-gray-600">Filtrar Usuário:</span>
@@ -5034,7 +5053,7 @@ const App: React.FC = () => {
                                                                 <Eye size={18} />
                                                             </button>
                                                             {/* ONLY MASTER CAN DELETE */}
-                                                            {currentUser.role === 'MASTER' && (
+                                                            {canModerateHistory && (
                                                                 <button onClick={() => handleDeleteHistoryItem(report.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Excluir">
                                                                     <Trash2 size={18} />
                                                                 </button>
