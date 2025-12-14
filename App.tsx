@@ -2652,7 +2652,7 @@ const App: React.FC = () => {
                     </div>
                 </div>
 
-                <nav className="flex-1 overflow-y-auto py-6 px-4 space-y-2 custom-scrollbar">
+                <nav className="flex-1 overflow-y-auto py-6 px-4 space-y-2 custom-scrollbar pb-32">
                     <div className="px-3 mb-3 text-xs font-bold text-gray-400 uppercase tracking-widest">Checklists (Rascunho)</div>
                     {CHECKLISTS.map(checklist => {
                         const complete = isChecklistComplete(checklist.id);
@@ -2750,7 +2750,7 @@ const App: React.FC = () => {
                     </button>
                 </nav>
 
-                <div className="p-4 border-t border-gray-100">
+                <div className="p-4 border-t border-gray-100 bg-white sticky bottom-0 left-0 right-0 z-10">
                     <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-sm font-semibold text-red-600 hover:bg-red-50 p-3 rounded-xl transition-colors">
                         <LogOut size={18} />
                         Sair do Sistema
