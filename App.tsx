@@ -118,6 +118,93 @@ const THEMES: Record<ThemeColor, {
     },
 };
 
+type AccessLevelId = 'MASTER' | 'ADMINISTRATIVO' | 'OPERACIONAL';
+
+interface AccessModule {
+    id: string;
+    label: string;
+    note?: string;
+}
+
+interface AccessLevelMeta {
+    id: AccessLevelId;
+    title: string;
+    description: string;
+    badgeLabel: string;
+    badgeClasses: string;
+}
+
+const ACCESS_MODULES: AccessModule[] = [
+    {
+        id: 'userApproval',
+        label: 'Aprovar ou recusar usuários',
+        note: 'Painel de pendências e ações rápidas do master que liberam novos cadastros.'
+    },
+    {
+        id: 'userManagement',
+        label: 'Criar e suspender usuários',
+        note: 'Formulário de criação e lista com bloqueios e destruição de acessos internos.'
+    },
+    {
+        id: 'companyEditing',
+        label: 'Editar empresas e áreas',
+        note: 'Seleciona empresa, atualiza dados e salva áreas/filiais diretamente pelas configurações.'
+    },
+    {
+        id: 'checklistControl',
+        label: 'Preencher, verificar e finalizar checklists',
+        note: 'Botões de Recomeçar, Verificar, Assinaturas e uploads que só o master manipula.'
+    },
+    {
+        id: 'supportTickets',
+        label: 'Responder tickets e alterar status',
+        note: 'Seção de suporte onde o master responde, conclui, arquiva ou reabre chamados.'
+    },
+    {
+        id: 'historyModeration',
+        label: 'Filtrar e excluir relatórios',
+        note: 'Filtros adicionais na visão de histórico e o botão de excluir relatórios.'
+    }
+];
+
+const ACCESS_LEVELS: AccessLevelMeta[] = [
+    {
+        id: 'MASTER',
+        title: 'Master',
+        description: 'Acesso total ao sistema e controle completo das permissões.',
+        badgeLabel: 'MASTER',
+        badgeClasses: 'bg-gradient-to-r from-amber-500 to-yellow-500 text-black font-bold'
+    },
+    {
+        id: 'ADMINISTRATIVO',
+        title: 'Administrativo',
+        description: 'Gere relatórios, acesse dados estratégicos e execute tarefas gerenciais.',
+        badgeLabel: 'ADMINISTRATIVO',
+        badgeClasses: 'bg-orange-500 text-white font-semibold'
+    },
+    {
+        id: 'OPERACIONAL',
+        title: 'Operacional',
+        description: 'Visualiza dados, acompanha pedidos e organiza rotas.',
+        badgeLabel: 'OPERACIONAL',
+        badgeClasses: 'bg-rose-500 text-white font-semibold'
+    }
+];
+
+const createInitialAccessMatrix = (): Record<AccessLevelId, Record<string, boolean>> => {
+    const buildTemplate = (value: boolean) =>
+        ACCESS_MODULES.reduce((acc, module) => {
+            acc[module.id] = value;
+            return acc;
+        }, {} as Record<string, boolean>);
+
+    return {
+        MASTER: buildTemplate(true),
+        ADMINISTRATIVO: buildTemplate(false),
+        OPERACIONAL: buildTemplate(false)
+    };
+};
+
 const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceReport[]): StockConferenceHistoryItem[] => {
     return reports.map(rep => {
         const summary = rep.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
@@ -917,7 +1004,7 @@ const App: React.FC = () => {
     const [signatures, setSignatures] = useState<Record<string, Record<string, string>>>({});
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [showErrors, setShowErrors] = useState(false);
-    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock'>('checklist');
+    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access'>('checklist');
     const [ignoredChecklists, setIgnoredChecklists] = useState<Set<string>>(new Set());
     const errorBoxRef = useRef<HTMLDivElement>(null);
 
@@ -977,6 +1064,7 @@ const App: React.FC = () => {
     const [newCompanyPhone, setNewCompanyPhone] = useState('');
     const [newCompanyLogo, setNewCompanyLogo] = useState<string | null>(null);
     const [newCompanyAreas, setNewCompanyAreas] = useState<CompanyArea[]>([]);
+    const [accessMatrix, setAccessMatrix] = useState<Record<AccessLevelId, Record<string, boolean>>>(() => createInitialAccessMatrix());
 
 
 
@@ -995,6 +1083,22 @@ const App: React.FC = () => {
 
 
     // --- PERSISTENCE & INIT EFFECTS ---
+
+    const handleToggleAccess = (levelId: AccessLevelId, moduleId: string) => {
+        if (levelId === 'MASTER') return;
+        setAccessMatrix(prev => {
+            if (!(moduleId in prev[levelId])) {
+                return prev;
+            }
+            return {
+                ...prev,
+                [levelId]: {
+                    ...prev[levelId],
+                    [moduleId]: !prev[levelId][moduleId]
+                }
+            };
+        });
+    };
 
     const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceReport[]) => {
         setStockConferenceHistory(mapStockConferenceReports(reports));
@@ -2594,6 +2698,19 @@ const App: React.FC = () => {
                         Configurações
                     </button>
 
+                    {currentUser.role === 'MASTER' && (
+                        <button
+                            onClick={() => handleViewChange('access')}
+                            className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'access'
+                                ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
+                                : 'text-gray-600 hover:bg-gray-50'
+                                }`}
+                        >
+                            <Lock className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'access' ? '' : 'text-gray-400'}`} />
+                            Níveis de Acesso
+                        </button>
+                    )}
+
                     <button
                         onClick={() => handleViewChange('support')}
                         className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'support'
@@ -2633,8 +2750,9 @@ const App: React.FC = () => {
                         {currentView === 'report' || currentView === 'view_history' ? 'Relatório Consolidado' :
                             currentView === 'summary' ? 'Visão Geral da Avaliação' :
                                 currentView === 'settings' ? 'Configurações do Sistema' :
-                                    currentView === 'history' ? 'Histórico de Relatórios' :
-                                        activeChecklist.title}
+                                    currentView === 'access' ? 'Níveis de Acesso' :
+                                        currentView === 'history' ? 'Histórico de Relatórios' :
+                                            activeChecklist.title}
                     </h1>
                     {currentView === 'checklist' && currentUser?.role === 'MASTER' && (
                         <button
@@ -2654,8 +2772,9 @@ const App: React.FC = () => {
                         {currentView === 'report' || currentView === 'view_history' ? 'Relatório Consolidado' :
                             currentView === 'summary' ? 'Visão Geral da Avaliação' :
                                 currentView === 'settings' ? 'Configurações do Sistema' :
-                                    currentView === 'history' ? 'Histórico de Relatórios' :
-                                        activeChecklist.title}
+                                    currentView === 'access' ? 'Níveis de Acesso' :
+                                        currentView === 'history' ? 'Histórico de Relatórios' :
+                                            activeChecklist.title}
                     </h1>
 
                     <div className="flex items-center gap-4">
@@ -3956,6 +4075,71 @@ const App: React.FC = () => {
                                             </div>
                                         ))
                                     )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {currentView === 'access' && currentUser.role === 'MASTER' && (
+                        <div className="max-w-4xl mx-auto space-y-8 animate-fade-in relative pb-24">
+                            <div className="bg-slate-950/80 rounded-[28px] border border-slate-800 shadow-2xl p-8 text-slate-50">
+                                <div className="flex flex-col gap-2">
+                                    <h2 className="text-2xl font-black tracking-tight uppercase">Níveis de Acesso</h2>
+                                    <p className="text-sm text-slate-300">
+                                        Master pode marcar caixas para conceder permissões extras aos outros níveis. O painel é referência visual de quem pode ver o quê.
+                                    </p>
+                                </div>
+
+                                <div className="mt-8 grid gap-6 lg:grid-cols-3">
+                                    {ACCESS_LEVELS.map(level => (
+                                        <div key={level.id} className="flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/60 p-5 shadow-xl">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div>
+                                                    <p className="text-lg font-bold tracking-tight">{level.title}</p>
+                                                    <p className="text-sm text-slate-300">
+                                                        {level.description}
+                                                    </p>
+                                                </div>
+                                                <span className={`px-3 py-1 text-[11px] uppercase rounded-full tracking-widest shadow-sm ${level.badgeClasses}`}>
+                                                    {level.badgeLabel}
+                                                </span>
+                                            </div>
+
+                                            <div className="space-y-3">
+                                                {ACCESS_MODULES.map(module => {
+                                                    const enabled = level.id === 'MASTER' ? true : accessMatrix[level.id][module.id];
+                                                    return (
+                                                        <div
+                                                            key={`${level.id}-${module.id}`}
+                                                            className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-white/5 px-4 py-3 shadow-inner"
+                                                        >
+                                                            <div>
+                                                                <p className="text-sm font-semibold text-slate-50">{module.label}</p>
+                                                                {module.note && <p className="text-[11px] text-slate-400">{module.note}</p>}
+                                                            </div>
+                                                            {level.id === 'MASTER' ? (
+                                                                <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500 text-white shadow-lg">
+                                                                    <Check size={14} />
+                                                                </span>
+                                                            ) : (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => handleToggleAccess(level.id, module.id)}
+                                                                    aria-pressed={enabled}
+                                                                    className={`inline-flex h-9 w-9 items-center justify-center rounded-full border-2 transition ${enabled
+                                                                        ? 'bg-orange-500 border-orange-500 text-white shadow-lg'
+                                                                        : 'border-slate-600 text-slate-400 hover:border-orange-400 hover:text-orange-400'
+                                                                        }`}
+                                                                >
+                                                                    <Check size={14} className={`transition ${enabled ? 'opacity-100' : 'opacity-0'}`} />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
                         </div>
