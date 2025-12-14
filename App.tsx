@@ -22,7 +22,7 @@ interface User {
     password: string;
     name: string;
     phone: string;
-    role: 'MASTER' | 'USER';
+    role: 'MASTER' | 'ADMINISTRATIVO' | 'USER';
     approved: boolean;
     rejected?: boolean; // New field to handle "Banned/Refused" state
     photo?: string;
@@ -1025,7 +1025,7 @@ const App: React.FC = () => {
     const [newUserConfirmPass, setNewUserConfirmPass] = useState('');
     const [showNewUserPass, setShowNewUserPass] = useState(false);
     const [showNewUserConfirmPass, setShowNewUserConfirmPass] = useState(false);
-    const [newUserRole, setNewUserRole] = useState<'MASTER' | 'USER'>('USER');
+    const [newUserRole, setNewUserRole] = useState<'MASTER' | 'ADMINISTRATIVO' | 'USER'>('USER');
     const [newUserCompanyId, setNewUserCompanyId] = useState('');
     const [newUserArea, setNewUserArea] = useState('');
     const [newUserFilial, setNewUserFilial] = useState('');
@@ -1033,7 +1033,7 @@ const App: React.FC = () => {
     const [internalPhoneError, setInternalPhoneError] = useState('');
 
     // Filters
-    const [userFilterRole, setUserFilterRole] = useState<'ALL' | 'MASTER' | 'USER'>('ALL');
+    const [userFilterRole, setUserFilterRole] = useState<'ALL' | 'MASTER' | 'ADMINISTRATIVO' | 'USER'>('ALL');
     const [userFilterStatus, setUserFilterStatus] = useState<'ALL' | 'ACTIVE' | 'PENDING' | 'BANNED'>('ALL');
 
     // Change Password State
@@ -1422,25 +1422,13 @@ const App: React.FC = () => {
 
     const handleRegister = async (newUser: User) => {
         try {
-            // Save to Supabase first
             const created = await SupabaseService.createUser(newUser);
-            if (created) {
-                // Add to local state
-                setUsers(prev => [...prev, newUser]);
-                // Backup to localStorage
-                const updated = [...users, newUser];
-                localStorage.setItem('APP_USERS', JSON.stringify(updated));
-            } else {
-                // Fallback to local only
-                setUsers(prev => [...prev, newUser]);
-                const updated = [...users, newUser];
-                localStorage.setItem('APP_USERS', JSON.stringify(updated));
-            }
+            setUsers(prev => [...prev, created]);
         } catch (error) {
-            // Fallback to local only on error
+            const message = error instanceof Error ? error.message : JSON.stringify(error);
+            console.error('Erro ao registrar usuário:', error);
             setUsers(prev => [...prev, newUser]);
-            const updated = [...users, newUser];
-            localStorage.setItem('APP_USERS', JSON.stringify(updated));
+            alert(`Falha ao enviar cadastro para o Supabase (${message}). O perfil foi salvo localmente.`);
         }
     };
 
@@ -1617,13 +1605,14 @@ const App: React.FC = () => {
             filial: newUserFilial || null
         };
 
-        // Save to Supabase first
-        const created = await SupabaseService.createUser(newUser);
-        if (created) {
-            setUsers(prev => [...prev, newUser]);
-        } else {
-            // Fallback to local only
-            setUsers(prev => [...prev, newUser]);
+        try {
+            const created = await SupabaseService.createUser(newUser);
+            setUsers(prev => [...prev, created]);
+        } catch (error) {
+            console.error('Erro ao criar usuário interno:', error);
+            const message = error instanceof Error ? error.message : JSON.stringify(error);
+            alert(`Não foi possível criar o usuário Administrativo no Supabase (${message}).`);
+            return;
         }
 
         setNewUserName('');
@@ -2547,7 +2536,7 @@ const App: React.FC = () => {
     }
 
     // Determine if we are in "Read Only" mode (History View)
-    const isReadOnly = currentView === 'view_history' || currentUser?.role === 'USER';
+    const isReadOnly = currentView === 'view_history' || currentUser?.role === 'USER' || currentUser?.role === 'ADMINISTRATIVO';
 
     // Dynamic Header Logic: Use 'filial' input if available, otherwise default config
     const getDynamicPharmacyName = () => {
@@ -3728,10 +3717,11 @@ const App: React.FC = () => {
                                             </div>
                                             <select
                                                 value={newUserRole}
-                                                onChange={(e) => setNewUserRole(e.target.value as 'MASTER' | 'USER')}
+                                                onChange={(e) => setNewUserRole(e.target.value as 'MASTER' | 'ADMINISTRATIVO' | 'USER')}
                                                 className="w-full border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none bg-white lg:col-span-3"
                                             >
                                                 <option value="USER">Criar Perfil: Usuário Comum</option>
+                                                <option value="ADMINISTRATIVO">Criar Perfil: Administrativo</option>
                                                 <option value="MASTER">Criar Perfil: Administrador (Master)</option>
                                             </select>
                                         </div>
@@ -3758,6 +3748,7 @@ const App: React.FC = () => {
                                         >
                                             <option value="ALL">Todas Funções</option>
                                             <option value="MASTER">Administrador (Master)</option>
+                                            <option value="ADMINISTRATIVO">Administrativo</option>
                                             <option value="USER">Usuário Comum</option>
                                         </select>
                                         <select

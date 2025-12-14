@@ -8,7 +8,7 @@ export interface DbUser {
   password: string;
   name: string;
   phone: string;
-  role: 'MASTER' | 'USER';
+  role: 'MASTER' | 'ADMINISTRATIVO' | 'USER';
   approved: boolean;
   rejected?: boolean;
   photo?: string;
@@ -131,33 +131,32 @@ export async function fetchUsers(): Promise<DbUser[]> {
   }
 }
 
-export async function createUser(user: DbUser): Promise<DbUser | null> {
-  try {
-    const { data, error } = await supabase
-      .from('users')
-      .insert([{
-        email: user.email,
-        password: user.password,
-        name: user.name,
-        phone: user.phone,
-        role: user.role,
-        approved: user.approved,
-        rejected: user.rejected || false,
-        photo: user.photo,
-        preferred_theme: user.preferred_theme || 'blue',
-        company_id: user.company_id,
-        area: user.area,
-        filial: user.filial
-      }])
-      .select()
-      .single();
+export async function createUser(user: DbUser): Promise<DbUser> {
+  const { data, error } = await supabase
+    .from('users')
+    .insert([{
+      email: user.email,
+      password: user.password,
+      name: user.name,
+      phone: user.phone,
+      role: user.role,
+      approved: user.approved,
+      rejected: user.rejected || false,
+      photo: user.photo,
+      preferred_theme: user.preferred_theme || 'blue',
+      company_id: user.company_id,
+      area: user.area,
+      filial: user.filial
+    }])
+    .select()
+    .single();
 
-    if (error) throw error;
-    return data;
-  } catch (error) {
+  if (error) {
     console.error('Error creating user:', error);
-    return null;
+    throw error;
   }
+
+  return data;
 }
 
 export async function updateUser(email: string, updates: Partial<DbUser>): Promise<boolean> {
