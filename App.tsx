@@ -118,7 +118,7 @@ const THEMES: Record<ThemeColor, {
     },
 };
 
-type AccessLevelId = 'MASTER' | 'ADMINISTRATIVO' | 'OPERACIONAL' | 'USER';
+type AccessLevelId = 'MASTER' | 'ADMINISTRATIVO' | 'USER';
 
 interface AccessModule {
     id: string;
@@ -181,13 +181,6 @@ const ACCESS_LEVELS: AccessLevelMeta[] = [
         description: 'Gere relatórios, acesse dados estratégicos e execute tarefas gerenciais.',
         badgeLabel: 'ADMINISTRATIVO',
         badgeClasses: 'bg-orange-500 text-white font-semibold'
-    },
-    {
-        id: 'OPERACIONAL',
-        title: 'Operacional',
-        description: 'Visualiza dados, acompanha pedidos e organiza rotas.',
-        badgeLabel: 'OPERACIONAL',
-        badgeClasses: 'bg-rose-500 text-white font-semibold'
     },
     {
         id: 'USER',
@@ -1078,7 +1071,6 @@ const App: React.FC = () => {
     const getAccessLevelForRole = (role?: User['role']): AccessLevelId => {
         if (role === 'MASTER') return 'MASTER';
         if (role === 'ADMINISTRATIVO') return 'ADMINISTRATIVO';
-        if (role === 'OPERACIONAL') return 'OPERACIONAL';
         return 'USER';
     };
 
