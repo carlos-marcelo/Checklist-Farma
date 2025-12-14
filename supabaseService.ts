@@ -206,6 +206,47 @@ export async function fetchCompanies(): Promise<DbCompany[]> {
   }
 }
 
+export interface DbAccessMatrix {
+  level: string;
+  modules: Record<string, boolean>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function fetchAccessMatrix(): Promise<DbAccessMatrix[]> {
+  try {
+    const { data, error } = await supabase
+      .from('access_matrix')
+      .select('*');
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching access matrix:', error);
+    return [];
+  }
+}
+
+export async function upsertAccessMatrix(level: string, modules: Record<string, boolean>): Promise<DbAccessMatrix | null> {
+  try {
+    const { data, error } = await supabase
+      .from('access_matrix')
+      .upsert({
+        level,
+        modules,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'level' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error upserting access matrix:', error);
+    return null;
+  }
+}
+
 export async function createCompany(company: DbCompany): Promise<DbCompany | null> {
   try {
     const { data, error } = await supabase

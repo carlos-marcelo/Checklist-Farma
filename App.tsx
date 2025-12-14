@@ -118,7 +118,7 @@ const THEMES: Record<ThemeColor, {
     },
 };
 
-type AccessLevelId = 'MASTER' | 'ADMINISTRATIVO' | 'OPERACIONAL';
+type AccessLevelId = 'MASTER' | 'ADMINISTRATIVO' | 'OPERACIONAL' | 'USER';
 
 interface AccessModule {
     id: string;
@@ -188,22 +188,31 @@ const ACCESS_LEVELS: AccessLevelMeta[] = [
         description: 'Visualiza dados, acompanha pedidos e organiza rotas.',
         badgeLabel: 'OPERACIONAL',
         badgeClasses: 'bg-rose-500 text-white font-semibold'
+    },
+    {
+        id: 'USER',
+        title: 'Usuário Comum',
+        description: 'Executa checklists com nível básico conforme o master define.',
+        badgeLabel: 'USUÁRIO',
+        badgeClasses: 'bg-slate-500 text-white font-semibold'
     }
 ];
 
-const createInitialAccessMatrix = (): Record<AccessLevelId, Record<string, boolean>> => {
-    const buildTemplate = (value: boolean) =>
-        ACCESS_MODULES.reduce((acc, module) => {
-            acc[module.id] = value;
+const mergeAccessMatrixWithDefaults = (incoming: Partial<Record<AccessLevelId, Record<string, boolean>>>) => {
+    const merged: Record<AccessLevelId, Record<string, boolean>> = {} as any;
+    ACCESS_LEVELS.forEach(level => {
+        const layer = incoming[level.id] || {};
+        merged[level.id] = ACCESS_MODULES.reduce((acc, module) => {
+            acc[module.id] = level.id === 'MASTER'
+                ? true
+                : (typeof layer[module.id] === 'boolean' ? layer[module.id] : false);
             return acc;
         }, {} as Record<string, boolean>);
-
-    return {
-        MASTER: buildTemplate(true),
-        ADMINISTRATIVO: buildTemplate(false),
-        OPERACIONAL: buildTemplate(false)
-    };
+    });
+    return merged;
 };
+
+const createInitialAccessMatrix = () => mergeAccessMatrixWithDefaults({});
 
 const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceReport[]): StockConferenceHistoryItem[] => {
     return reports.map(rep => {
@@ -1084,20 +1093,22 @@ const App: React.FC = () => {
 
     // --- PERSISTENCE & INIT EFFECTS ---
 
-    const handleToggleAccess = (levelId: AccessLevelId, moduleId: string) => {
+    const handleToggleAccess = async (levelId: AccessLevelId, moduleId: string) => {
         if (levelId === 'MASTER') return;
-        setAccessMatrix(prev => {
-            if (!(moduleId in prev[levelId])) {
-                return prev;
-            }
-            return {
-                ...prev,
-                [levelId]: {
-                    ...prev[levelId],
-                    [moduleId]: !prev[levelId][moduleId]
-                }
-            };
-        });
+        const currentLevel = accessMatrix[levelId];
+        if (!currentLevel || !(moduleId in currentLevel)) return;
+
+        const updatedLevel = { ...currentLevel, [moduleId]: !currentLevel[moduleId] };
+        setAccessMatrix(prev => ({ ...prev, [levelId]: updatedLevel }));
+
+        try {
+            await SupabaseService.upsertAccessMatrix(levelId, updatedLevel);
+        } catch (error) {
+            console.error('Erro ao salvar permissão de acesso:', error);
+            const message = error instanceof Error ? error.message : JSON.stringify(error);
+            alert(`Não foi possível salvar a alteração no Supabase (${message}).`);
+            setAccessMatrix(prev => ({ ...prev, [levelId]: currentLevel }));
+        }
     };
 
     const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceReport[]) => {
@@ -1162,6 +1173,22 @@ const App: React.FC = () => {
                 // 4. Load Companies
                 const dbCompanies = await SupabaseService.fetchCompanies();
                 if (dbCompanies.length > 0) setCompanies(dbCompanies);
+
+                // 5. Load Access Matrix
+                try {
+                    const dbMatrix = await SupabaseService.fetchAccessMatrix();
+                    if (dbMatrix.length > 0) {
+                        const mapped = dbMatrix.reduce((acc, entry) => {
+                            acc[entry.level as AccessLevelId] = entry.modules || {};
+                            return acc;
+                        }, {} as Record<AccessLevelId, Record<string, boolean>>);
+                        setAccessMatrix(mergeAccessMatrixWithDefaults(mapped));
+                    } else {
+                        setAccessMatrix(prev => mergeAccessMatrixWithDefaults(prev));
+                    }
+                } catch (error) {
+                    console.error('Erro ao carregar matriz de acesso:', error);
+                }
 
                 // 5. Restore Session
                 const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
