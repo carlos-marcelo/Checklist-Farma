@@ -1015,6 +1015,7 @@ const App: React.FC = () => {
     const [stockConferenceHistory, setStockConferenceHistory] = useState<StockConferenceHistoryItem[]>([]);
     const [viewHistoryItem, setViewHistoryItem] = useState<ReportHistoryItem | null>(null);
     const [historyFilterUser, setHistoryFilterUser] = useState<string>('all');
+    const [isReloadingReports, setIsReloadingReports] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [stockConferenceReportsRaw, setStockConferenceReportsRaw] = useState<SupabaseService.DbStockConferenceReport[]>([]);
     const [viewingStockConferenceReport, setViewingStockConferenceReport] = useState<SupabaseService.DbStockConferenceReport | null>(null);
@@ -1128,6 +1129,36 @@ const App: React.FC = () => {
             return;
         }
         setViewingStockConferenceReport(report);
+    };
+
+    const handleReloadReports = async () => {
+        setIsReloadingReports(true);
+        try {
+            console.log('🔁 Recarregando relatórios...');
+            const dbReports = await SupabaseService.fetchReports();
+            const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
+                id: r.id,
+                userEmail: r.user_email,
+                userName: r.user_name,
+                date: r.created_at,
+                pharmacyName: r.pharmacy_name,
+                score: r.score,
+                formData: r.form_data || {},
+                images: r.images || {},
+                signatures: r.signatures || {},
+                ignoredChecklists: r.ignored_checklists || []
+            }));
+            setReportHistory(formattedReports);
+            const dbStockReports = await SupabaseService.fetchStockConferenceReports();
+            setStockConferenceHistory(mapStockConferenceReports(dbStockReports));
+            console.log('✅ Relatórios recarregados:', formattedReports.length);
+            alert(`Atualizado! ${formattedReports.length} relatório(s) encontrado(s).`);
+        } catch (error) {
+            console.error('❌ Erro ao recarregar:', error);
+            alert('Erro ao recarregar relatórios.');
+        } finally {
+            setIsReloadingReports(false);
+        }
     };
 
     // MAIN INITIALIZATION - Load all data from Supabase on mount (was cut off, restoring generic structure found in previous views)
@@ -2135,31 +2166,6 @@ const App: React.FC = () => {
                 ignored_checklists: Array.from(ignoredChecklists)
             };
 
-            const alreadyExists = await SupabaseService.reportExists(candidateReport as any);
-            if (alreadyExists) {
-                alert('Este relatório já foi registrado anteriormente. Não será duplicado.');
-                // Recarregar relatórios do Supabase
-                const dbReports = await SupabaseService.fetchReports();
-                const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
-                    id: r.id,
-                    userEmail: r.user_email,
-                    userName: r.user_name,
-                    date: r.created_at,
-                    pharmacyName: r.pharmacy_name,
-                    score: r.score,
-                    formData: r.form_data || {},
-                    images: r.images || {},
-                    signatures: r.signatures || {},
-                    ignoredChecklists: r.ignored_checklists || []
-                }));
-                    setReportHistory(formattedReports);
-                    const dbStockReports = await SupabaseService.fetchStockConferenceReports();
-                    setStockConferenceHistory(mapStockConferenceReports(dbStockReports));
-                setCurrentView('history');
-                setIsSaving(false);
-                return;
-            }
-
             // Save to Supabase first
             const dbReport = await SupabaseService.createReport(candidateReport as any);
 
@@ -2533,12 +2539,17 @@ const App: React.FC = () => {
 
     // --- FILTERED HISTORY ---
     const getFilteredHistory = () => {
-        if (currentUser?.role === 'MASTER') {
+        if (canModerateHistory) {
             if (historyFilterUser === 'all') return reportHistory;
             return reportHistory.filter(r => r.userEmail === historyFilterUser);
         }
-        // USER role sees only master's reports
-        return reportHistory.filter(r => r.userEmail === 'asconavietagestor@gmail.com');
+
+        const allowed = new Set<string>(['asconavietagestor@gmail.com']);
+        if (currentUser?.email) allowed.add(currentUser.email);
+        const base = reportHistory.filter(r => allowed.has(r.userEmail));
+        if (historyFilterUser === 'all') return base;
+        if (!allowed.has(historyFilterUser)) return [];
+        return base.filter(r => r.userEmail === historyFilterUser);
     };
 
     // --- RENDER ---
@@ -2781,7 +2792,7 @@ const App: React.FC = () => {
                                         currentView === 'history' ? 'Histórico de Relatórios' :
                                             activeChecklist.title}
                     </h1>
-                    {currentView === 'checklist' && currentUser?.role === 'MASTER' && (
+                    {currentView === 'checklist' && canControlChecklists && (
                         <button
                             onClick={handleResetChecklist}
                             className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors text-xs font-bold"
@@ -2808,7 +2819,7 @@ const App: React.FC = () => {
                         <div className="mr-4 opacity-90 hover:opacity-100 transition-opacity scale-90 origin-right hidden xl:block">
                             <Logo config={displayConfig} companies={companies} selectedCompanyId={currentUser.company_id} />
                         </div>
-                        {currentView === 'checklist' && currentUser?.role === 'MASTER' && (
+                        {currentView === 'checklist' && canControlChecklists && (
                             <button
                                 onClick={handleResetChecklist}
                                 className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-4 py-2 rounded-lg transition-colors text-sm font-bold"
@@ -4942,39 +4953,38 @@ const App: React.FC = () => {
                                     </h2>
 
                                     <button
-                                        onClick={async () => {
-                                            try {
-                                                console.log('🔄 Recarregando relatórios...');
-                                                const dbReports = await SupabaseService.fetchReports();
-                                                const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
-                                                    id: r.id,
-                                                    userEmail: r.user_email,
-                                                    userName: r.user_name,
-                                                    date: r.created_at,
-                                                    pharmacyName: r.pharmacy_name,
-                                                    score: r.score,
-                                                    formData: r.form_data || {},
-                                                    images: r.images || {},
-                                                    signatures: r.signatures || {},
-                                                    ignoredChecklists: r.ignored_checklists || []
-                                                }));
-                                                setReportHistory(formattedReports);
-                                                const dbStockReports = await SupabaseService.fetchStockConferenceReports();
-                                                setStockConferenceHistory(mapStockConferenceReports(dbStockReports));
-                                                console.log('✅ Relatórios recarregados:', formattedReports.length);
-                                                alert(`Atualizado! ${formattedReports.length} relatório(s) encontrado(s).`);
-                                            } catch (error) {
-                                                console.error('❌ Erro ao recarregar:', error);
-                                                alert('Erro ao recarregar relatórios.');
-                                            }
-                                        }}
-                                        className="px-4 py-2 bg-blue-500 hover:bg-blue-600 text-white rounded-lg text-sm font-medium flex items-center gap-2 transition-colors"
+                                        onClick={handleReloadReports}
+                                        disabled={isReloadingReports}
+                                        className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors text-white ${
+                                            isReloadingReports ? 'bg-blue-400 hover:bg-blue-400 cursor-wait opacity-80' : 'bg-blue-500 hover:bg-blue-600'
+                                        }`}
                                         title="Recarregar relatórios do Supabase"
                                     >
-                                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                        </svg>
-                                        Atualizar
+                                        {isReloadingReports ? (
+                                            <>
+                                                <svg
+                                                    className="w-4 h-4 animate-spin"
+                                                    fill="none"
+                                                    stroke="currentColor"
+                                                    viewBox="0 0 24 24"
+                                                >
+                                                    <path
+                                                        strokeLinecap="round"
+                                                        strokeLinejoin="round"
+                                                        strokeWidth={2}
+                                                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                                                    />
+                                                </svg>
+                                                Atualizando…
+                                            </>
+                                        ) : (
+                                            <>
+                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                                </svg>
+                                                Atualizar
+                                            </>
+                                        )}
                                     </button>
                                 </div>
 
