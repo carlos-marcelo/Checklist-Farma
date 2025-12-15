@@ -59,6 +59,8 @@ export interface DbStockConferenceSession {
   id?: string;
   user_email: string;
   branch: string;
+  area?: string | null;
+  company_id?: string | null;
   pharmacist: string;
   manager: string;
   step: 'setup' | 'conference' | 'divergence' | 'report';
@@ -554,6 +556,8 @@ export async function upsertStockConferenceSession(session: DbStockConferenceSes
     const payload: any = {
       user_email: session.user_email,
       branch: session.branch,
+      area: session.area,
+      company_id: session.company_id,
       pharmacist: session.pharmacist,
       manager: session.manager,
       step: session.step,

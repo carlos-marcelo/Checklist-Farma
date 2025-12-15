@@ -135,6 +135,38 @@ interface StockConferenceProps {
   companies?: SupabaseService.DbCompany[];
 }
 
+interface CompanyAreaMatch {
+  companyId: string;
+  areaName: string;
+}
+
+const findCompanyAreaByBranch = (
+  branchName: string,
+  companies: SupabaseService.DbCompany[]
+): CompanyAreaMatch | null => {
+  if (!branchName) return null;
+  const normalizedBranch = branchName.trim().toLowerCase();
+
+  for (const company of companies) {
+    if (!company || !company.areas) continue;
+    for (const area of company.areas) {
+      if (!area) continue;
+      const branches = area.branches || [];
+      for (const candidate of branches) {
+        if (!candidate) continue;
+        if (candidate.trim().toLowerCase() === normalizedBranch) {
+          return {
+            companyId: company.id || '',
+            areaName: area.name || ''
+          };
+        }
+      }
+    }
+  }
+
+  return null;
+};
+
 // --- Audio Helper ---
 
 const playSound = (type: 'success' | 'error') => {
@@ -487,7 +519,21 @@ export const StockConference = ({ userEmail, userName, companies = [] }: StockCo
     setMasterProducts(prodMap);
     setBarcodeIndex(barcodeMap);
     setInventory(inventoryMap);
-    setBranch(session.branch || '');
+    const branchValue = session.branch || '';
+    let resolvedCompanyId = session.company_id || '';
+    let resolvedAreaName = session.area || '';
+
+    if ((!resolvedCompanyId || !resolvedAreaName) && branchValue) {
+      const match = findCompanyAreaByBranch(branchValue, companies || []);
+      if (match) {
+        if (!resolvedCompanyId) resolvedCompanyId = match.companyId;
+        if (!resolvedAreaName) resolvedAreaName = match.areaName;
+      }
+    }
+
+    setSelectedCompanyId(resolvedCompanyId);
+    setBranch(branchValue);
+    setSelectedAreaName(resolvedAreaName);
     setPharmacist(session.pharmacist || '');
     setManager(session.manager || '');
     setRecountTargets(new Set(session.recount_targets || []));
@@ -576,7 +622,7 @@ export const StockConference = ({ userEmail, userName, companies = [] }: StockCo
     return () => {
       isMounted = false;
     };
-  }, [userEmail]);
+  }, [userEmail, companies]);
 
   const persistSession = async (options?: {
     step?: AppStep;
@@ -604,6 +650,8 @@ export const StockConference = ({ userEmail, userName, companies = [] }: StockCo
       id: sessionId || undefined,
       user_email: userEmail,
       branch: branch || 'Filial não informada',
+      area: selectedAreaName || null,
+      company_id: selectedCompanyId || null,
       pharmacist: pharmacist || 'Farmacêutico não informado',
       manager: manager || 'Gestor não informado',
       products: Array.from(productSource.values()).map((prod: Product) => ({
