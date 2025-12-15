@@ -92,6 +92,25 @@ const clearLocalStockSession = (email: string) => {
   }
 };
 
+const getSessionTimestamp = (session?: SupabaseService.DbStockConferenceSession | null): number => {
+  if (!session) return 0;
+  const rawDate = session.updated_at || session.created_at || '';
+  const parsed = Date.parse(rawDate);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const getSessionProgressScore = (session?: SupabaseService.DbStockConferenceSession | null): number => {
+  if (!session || !Array.isArray(session.inventory)) return 0;
+  return session.inventory.reduce((count, entry) => {
+    if (!entry) return count;
+    if (entry.last_updated) return count + 1;
+    const qty = Number(entry.counted_qty ?? 0);
+    if (!Number.isNaN(qty) && qty > 0) return count + 1;
+    if (entry.status && entry.status !== 'pending') return count + 1;
+    return count;
+  }, 0);
+};
+
 // --- Types ---
 
 interface Product {
@@ -483,54 +502,73 @@ export const StockConference = ({ userEmail, userName, companies = [] }: StockCo
 
   useEffect(() => {
     if (!userEmail) {
-      console.log('⚠️ No userEmail, skipping session load');
+      console.log("⚠️ No userEmail, skipping session load");
       return;
     }
 
     let isMounted = true;
     const loadSession = async () => {
-      console.log('🔍 Attempting to load session for:', userEmail, 'manualStarted:', manualSessionStartedRef.current);
+      console.log("🔍 Attempting to load session for:", userEmail, "manualStarted:", manualSessionStartedRef.current);
 
       if (manualSessionStartedRef.current) {
-        console.log('⏭️ Skipping load - manual session already started');
+        console.log("ℹ️ Skipping load - manual session already started");
         return;
       }
 
-      // Try Supabase first
+      let supabaseSession: SupabaseService.DbStockConferenceSession | null = null;
       try {
-        console.log('📡 Fetching session from Supabase...');
-        const session = await SupabaseService.fetchStockConferenceSession(userEmail);
-
+        console.log("🔄 Fetching session from Supabase...");
+        supabaseSession = await SupabaseService.fetchStockConferenceSession(userEmail);
         if (!isMounted) {
-          console.log('⚠️ Component unmounted, aborting');
+          console.log("⚠️ Component unmounted, aborting load");
           return;
         }
-
-        if (session) {
-          console.log('✅ Session found in Supabase:', session.id);
-          const restored = restoreSessionFromData(session);
-          if (restored) {
-            console.log('✅ Session successfully restored from Supabase');
-            return;
-          }
-        } else {
-          console.log('⚠️ No session found in Supabase');
-        }
       } catch (error) {
-        console.error('❌ Error loading session from Supabase:', error);
+        console.error("❌ Error loading session from Supabase:", error);
       }
 
-      // Try LocalStorage as fallback
-      if (!manualSessionStartedRef.current) {
-        console.log('💾 Trying LocalStorage fallback...');
-        const localSession = loadLocalStockSession(userEmail);
-        if (localSession) {
-          console.log('✅ Session found in LocalStorage');
-          restoreSessionFromData(localSession);
+      if (!isMounted) return;
+
+      const localSession = loadLocalStockSession(userEmail);
+      const supabaseTimestamp = getSessionTimestamp(supabaseSession);
+      const localTimestamp = getSessionTimestamp(localSession);
+      const supabaseScore = getSessionProgressScore(supabaseSession);
+      const localScore = getSessionProgressScore(localSession);
+
+      const supabaseCandidate = {
+        session: supabaseSession,
+        source: "supabase" as const,
+        timestamp: supabaseTimestamp,
+        score: supabaseScore
+      };
+      const localCandidate = {
+        session: localSession,
+        source: "local" as const,
+        timestamp: localTimestamp,
+        score: localScore
+      };
+
+      const orderedCandidates =
+        localScore > supabaseScore || (localScore === supabaseScore && localTimestamp > supabaseTimestamp)
+          ? [localCandidate, supabaseCandidate]
+          : [supabaseCandidate, localCandidate];
+
+      for (const candidate of orderedCandidates) {
+        if (!candidate.session) continue;
+        if (!isMounted) break;
+        const restored = restoreSessionFromData(candidate.session);
+        if (!restored) continue;
+        console.log(`✅ Session restored from ${candidate.source === "local" ? "LocalStorage" : "Supabase"}`);
+        if (candidate.source === "local") {
+          console.log("🔁 Local session has priority, syncing it back to Supabase...");
+          await persistSession();
         } else {
-          console.log('⚠️ No session found in LocalStorage either');
+          saveLocalStockSession(userEmail, candidate.session);
         }
+        return;
       }
+
+      console.log("⚠️ No session found in Supabase or LocalStorage.");
     };
 
     loadSession();
