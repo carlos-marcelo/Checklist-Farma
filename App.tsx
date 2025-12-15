@@ -1157,8 +1157,8 @@ const App: React.FC = () => {
             setReportHistory(formattedReports);
             const dbStockReports = await SupabaseService.fetchStockConferenceReports();
             handleStockReportsLoaded(dbStockReports);
-            console.log('✅ Relatórios recarregados:', formattedReports.length);
-            alert(`Atualizado! ${formattedReports.length} relatório(s) encontrado(s).`);
+            console.log('✅ Relatórios recarregados:', formattedReports.length, 'conferências:', dbStockReports.length);
+            alert(`Atualizado! ${formattedReports.length} avaliação(ões) e ${dbStockReports.length} conferência(s) carregada(s).`);
         } catch (error) {
             console.error('❌ Erro ao recarregar:', error);
             alert('Erro ao recarregar relatórios.');
