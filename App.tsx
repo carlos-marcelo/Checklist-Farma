@@ -2887,7 +2887,7 @@ const App: React.FC = () => {
 
                     <div className="px-3 mt-8 mb-3 text-xs font-bold text-gray-400 uppercase tracking-widest">Gerenciamento</div>
 
-                    {currentUser?.role === 'MASTER' && (
+                    {canControlChecklists && (
                         <button
                             onClick={() => handleViewChange('summary')}
                             className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'summary'
