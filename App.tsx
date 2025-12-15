@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package } from 'lucide-react';
-import { CHECKLISTS } from './constants';
-import { ChecklistData, ChecklistImages, InputType, ChecklistSection } from './types';
+import { CHECKLISTS as BASE_CHECKLISTS } from './constants';
+import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem } from './types';
 import SignaturePad from './components/SignaturePad';
 import { StockConference } from './components/StockConference';
 import { supabase } from './supabaseClient';
@@ -65,6 +65,17 @@ interface CompanyArea {
     name: string;
     branches: string[];
 }
+
+const generateId = (prefix = 'id') => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+const INPUT_TYPE_LABELS: Record<InputType, string> = {
+    [InputType.TEXT]: 'Texto curto',
+    [InputType.TEXTAREA]: 'Texto longo',
+    [InputType.DATE]: 'Data',
+    [InputType.BOOLEAN_PASS_FAIL]: 'Sim / Não',
+    [InputType.RATING_10]: 'Nota 0-10',
+    [InputType.HEADER]: 'Cabeçalho',
+    [InputType.INFO]: 'Informação'
+};
 
 // Enhanced Themes with gradients and shadows
 const THEMES: Record<ThemeColor, {
@@ -1006,7 +1017,12 @@ const App: React.FC = () => {
     const [companies, setCompanies] = useState<any[]>([]);
 
     // App Logic State
-    const [activeChecklistId, setActiveChecklistId] = useState<string>(CHECKLISTS[0].id);
+    const [checklists, setChecklists] = useState<ChecklistDefinition[]>(BASE_CHECKLISTS);
+    const initialChecklistId = BASE_CHECKLISTS[0]?.id || 'gerencial';
+    const [activeChecklistId, setActiveChecklistId] = useState<string>(initialChecklistId);
+    const [editingChecklistDefinition, setEditingChecklistDefinition] = useState<ChecklistDefinition | null>(null);
+    const [editingChecklistId, setEditingChecklistId] = useState<string | null>(null);
+    const [isSavingChecklistDefinition, setIsSavingChecklistDefinition] = useState(false);
     const [formData, setFormData] = useState<Record<string, ChecklistData>>({});
     const [images, setImages] = useState<Record<string, ChecklistImages>>({});
     const [signatures, setSignatures] = useState<Record<string, Record<string, string>>>({});
@@ -1255,6 +1271,34 @@ const App: React.FC = () => {
         initializeData();
     }, []);
 
+    useEffect(() => {
+        const loadChecklistDefinitions = async () => {
+            try {
+                const dbDefinitions = await SupabaseService.fetchChecklistDefinitions();
+                if (!dbDefinitions || dbDefinitions.length === 0) return;
+                const serverMap = dbDefinitions.reduce((acc: Record<string, ChecklistDefinition>, entry) => {
+                    acc[entry.id] = entry.definition;
+                    return acc;
+                }, {});
+                const ordered = BASE_CHECKLISTS.map(base => serverMap[base.id] || base);
+                const extras = dbDefinitions
+                    .filter(entry => !BASE_CHECKLISTS.some(base => base.id === entry.id))
+                    .map(entry => entry.definition);
+                setChecklists([...ordered, ...extras]);
+            } catch (error) {
+                console.error('Erro ao carregar definições dos checklists:', error);
+            }
+        };
+        loadChecklistDefinitions();
+    }, []);
+
+    useEffect(() => {
+        if (checklists.length === 0) return;
+        if (!checklists.some(cl => cl.id === activeChecklistId)) {
+            setActiveChecklistId(checklists[0].id);
+        }
+    }, [checklists, activeChecklistId]);
+
     // Save Users to LocalStorage
     useEffect(() => {
         if (!isLoadingData && users.length > 0) {
@@ -1423,7 +1467,7 @@ const App: React.FC = () => {
 
 
     // --- DERIVED STATE ---
-    const activeChecklist = CHECKLISTS.find(c => c.id === activeChecklistId) || CHECKLISTS[0];
+    const activeChecklist = checklists.find(c => c.id === activeChecklistId) || checklists[0];
     const currentTheme = THEMES[currentUser?.preferredTheme || 'blue'];
 
     // Pending users are those NOT approved AND NOT rejected (fresh requests)
@@ -1741,7 +1785,7 @@ const App: React.FC = () => {
 
             // If this is a global field, update it in ALL other checklists as well
             if (isGlobalField) {
-                CHECKLISTS.forEach(cl => {
+                checklists.forEach(cl => {
                     if (cl.id !== activeChecklistId) {
                         newData[cl.id] = {
                             ...(newData[cl.id] || {}),
@@ -1765,6 +1809,153 @@ const App: React.FC = () => {
 
             return newData;
         });
+    };
+
+    const openChecklistEditor = (checklistId: string) => {
+        const base = checklists.find(c => c.id === checklistId);
+        if (!base) return;
+        setEditingChecklistId(checklistId);
+        setEditingChecklistDefinition(JSON.parse(JSON.stringify(base)));
+    };
+
+    const closeChecklistEditor = () => {
+        setEditingChecklistDefinition(null);
+        setEditingChecklistId(null);
+    };
+
+    const updateEditingDefinition = (updater: (draft: ChecklistDefinition) => ChecklistDefinition) => {
+        setEditingChecklistDefinition(prev => {
+            if (!prev) return prev;
+            const draft = JSON.parse(JSON.stringify(prev)) as ChecklistDefinition;
+            return updater(draft);
+        });
+    };
+
+    const handleSectionTitleChange = (sectionId: string, title: string) => {
+        updateEditingDefinition((draft) => ({
+            ...draft,
+            sections: draft.sections.map(section =>
+                section.id === sectionId ? { ...section, title } : section
+            )
+        }));
+    };
+
+    const handleRemoveSection = (sectionId: string) => {
+        updateEditingDefinition((draft) => ({
+            ...draft,
+            sections: draft.sections.filter(section => section.id !== sectionId)
+        }));
+    };
+
+    const handleAddSection = () => {
+        const newSection: ChecklistSection = {
+            id: generateId('section'),
+            title: 'Nova Seção',
+            items: []
+        };
+        updateEditingDefinition((draft) => ({
+            ...draft,
+            sections: [...draft.sections, newSection]
+        }));
+    };
+
+    const handleAddQuestion = (sectionId: string) => {
+        const newItem: ChecklistItem = {
+            id: generateId('item'),
+            text: 'Nova pergunta',
+            type: InputType.TEXT,
+            required: true
+        };
+        updateEditingDefinition((draft) => ({
+            ...draft,
+            sections: draft.sections.map(section =>
+                section.id === sectionId ? { ...section, items: [...section.items, newItem] } : section
+            )
+        }));
+    };
+
+    const handleRemoveQuestion = (sectionId: string, itemId: string) => {
+        updateEditingDefinition((draft) => ({
+            ...draft,
+            sections: draft.sections.map(section =>
+                section.id === sectionId
+                    ? { ...section, items: section.items.filter(item => item.id !== itemId) }
+                    : section
+            )
+        }));
+    };
+
+    const handleItemTextChange = (sectionId: string, itemId: string, text: string) => {
+        updateEditingDefinition((draft) => ({
+            ...draft,
+            sections: draft.sections.map(section =>
+                section.id === sectionId
+                    ? {
+                          ...section,
+                          items: section.items.map(item =>
+                              item.id === itemId ? { ...item, text } : item
+                          )
+                      }
+                    : section
+            )
+        }));
+    };
+
+    const handleItemTypeChange = (sectionId: string, itemId: string, type: InputType) => {
+        updateEditingDefinition((draft) => ({
+            ...draft,
+            sections: draft.sections.map(section =>
+                section.id === sectionId
+                    ? {
+                          ...section,
+                          items: section.items.map(item =>
+                              item.id === itemId ? { ...item, type } : item
+                          )
+                      }
+                    : section
+            )
+        }));
+    };
+
+    const handleItemRequiredToggle = (sectionId: string, itemId: string, required: boolean) => {
+        updateEditingDefinition((draft) => ({
+            ...draft,
+            sections: draft.sections.map(section =>
+                section.id === sectionId
+                    ? {
+                          ...section,
+                          items: section.items.map(item =>
+                              item.id === itemId ? { ...item, required } : item
+                          )
+                      }
+                    : section
+            )
+        }));
+    };
+
+    const handleSaveChecklistDefinition = async () => {
+        if (!editingChecklistDefinition || !editingChecklistId) return;
+        setIsSavingChecklistDefinition(true);
+        try {
+            await SupabaseService.upsertChecklistDefinition(editingChecklistDefinition);
+            setChecklists(prev => {
+                const exists = prev.some(entry => entry.id === editingChecklistDefinition.id);
+                const updated = prev.map(entry =>
+                    entry.id === editingChecklistDefinition.id ? editingChecklistDefinition : entry
+                );
+                if (!exists) {
+                    updated.push(editingChecklistDefinition);
+                }
+                return updated;
+            });
+            alert('Checklist atualizado com sucesso.');
+            closeChecklistEditor();
+        } catch (error) {
+            console.error('Erro ao salvar checklist:', error);
+            alert('Não foi possível salvar as alterações do checklist.');
+        } finally {
+            setIsSavingChecklistDefinition(false);
+        }
     };
 
     const handleImageUpload = (sectionId: string, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1920,7 +2111,7 @@ const App: React.FC = () => {
             const updated: Record<string, Record<string, string>> = {};
 
             // Replicar assinatura para TODOS os checklists (como info básica)
-            CHECKLISTS.forEach(cl => {
+            checklists.forEach(cl => {
                 updated[cl.id] = {
                     ...(prev[cl.id] || {}),
                     [role]: dataUrl
@@ -1991,7 +2182,7 @@ const App: React.FC = () => {
 
         try {
             // Get active checklists (not marked as "Não se Aplica")
-            const activeChecklistIds = CHECKLISTS.filter(cl => !ignoredChecklists.has(cl.id)).map(cl => cl.id);
+        const activeChecklistIds = checklists.filter(cl => !ignoredChecklists.has(cl.id)).map(cl => cl.id);
 
             console.log('🔍 DEBUG - Checklists ativos:', activeChecklistIds);
             console.log('🔍 DEBUG - Checklists ignorados:', Array.from(ignoredChecklists));
@@ -2017,7 +2208,7 @@ const App: React.FC = () => {
             if (completeChecklists.length === 0) {
                 // Calcular percentual de cada checklist ativo
                 const checklistStatus = activeChecklistIds.map(id => {
-                    const cl = CHECKLISTS.find(c => c.id === id);
+                    const cl = checklists.find(c => c.id === id);
                     const stats = getChecklistStats(id);
                     const sigs = signatures[id] || {};
 
@@ -2093,7 +2284,7 @@ const App: React.FC = () => {
 
             if (incompleteChecklists.length > 0) {
                 const incompleteNames = incompleteChecklists.map(id => {
-                    const cl = CHECKLISTS.find(c => c.id === id);
+                    const cl = checklists.find(c => c.id === id);
                     const stats = getChecklistStats(id);
                     const sigs = signatures[id] || {};
 
@@ -2122,7 +2313,7 @@ const App: React.FC = () => {
                 }).join('\n');
 
                 const completeNames = completeChecklists.map(id => {
-                    const cl = CHECKLISTS.find(c => c.id === id);
+                    const cl = checklists.find(c => c.id === id);
                     return `  ✅ ${cl?.title}`;
                 }).join('\n');
 
@@ -2274,7 +2465,7 @@ const App: React.FC = () => {
 
         // 2. Try to get Filial and Date using robust scan
         let filial = 'Sem_Filial';
-        const targetChecklists = ['gerencial', ...CHECKLISTS.map(c => c.id)]; // Prioritize 'gerencial' where the field lives
+        const targetChecklists = ['gerencial', ...checklists.map(c => c.id)]; // Prioritize 'gerencial' where the field lives
 
         for (const checkId of targetChecklists) {
             const data = viewHistoryItem ? viewHistoryItem.formData[checkId] : formData[checkId];
@@ -2348,7 +2539,7 @@ const App: React.FC = () => {
         // If viewing history, consider it complete (read only)
         if (currentView === 'view_history') return true;
 
-        const checklist = CHECKLISTS.find(c => c.id === checklistId);
+        const checklist = checklists.find(c => c.id === checklistId);
         if (!checklist) return false;
 
         for (const section of checklist.sections) {
@@ -2365,7 +2556,7 @@ const App: React.FC = () => {
     };
 
     const getChecklistStats = (checklistId: string) => {
-        const checklist = CHECKLISTS.find(c => c.id === checklistId);
+        const checklist = checklists.find(c => c.id === checklistId);
         if (!checklist) return { score: 0, passed: 0, total: 0, failedItems: [], missingItems: [], unansweredItems: [] };
 
         let totalBoolean = 0;
@@ -2407,7 +2598,7 @@ const App: React.FC = () => {
 
         const ignoredSet = historyItem ? new Set(historyItem.ignoredChecklists) : ignoredChecklists;
 
-        CHECKLISTS.forEach(cl => {
+        checklists.forEach(cl => {
             if (!ignoredSet.has(cl.id)) {
                 const stats = getChecklistStats(cl.id);
                 if (stats.total > 0) {
@@ -2449,7 +2640,7 @@ const App: React.FC = () => {
         if (stats.missingItems.length > 0) {
             const firstMissing = stats.missingItems[0];
             // Encontrar o elemento no DOM pelo ID do item
-            const checklist = CHECKLISTS.find(c => c.id === checklistId);
+        const checklist = checklists.find(c => c.id === checklistId);
             if (checklist) {
                 for (const section of checklist.sections) {
                     for (const item of section.items) {
@@ -2533,9 +2724,9 @@ const App: React.FC = () => {
             return; // Block navigation
         }
 
-        const idx = CHECKLISTS.findIndex(c => c.id === activeChecklistId);
-        if (idx < CHECKLISTS.length - 1) {
-            setActiveChecklistId(CHECKLISTS[idx + 1].id);
+        const idx = checklists.findIndex(c => c.id === activeChecklistId);
+        if (idx < checklists.length - 1) {
+            setActiveChecklistId(checklists[idx + 1].id);
             window.scrollTo(0, 0);
             setShowErrors(false);
         } else {
@@ -2598,7 +2789,7 @@ const App: React.FC = () => {
         if (viewHistoryItem) return viewHistoryItem.pharmacyName;
 
         // Try to find 'filial' in active draft data (prioritize 'gerencial')
-        const targetChecklists = ['gerencial', ...CHECKLISTS.map(c => c.id)];
+        const targetChecklists = ['gerencial', ...checklists.map(c => c.id)];
         for (const checkId of targetChecklists) {
             const data = formData[checkId];
             if (data?.filial && String(data.filial).trim() !== '') {
@@ -2618,7 +2809,7 @@ const App: React.FC = () => {
 
     // Get Basic Info from First Active Checklist
     // We assume all checklists have synced info, so we take from the first one in the list.
-    const basicInfoSourceChecklist = CHECKLISTS[0].id; // Always defaults to 'gerencial', or first one. 
+    const basicInfoSourceChecklist = checklists[0]?.id || 'gerencial'; // Always defaults to 'gerencial', or first one. 
     // If 'gerencial' is ignored, we still have the data because syncing happens on input.
     // Actually, for display in report, we should just use the first checklist in the definitions, as they are synced.
 
@@ -2671,7 +2862,7 @@ const App: React.FC = () => {
 
                 <nav className="flex-1 overflow-y-auto py-6 px-4 space-y-2 custom-scrollbar pb-32">
                     <div className="px-3 mb-3 text-xs font-bold text-gray-400 uppercase tracking-widest">Checklists (Rascunho)</div>
-                    {CHECKLISTS.map(checklist => {
+                    {checklists.map(checklist => {
                         const complete = isChecklistComplete(checklist.id);
                         const ignored = ignoredChecklists.has(checklist.id);
                         const isActive = activeChecklistId === checklist.id && currentView === 'checklist';
@@ -2789,26 +2980,38 @@ const App: React.FC = () => {
                 </header>
 
                 {/* Mobile Actions Bar: Title + Recomeçar */}
-                <div className="lg:hidden no-print bg-white/90 backdrop-blur-sm border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-18 z-20">
-                    <h1 className="text-base font-extrabold text-gray-800 truncate tracking-tight">
-                        {currentView === 'report' || currentView === 'view_history' ? 'Relatório Consolidado' :
-                            currentView === 'summary' ? 'Visão Geral da Avaliação' :
-                                currentView === 'settings' ? 'Configurações do Sistema' :
-                                    currentView === 'access' ? 'Níveis de Acesso' :
-                                        currentView === 'history' ? 'Histórico de Relatórios' :
-                                            activeChecklist.title}
-                    </h1>
-                    {currentView === 'checklist' && canControlChecklists && (
-                        <button
-                            onClick={handleResetChecklist}
-                            className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors text-xs font-bold"
-                            title="Limpar todos os dados do relatório atual"
-                        >
-                            <RotateCcw size={16} />
-                            <span>Recomeçar</span>
-                        </button>
-                    )}
-                </div>
+                    <div className="lg:hidden no-print bg-white/90 backdrop-blur-sm border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-18 z-20">
+                        <h1 className="text-base font-extrabold text-gray-800 truncate tracking-tight">
+                            {currentView === 'report' || currentView === 'view_history' ? 'Relatório Consolidado' :
+                                currentView === 'summary' ? 'Visão Geral da Avaliação' :
+                                    currentView === 'settings' ? 'Configurações do Sistema' :
+                                        currentView === 'access' ? 'Níveis de Acesso' :
+                                            currentView === 'history' ? 'Histórico de Relatórios' :
+                                                activeChecklist.title}
+                        </h1>
+                    <div className="flex items-center gap-2">
+                        {currentView === 'checklist' && canControlChecklists && (
+                            <button
+                                onClick={handleResetChecklist}
+                                className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors text-xs font-bold"
+                                title="Limpar todos os dados do relatório atual"
+                            >
+                                <RotateCcw size={16} />
+                                <span>Recomeçar</span>
+                            </button>
+                        )}
+                        {currentView === 'checklist' && currentUser?.role === 'MASTER' && (
+                            <button
+                                onClick={() => openChecklistEditor(activeChecklistId)}
+                                className="flex items-center gap-2 text-blue-600 hover:bg-blue-50 px-3 py-2 rounded-lg transition-colors text-xs font-bold"
+                                title="Editar checklist atual"
+                            >
+                                <FileCheck size={16} />
+                                <span>Editar</span>
+                            </button>
+                        )}
+                    </div>
+                    </div>
 
                 {/* Desktop Header */}
                 <header className="hidden lg:flex items-center justify-between h-20 bg-white/80 backdrop-blur-md border-b border-gray-200 px-10 shadow-sm no-print sticky top-0 z-30">
@@ -2825,16 +3028,28 @@ const App: React.FC = () => {
                         <div className="mr-4 opacity-90 hover:opacity-100 transition-opacity scale-90 origin-right hidden xl:block">
                             <Logo config={displayConfig} companies={companies} selectedCompanyId={currentUser.company_id} />
                         </div>
-                        {currentView === 'checklist' && canControlChecklists && (
-                            <button
-                                onClick={handleResetChecklist}
-                                className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-4 py-2 rounded-lg transition-colors text-sm font-bold"
-                                title="Limpar todos os dados do relatório atual"
-                            >
-                                <RotateCcw size={16} />
-                                Recomeçar
-                            </button>
-                        )}
+                        <div className="flex items-center gap-3">
+                            {currentView === 'checklist' && canControlChecklists && (
+                                <button
+                                    onClick={handleResetChecklist}
+                                    className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-4 py-2 rounded-lg transition-colors text-sm font-bold"
+                                    title="Limpar todos os dados do relatório atual"
+                                >
+                                    <RotateCcw size={16} />
+                                    Recomeçar
+                                </button>
+                            )}
+                            {currentView === 'checklist' && currentUser?.role === 'MASTER' && (
+                                <button
+                                    onClick={() => openChecklistEditor(activeChecklistId)}
+                                    className="flex items-center gap-2 text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg transition-colors text-sm font-bold"
+                                    title="Editar checklist atual"
+                                >
+                                    <FileCheck size={16} />
+                                    Editar Checklist
+                                </button>
+                            )}
+                        </div>
                     </div>
                 </header>
 
@@ -3000,7 +3215,7 @@ const App: React.FC = () => {
                                                             // Bidirectional sync: Update empresa in all checklists
                                                             setFormData(prev => {
                                                                 const newData = { ...prev };
-                                                                CHECKLISTS.forEach(cl => {
+                                                                checklists.forEach(cl => {
                                                                     newData[cl.id] = {
                                                                         ...(newData[cl.id] || {}),
                                                                         empresa: company.name
@@ -4535,7 +4750,7 @@ const App: React.FC = () => {
                                             onClick={handleNextChecklist}
                                             className={`px-8 py-4 rounded-xl text-white font-bold text-lg shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-3 ${currentTheme.button}`}
                                         >
-                                            {CHECKLISTS.findIndex(c => c.id === activeChecklistId) < CHECKLISTS.length - 1 ? (
+                                            {checklists.findIndex(c => c.id === activeChecklistId) < checklists.length - 1 ? (
                                                 <>Próximo Checklist <ChevronRight size={20} /></>
                                             ) : (
                                                 <>Revisar e Finalizar <CheckCircle size={20} /></>
@@ -4550,7 +4765,7 @@ const App: React.FC = () => {
                     {/* --- SUMMARY VIEW --- */}
                     {currentView === 'summary' && (
                         <div className="max-w-4xl mx-auto space-y-6 animate-fade-in pb-24">
-                            {CHECKLISTS.map(cl => {
+                            {checklists.map(cl => {
                                 const stats = getChecklistStats(cl.id);
                                 const isIgnored = ignoredChecklists.has(cl.id);
                                 const isComplete = isChecklistComplete(cl.id);
@@ -4867,7 +5082,7 @@ const App: React.FC = () => {
                             })()}
 
                             <div className="space-y-4">
-                                {CHECKLISTS.map(cl => {
+                                {checklists.map(cl => {
                                     const isIgnored = viewHistoryItem ? viewHistoryItem.ignoredChecklists.includes(cl.id) : ignoredChecklists.has(cl.id);
                                     if (isIgnored) return null;
 
@@ -5156,6 +5371,115 @@ const App: React.FC = () => {
                             report={viewingStockConferenceReport}
                             onClose={() => setViewingStockConferenceReport(null)}
                         />
+                    )}
+
+                    {editingChecklistDefinition && (
+                        <div className="fixed inset-0 z-[80] flex items-center justify-center px-4 py-6">
+                            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeChecklistEditor} />
+                            <div className="relative z-10 w-full max-w-4xl lg:max-w-[calc(100vw-20rem)] bg-white rounded-3xl shadow-2xl border border-gray-100 p-6 overflow-y-auto max-h-[90vh] lg:ml-[18rem]">
+                                <div className="flex items-start justify-between gap-4">
+                                    <div>
+                                        <p className="text-xs uppercase tracking-widest text-gray-400 mb-1">Editar Checklist</p>
+                                        <h3 className="text-xl font-bold text-gray-900">{editingChecklistDefinition.title}</h3>
+                                        <p className="text-sm text-gray-500">{editingChecklistDefinition.description}</p>
+                                    </div>
+                                    <button
+                                        onClick={closeChecklistEditor}
+                                        className="text-gray-500 hover:text-gray-900 rounded-full p-2 transition"
+                                        aria-label="Fechar edição"
+                                    >
+                                        <X size={20} />
+                                    </button>
+                                </div>
+                                <div className="mt-6 space-y-5">
+                                    {editingChecklistDefinition.sections.map(section => (
+                                        <div key={section.id} className="bg-gray-50 rounded-2xl border border-gray-200 p-4 space-y-3">
+                                            <div className="flex items-center justify-between gap-3">
+                                                <input
+                                                    value={section.title}
+                                                    onChange={(e) => handleSectionTitleChange(section.id, e.target.value)}
+                                                    className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none"
+                                                />
+                                                <button
+                                                    onClick={() => handleRemoveSection(section.id)}
+                                                    className="text-red-600 text-xs font-bold uppercase tracking-widest"
+                                                >
+                                                    Remover seção
+                                                </button>
+                                            </div>
+                                            <div className="space-y-3">
+                                                {section.items.map(item => (
+                                                    <div key={item.id} className="grid gap-2 lg:grid-cols-[2fr,1fr,1fr] items-center">
+                                                        <input
+                                                            value={item.text}
+                                                            onChange={(e) => handleItemTextChange(section.id, item.id, e.target.value)}
+                                                            className="col-span-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100 outline-none"
+                                                        />
+                                                        <select
+                                                            value={item.type}
+                                                            onChange={(e) => handleItemTypeChange(section.id, item.id, e.target.value as InputType)}
+                                                            className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white"
+                                                        >
+                                                            {Object.values(InputType).map(typeValue => (
+                                                                <option key={typeValue} value={typeValue}>
+                                                                    {INPUT_TYPE_LABELS[typeValue as InputType] || typeValue}
+                                                                </option>
+                                                            ))}
+                                                        </select>
+                                                        <div className="flex items-center gap-3 text-xs">
+                                                            <label className="flex items-center gap-1 text-gray-600">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={item.required ?? false}
+                                                                    onChange={(e) => handleItemRequiredToggle(section.id, item.id, e.target.checked)}
+                                                                    className="h-4 w-4"
+                                                                />
+                                                                Obrigatório
+                                                            </label>
+                                                            <button
+                                                                onClick={() => handleRemoveQuestion(section.id, item.id)}
+                                                                className="text-red-500 font-semibold uppercase tracking-widest text-[11px]"
+                                                            >
+                                                                Excluir
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                            <button
+                                                onClick={() => handleAddQuestion(section.id)}
+                                                className="text-blue-600 text-sm font-semibold flex items-center gap-2"
+                                            >
+                                                + Adicionar pergunta
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="mt-4">
+                                    <button
+                                        onClick={handleAddSection}
+                                        className="text-blue-600 font-semibold text-sm flex items-center gap-2"
+                                    >
+                                        + Adicionar seção
+                                    </button>
+                                </div>
+                                <div className="mt-6 flex justify-end gap-3">
+                                    <button
+                                        onClick={closeChecklistEditor}
+                                        className="px-4 py-2 rounded-lg border border-gray-200 text-sm font-semibold hover:bg-gray-100"
+                                    >
+                                        Cancelar
+                                    </button>
+                                    <button
+                                        disabled={isSavingChecklistDefinition}
+                                        onClick={handleSaveChecklistDefinition}
+                                        className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-70 disabled:cursor-wait"
+                                    >
+                                        {isSavingChecklistDefinition ? 'Salvando...' : 'Salvar checklist'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
                     )}
 
                 </main>

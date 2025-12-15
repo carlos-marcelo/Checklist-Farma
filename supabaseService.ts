@@ -1,4 +1,5 @@
 import { supabase } from './supabaseClient';
+import { ChecklistDefinition } from './types';
 
 // ==================== TYPES ====================
 
@@ -103,6 +104,48 @@ export interface DbStockConferenceReport {
     last_updated?: string | null;
   }[];
   created_at?: string;
+}
+
+export interface DbChecklistDefinition {
+  id: string;
+  definition: ChecklistDefinition;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function fetchChecklistDefinitions(): Promise<DbChecklistDefinition[]> {
+  try {
+    const { data, error } = await supabase
+      .from('checklist_definitions')
+      .select('*')
+      .order('created_at', { ascending: true });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching checklist definitions:', error);
+    return [];
+  }
+}
+
+export async function upsertChecklistDefinition(definition: ChecklistDefinition): Promise<DbChecklistDefinition | null> {
+  try {
+    const { data, error } = await supabase
+      .from('checklist_definitions')
+      .upsert({
+        id: definition.id,
+        definition,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'id' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error upserting checklist definition:', error);
+    return null;
+  }
 }
 
 export interface DbDraft {
