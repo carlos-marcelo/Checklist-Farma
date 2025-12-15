@@ -1150,7 +1150,7 @@ const App: React.FC = () => {
             }));
             setReportHistory(formattedReports);
             const dbStockReports = await SupabaseService.fetchStockConferenceReports();
-            setStockConferenceHistory(mapStockConferenceReports(dbStockReports));
+            handleStockReportsLoaded(dbStockReports);
             console.log('✅ Relatórios recarregados:', formattedReports.length);
             alert(`Atualizado! ${formattedReports.length} relatório(s) encontrado(s).`);
         } catch (error) {
@@ -2205,7 +2205,7 @@ const App: React.FC = () => {
             }));
             setReportHistory(formattedReports);
             const dbStockReports = await SupabaseService.fetchStockConferenceReports();
-            setStockConferenceHistory(mapStockConferenceReports(dbStockReports));
+            handleStockReportsLoaded(dbStockReports);
             console.log('✅ Relatórios atualizados:', formattedReports.length, 'itens');
 
             // Clear Draft from state
@@ -2249,7 +2249,7 @@ const App: React.FC = () => {
                 }));
                 setReportHistory(formattedReports);
                 const dbStockReports = await SupabaseService.fetchStockConferenceReports();
-                setStockConferenceHistory(mapStockConferenceReports(dbStockReports));
+                handleStockReportsLoaded(dbStockReports);
                 setCurrentView('history');
             } catch (reloadError) {
                 console.error('❌ Erro ao recarregar relatórios:', reloadError);
@@ -2882,7 +2882,11 @@ const App: React.FC = () => {
                     {/* --- STOCK CONFERENCE VIEW --- */}
                     {currentView === 'stock' && (
                         <div className="h-full animate-fade-in relative pb-24">
-                            <StockConference userEmail={currentUser?.email || ''} userName={currentUser?.name || ''} />
+                            <StockConference
+                                userEmail={currentUser?.email || ''}
+                                userName={currentUser?.name || ''}
+                                companies={companies}
+                            />
                         </div>
                     )}
 
