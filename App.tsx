@@ -50,6 +50,7 @@ interface StockConferenceHistoryItem {
     userEmail: string;
     userName: string;
     branch: string;
+    area: string;
     pharmacist: string;
     manager: string;
     total: number;
@@ -215,6 +216,7 @@ const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceRep
             userEmail: rep.user_email,
             userName: rep.user_name,
             branch: rep.branch,
+            area: rep.area || 'Área não informada',
             pharmacist: rep.pharmacist,
             manager: rep.manager,
             total: summary.total,
@@ -301,17 +303,18 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
         doc.text('Relatório de Conferência de Estoque', 14, 20);
         doc.setFontSize(10);
         doc.text(`Filial: ${report.branch || 'Sem filial'}`, 14, 28);
-        doc.text(`Farmacêutico(a): ${report.pharmacist || '-'}`, 14, 33);
-        doc.text(`Gestor(a): ${report.manager || '-'}`, 14, 38);
-        doc.text(`Responsável: ${report.userName || report.user_email}`, 14, 43);
-        doc.text(`Data: ${dateStr} às ${timeStr}`, 14, 48);
-        doc.text(`Total itens: ${summaryTotals.total}`, 14, 54);
+        doc.text(`Área: ${report.area || 'Área não informada'}`, 14, 33);
+        doc.text(`Farmacêutico(a): ${report.pharmacist || '-'}`, 14, 38);
+        doc.text(`Gestor(a): ${report.manager || '-'}`, 14, 43);
+        doc.text(`Responsável: ${report.userName || report.user_email}`, 14, 48);
+        doc.text(`Data: ${dateStr} às ${timeStr}`, 14, 53);
+        doc.text(`Total itens: ${summaryTotals.total}`, 14, 59);
         doc.setTextColor(0, 128, 0);
-        doc.text(`Corretos: ${summaryTotals.matched}`, 14, 59);
+        doc.text(`Corretos: ${summaryTotals.matched}`, 14, 64);
         doc.setTextColor(200, 0, 0);
-        doc.text(`Divergentes: ${summaryTotals.divergent}`, 70, 59);
+        doc.text(`Divergentes: ${summaryTotals.divergent}`, 70, 64);
         doc.setTextColor(255, 165, 0);
-        doc.text(`Pendentes: ${summaryTotals.pending}`, 120, 59);
+        doc.text(`Pendentes: ${summaryTotals.pending}`, 120, 64);
         doc.setTextColor(0, 0, 0);
 
         const tableColumn = ['Reduzido', 'Descrição', 'Sistema', 'Contagem', 'Diferença', 'Status'];
@@ -334,7 +337,7 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
         });
 
         (doc as any).autoTable({
-            startY: 66,
+            startY: 71,
             head: [tableColumn],
             body: tableRows,
             theme: 'grid',
@@ -375,6 +378,9 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
                         <div>
                             <p className="text-xs uppercase tracking-widest text-gray-400 mb-1">Conferência de Estoque</p>
                             <h3 className="text-xl font-bold text-gray-900">{report.branch || 'Filial não informada'}</h3>
+                            <p className="text-sm text-gray-500">
+                                Área: {report.area || 'Área não informada'}
+                            </p>
                             <p className="text-sm text-gray-500">
                                 {report.pharmacist || 'Farmacêutico não informado'} · {report.manager || 'Gestor não informado'}
                             </p>
@@ -5095,6 +5101,7 @@ const App: React.FC = () => {
                                                         <div>
                                                             <p className="text-xs uppercase tracking-widest text-gray-400">Filial</p>
                                                             <p className="text-base font-bold text-gray-800">{item.branch}</p>
+                                                            <p className="text-sm text-gray-600 mt-1">Área: {item.area}</p>
                                                             <p className="text-xs text-gray-500 mt-1">
                                                                 {createdDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })} às {createdDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                                                             </p>

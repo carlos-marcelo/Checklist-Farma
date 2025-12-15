@@ -82,6 +82,7 @@ export interface DbStockConferenceReport {
   user_email: string;
   user_name: string;
   branch: string;
+  area?: string | null;
   pharmacist: string;
   manager: string;
   summary: {
@@ -416,7 +417,7 @@ export async function fetchStockConferenceReports(): Promise<DbStockConferenceRe
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    return data || [];
+  return data || [];
   } catch (error) {
     console.error('Error fetching stock conference reports:', error);
     return [];
@@ -431,6 +432,7 @@ export async function createStockConferenceReport(report: DbStockConferenceRepor
         user_email: report.user_email,
         user_name: report.user_name,
         branch: report.branch,
+        area: report.area,
         pharmacist: report.pharmacist,
         manager: report.manager,
         summary: report.summary,

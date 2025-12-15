@@ -1024,6 +1024,7 @@ export const StockConference = ({ userEmail, userName, companies = [] }: StockCo
       user_email: userEmail?.trim() || 'desconhecido@empresa.com',
       user_name: userName?.trim() || 'Operador',
       branch: branch || 'Filial não informada',
+      area: selectedAreaName || 'Área não informada',
       pharmacist: pharmacist || 'Farmacêutico não informado',
       manager: manager || 'Gestor não informado',
       summary,
