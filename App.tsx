@@ -5374,9 +5374,9 @@ const App: React.FC = () => {
                     )}
 
                     {editingChecklistDefinition && (
-                        <div className="fixed inset-0 z-[80] flex items-start justify-center px-4 pt-24 pb-6 lg:pt-28">
+                        <div className="fixed inset-0 z-[80] flex items-end justify-center px-4 pt-10 pb-10 lg:pt-12 lg:pb-16">
                             <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={closeChecklistEditor} />
-                            <div className="relative z-10 w-full max-w-4xl lg:max-w-[calc(100vw-20rem)] bg-white rounded-3xl shadow-2xl border border-gray-100 p-6 overflow-y-auto max-h-[90vh] lg:ml-[18rem]">
+                            <div className="relative z-10 w-full max-w-4xl lg:max-w-[calc(100vw-20rem)] bg-white rounded-3xl shadow-2xl border border-gray-100 p-6 overflow-y-auto max-h-[calc(100vh-9rem)] lg:ml-[18rem]">
                                 <div className="flex items-start justify-between gap-4">
                                     <div>
                                         <p className="text-xs uppercase tracking-widest text-gray-400 mb-1">Editar Checklist</p>
