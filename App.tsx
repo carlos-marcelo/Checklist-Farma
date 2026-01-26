@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package } from 'lucide-react';
 import { CHECKLISTS as BASE_CHECKLISTS } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem } from './types';
@@ -219,15 +219,43 @@ const mergeAccessMatrixWithDefaults = (incoming: Partial<Record<AccessLevelId, R
 
 const createInitialAccessMatrix = () => mergeAccessMatrixWithDefaults({});
 
+const sanitizeStockBranch = (branch?: string) => branch?.trim() || 'Filial não informada';
+const sanitizeStockArea = (area?: string) => area?.trim() || 'Área não informada';
+
+const canonicalizeFilterLabel = (value: string) => {
+    const normalized = value.normalize('NFKC').replace(/\s+/g, ' ').trim();
+    return normalized.replace(/\d+/g, digits => {
+        const parsed = Number(digits);
+        return Number.isNaN(parsed) ? digits : parsed.toString();
+    });
+};
+
+const normalizeFilterKey = (value: string) => canonicalizeFilterLabel(value).toLowerCase();
+
+const sanitizeReportBranch = (report: ReportHistoryItem) => {
+    const branchCandidate = report.formData['gerencial']?.filial?.trim();
+    if (branchCandidate) return branchCandidate;
+    if (report.formData['gerencial']?.empresa) return report.formData['gerencial']?.empresa;
+    if (report.pharmacyName) return report.pharmacyName;
+    return 'Filial não informada';
+};
+
+const sanitizeReportArea = (report: ReportHistoryItem) => {
+    const areaCandidate = report.formData['gerencial']?.area?.trim();
+    return areaCandidate || 'Área não informada';
+};
+
 const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceReport[]): StockConferenceHistoryItem[] => {
     return reports.map(rep => {
         const summary = rep.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
+        const branchName = sanitizeStockBranch(rep.branch);
+        const areaName = sanitizeStockArea(rep.area);
         return {
             id: rep.id || `${rep.user_email}_${rep.created_at || Date.now()}`,
             userEmail: rep.user_email,
             userName: rep.user_name,
-            branch: rep.branch,
-            area: rep.area || 'Área não informada',
+            branch: branchName,
+            area: areaName,
             pharmacist: rep.pharmacist,
             manager: rep.manager,
             total: summary.total,
@@ -1041,6 +1069,8 @@ const App: React.FC = () => {
     const [isSaving, setIsSaving] = useState(false);
     const [stockConferenceReportsRaw, setStockConferenceReportsRaw] = useState<SupabaseService.DbStockConferenceReport[]>([]);
     const [viewingStockConferenceReport, setViewingStockConferenceReport] = useState<SupabaseService.DbStockConferenceReport | null>(null);
+    const [stockBranchFilters, setStockBranchFilters] = useState<string[]>([]);
+    const [stockAreaFilter, setStockAreaFilter] = useState<string>('all');
 
     // Master User Management State
     const [newUserName, setNewUserName] = useState('');
@@ -1481,6 +1511,59 @@ const App: React.FC = () => {
         if (userFilterStatus === 'BANNED' && !u.rejected) return false;
         return true;
     });
+
+    const stockConferenceBranchOptions = useMemo(() => {
+        const map = new Map<string, string>();
+        stockConferenceHistory.forEach(item => {
+            const label = canonicalizeFilterLabel(sanitizeStockBranch(item.branch));
+            const key = normalizeFilterKey(label);
+            if (!map.has(key)) {
+                map.set(key, label);
+            }
+        });
+        return Array.from(map.entries())
+            .map(([key, label]) => ({ key, label }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+    }, [stockConferenceHistory]);
+    const stockConferenceBranchKeys = useMemo(() => stockConferenceBranchOptions.map(option => option.key), [stockConferenceBranchOptions]);
+
+    const stockConferenceAreaOptions = useMemo(() => {
+        const map = new Map<string, string>();
+        stockConferenceHistory.forEach(item => {
+            const label = canonicalizeFilterLabel(sanitizeStockArea(item.area));
+            const key = normalizeFilterKey(label);
+            if (!map.has(key)) {
+                map.set(key, label);
+            }
+        });
+        return Array.from(map.entries())
+            .map(([key, label]) => ({ key, label }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+    }, [stockConferenceHistory]);
+    const stockConferenceAreaKeys = useMemo(() => stockConferenceAreaOptions.map(option => option.key), [stockConferenceAreaOptions]);
+
+    const filteredStockConferenceHistory = useMemo(() => {
+        return stockConferenceHistory.filter(item => {
+            const branchKey = normalizeFilterKey(sanitizeStockBranch(item.branch));
+            const areaKey = normalizeFilterKey(sanitizeStockArea(item.area));
+            const matchesBranch = stockBranchFilters.length === 0 || stockBranchFilters.includes(branchKey);
+            const matchesArea = stockAreaFilter === 'all' || areaKey === stockAreaFilter;
+            return matchesBranch && matchesArea;
+        });
+    }, [stockConferenceHistory, stockBranchFilters, stockAreaFilter]);
+
+    useEffect(() => {
+        setStockBranchFilters(prev => {
+            const filtered = prev.filter(branchKey => stockConferenceBranchKeys.includes(branchKey));
+            return filtered.length === prev.length ? prev : filtered;
+        });
+    }, [stockConferenceBranchKeys]);
+
+    useEffect(() => {
+        if (stockAreaFilter !== 'all' && !stockConferenceAreaKeys.includes(stockAreaFilter)) {
+            setStockAreaFilter('all');
+        }
+    }, [stockConferenceAreaKeys, stockAreaFilter]);
 
     // --- HANDLERS ---
 
@@ -2735,6 +2818,14 @@ const App: React.FC = () => {
     };
 
     // --- FILTERED HISTORY ---
+    const toggleStockBranchFilter = (branchKey: string) => {
+        setStockBranchFilters(prev => prev.includes(branchKey) ? prev.filter(k => k !== branchKey) : [...prev, branchKey]);
+    };
+
+    const handleResetStockBranchFilters = () => setStockBranchFilters([]);
+
+    const handleStockAreaFilterChange = (value: string) => setStockAreaFilter(value);
+
     const getFilteredHistory = () => {
         if (canModerateHistory) {
             if (historyFilterUser === 'all') return reportHistory;
@@ -5308,58 +5399,114 @@ const App: React.FC = () => {
                                     </div>
                                 ) : (
                                     <div className="space-y-4">
-                                        {stockConferenceHistory.map(item => {
-                                            const createdDate = new Date(item.createdAt);
-                                            return (
-                                                <div key={item.id} className="border border-gray-100 rounded-2xl p-4 shadow-sm bg-white">
-                                                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                                                        <div>
-                                                            <p className="text-xs uppercase tracking-widest text-gray-400">Filial</p>
-                                                            <p className="text-base font-bold text-gray-800">{item.branch}</p>
-                                                            <p className="text-sm text-gray-600 mt-1">Área: {item.area}</p>
-                                                            <p className="text-xs text-gray-500 mt-1">
-                                                                {createdDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })} às {createdDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                                                            </p>
-                                                        </div>
-                                                        <div className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[11px] font-bold">
-                                                            {Math.round(item.percent)}% concluído
-                                                        </div>
-                                                    </div>
-                                                    <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-center text-sm">
-                                                        <div className="bg-gray-50 rounded-xl py-3 border border-gray-100">
-                                                            <p className="text-[10px] uppercase text-gray-400">Total</p>
-                                                            <p className="text-lg font-bold text-gray-800">{item.total}</p>
-                                                        </div>
-                                                        <div className="bg-green-50 rounded-xl py-3 border border-green-100">
-                                                            <p className="text-[10px] uppercase text-green-500">Corretos</p>
-                                                            <p className="text-lg font-bold text-green-700">{item.matched}</p>
-                                                        </div>
-                                                        <div className="bg-red-50 rounded-xl py-3 border border-red-100">
-                                                            <p className="text-[10px] uppercase text-red-500">Divergentes</p>
-                                                            <p className="text-lg font-bold text-red-600">{item.divergent}</p>
-                                                        </div>
-                                                        <div className="bg-yellow-50 rounded-xl py-3 border border-yellow-100">
-                                                            <p className="text-[10px] uppercase text-yellow-600">Pendente</p>
-                                                            <p className="text-lg font-bold text-yellow-700">{item.pending}</p>
-                                                        </div>
-                                                    </div>
-                                                    <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-gray-500">
-                                                        <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Responsável: {item.userName}</span>
-                                                        <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Farmacêutico: {item.pharmacist}</span>
-                                                        <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Gestor: {item.manager}</span>
-                                                    </div>
-                                                    <div className="mt-4 flex justify-end">
-                                                        <button
-                                                            onClick={() => handleViewStockConferenceReport(item.id)}
-                                                            className="flex items-center gap-2 rounded-2xl px-4 py-2 bg-blue-600 text-white text-sm font-bold shadow-lg hover:bg-blue-700 transition"
-                                                        >
-                                                            <FileText size={16} />
-                                                            Ver Conferência
-                                                        </button>
-                                                    </div>
+                                        <div className="space-y-4 border-b border-gray-100 pb-4">
+                                            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                                <div className="flex items-center gap-2 text-sm text-gray-600">
+                                                    <Filter size={16} className="text-gray-400" />
+                                                    <span className="font-semibold text-gray-700">Filtrar conferências</span>
                                                 </div>
-                                            );
-                                        })}
+                                                <div className="text-xs text-gray-500">
+                                                    Mostrando {filteredStockConferenceHistory.length} de {stockConferenceHistory.length} conferência(s)
+                                                </div>
+                                            </div>
+                                            <div className="space-y-2">
+                                                <div className="text-[10px] uppercase tracking-widest text-gray-400">Filiais</div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {stockConferenceBranchOptions.map(option => (
+                                                        <button
+                                                            key={option.key}
+                                                            type="button"
+                                                            onClick={() => toggleStockBranchFilter(option.key)}
+                                                            className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${stockBranchFilters.includes(option.key) ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-gray-50 border-gray-200 text-gray-600'}`}
+                                                        >
+                                                            {option.label}
+                                                        </button>
+                                                    ))}
+                                                    {stockBranchFilters.length > 0 && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={handleResetStockBranchFilters}
+                                                            className="px-3 py-1.5 rounded-full border border-gray-200 bg-white text-xs text-gray-500 hover:bg-gray-50 transition"
+                                                        >
+                                                            Limpar
+                                                        </button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                                <span className="text-[10px] uppercase tracking-widest text-gray-400">Área</span>
+                                                <select
+                                                    value={stockAreaFilter}
+                                                    onChange={(e) => handleStockAreaFilterChange(e.target.value)}
+                                                    className="ml-0 w-full max-w-xs text-sm rounded-xl border border-gray-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                >
+                                                    <option value="all">Todas as Áreas</option>
+                                                    {stockConferenceAreaOptions.map(option => (
+                                                        <option key={option.key} value={option.key}>{option.label}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        </div>
+                                        {filteredStockConferenceHistory.length === 0 ? (
+                                            <div className="text-center py-12 text-sm text-gray-500">
+                                                Nenhuma conferência de estoque encontrada com os filtros aplicados.
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-4">
+                                                {filteredStockConferenceHistory.map(item => {
+                                                    const createdDate = new Date(item.createdAt);
+                                                    return (
+                                                        <div key={item.id} className="border border-gray-100 rounded-2xl p-4 shadow-sm bg-white">
+                                                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                                                                <div>
+                                                                    <p className="text-xs uppercase tracking-widest text-gray-400">Filial</p>
+                                                                    <p className="text-base font-bold text-gray-800">{item.branch}</p>
+                                                                    <p className="text-sm text-gray-600 mt-1">Área: {item.area}</p>
+                                                                    <p className="text-xs text-gray-500 mt-1">
+                                                                        {createdDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })} às {createdDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                                    </p>
+                                                                </div>
+                                                                <div className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[11px] font-bold">
+                                                                    {Math.round(item.percent)}% concluído
+                                                                </div>
+                                                            </div>
+                                                            <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-center text-sm">
+                                                                <div className="bg-gray-50 rounded-xl py-3 border border-gray-100">
+                                                                    <p className="text-[10px] uppercase text-gray-400">Total</p>
+                                                                    <p className="text-lg font-bold text-gray-800">{item.total}</p>
+                                                                </div>
+                                                                <div className="bg-green-50 rounded-xl py-3 border border-green-100">
+                                                                    <p className="text-[10px] uppercase text-green-500">Corretos</p>
+                                                                    <p className="text-lg font-bold text-green-700">{item.matched}</p>
+                                                                </div>
+                                                                <div className="bg-red-50 rounded-xl py-3 border border-red-100">
+                                                                    <p className="text-[10px] uppercase text-red-500">Divergentes</p>
+                                                                    <p className="text-lg font-bold text-red-600">{item.divergent}</p>
+                                                                </div>
+                                                                <div className="bg-yellow-50 rounded-xl py-3 border border-yellow-100">
+                                                                    <p className="text-[10px] uppercase text-yellow-600">Pendente</p>
+                                                                    <p className="text-lg font-bold text-yellow-700">{item.pending}</p>
+                                                                </div>
+                                                            </div>
+                                                            <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-gray-500">
+                                                                <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Responsável: {item.userName}</span>
+                                                                <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Farmacêutico: {item.pharmacist}</span>
+                                                                <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Gestor: {item.manager}</span>
+                                                            </div>
+                                                            <div className="mt-4 flex justify-end">
+                                                                <button
+                                                                    onClick={() => handleViewStockConferenceReport(item.id)}
+                                                                    className="flex items-center gap-2 rounded-2xl px-4 py-2 bg-blue-600 text-white text-sm font-bold shadow-lg hover:bg-blue-700 transition"
+                                                                >
+                                                                    <FileText size={16} />
+                                                                    Ver Conferência
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>

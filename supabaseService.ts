@@ -1,5 +1,6 @@
 import { supabase } from './supabaseClient';
 import { ChecklistDefinition } from './types';
+import { Product, PVRecord, PVSaleClassification } from './preVencidos/types';
 
 // ==================== TYPES ====================
 
@@ -106,6 +107,29 @@ export interface DbStockConferenceReport {
     last_updated?: string | null;
   }[];
   created_at?: string;
+}
+
+export interface DbPVSessionData {
+  master_products?: Product[];
+  system_products?: Product[];
+  dcb_products?: Product[];
+  pv_records?: PVRecord[];
+  confirmed_pv_sales?: Record<string, PVSaleClassification>;
+  finalized_reds_by_period?: Record<string, string[]>;
+  sales_period?: string;
+}
+
+export interface DbPVSession {
+  id?: string;
+  user_email: string;
+  company_id?: string | null;
+  branch?: string | null;
+  area?: string | null;
+  pharmacist?: string | null;
+  manager?: string | null;
+  session_data?: DbPVSessionData | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface DbChecklistDefinition {
@@ -610,6 +634,56 @@ export async function deleteStockConferenceSession(userEmail: string): Promise<b
   } catch (error) {
     console.error('Error deleting stock conference session:', error);
     return false;
+  }
+}
+
+export async function fetchPVSession(userEmail: string): Promise<DbPVSession | null> {
+  try {
+    const { data, error } = await supabase
+      .from('pv_sessions')
+      .select('*')
+      .eq('user_email', userEmail)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Erro ao carregar sessÆo PV do Supabase:', error);
+    return null;
+  }
+}
+
+export async function upsertPVSession(session: DbPVSession): Promise<DbPVSession | null> {
+  try {
+    const payload: any = {
+      id: session.id,
+      user_email: session.user_email,
+      company_id: session.company_id,
+      branch: session.branch,
+      area: session.area,
+      pharmacist: session.pharmacist,
+      manager: session.manager,
+      session_data: session.session_data || {},
+      updated_at: session.updated_at || new Date().toISOString()
+    };
+
+    if (!session.id) {
+      delete payload.id;
+    }
+
+    const { data, error } = await supabase
+      .from('pv_sessions')
+      .upsert([payload], { onConflict: 'user_email' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Erro salvando sessÆo PV no Supabase:', error);
+    return null;
   }
 }
 
