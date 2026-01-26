@@ -95,6 +95,10 @@ export interface DbStockConferenceReport {
     divergent: number;
     pending: number;
     percent: number;
+    signatures?: {
+      pharmacist?: string | null;
+      manager?: string | null;
+    };
   };
   items: {
     reduced_code: string;
@@ -443,7 +447,8 @@ export async function fetchReports(): Promise<DbReport[]> {
     const { data, error } = await supabase
       .from('reports')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .range(0, 9999);
 
     if (error) throw error;
     return data || [];
@@ -483,7 +488,8 @@ export async function fetchStockConferenceReports(): Promise<DbStockConferenceRe
     const { data, error } = await supabase
       .from('stock_conference_reports')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .range(0, 9999);
 
     if (error) throw error;
   return data || [];

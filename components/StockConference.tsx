@@ -133,6 +133,7 @@ interface StockConferenceProps {
   userEmail?: string;
   userName?: string;
   companies?: SupabaseService.DbCompany[];
+  onReportSaved?: () => Promise<void>;
 }
 
 interface CompanyAreaMatch {
@@ -371,7 +372,7 @@ const safeParseFloat = (value: any): number => {
 
 // --- Main Component ---
 
-export const StockConference = ({ userEmail, userName, companies = [] }: StockConferenceProps) => {
+export const StockConference = ({ userEmail, userName, companies = [], onReportSaved }: StockConferenceProps) => {
   const [step, setStep] = useState<AppStep>('setup');
 
   // Header Info State
@@ -1089,7 +1090,11 @@ export const StockConference = ({ userEmail, userName, companies = [] }: StockCo
       matched,
       divergent,
       pending,
-      percent: stats.percent
+      percent: stats.percent,
+      signatures: {
+        pharmacist: pharmSignature,
+        manager: managerSignature
+      }
     };
 
     const inventorySnapshot = allItems.map(item => {
@@ -1120,6 +1125,9 @@ export const StockConference = ({ userEmail, userName, companies = [] }: StockCo
     setIsSavingStockReport(true);
     try {
       await SupabaseService.createStockConferenceReport(payload);
+      if (onReportSaved) {
+        await onReportSaved();
+      }
     } catch (error) {
       console.error('Erro ao salvar conferência de estoque:', error);
       alert('Não foi possível salvar o relatório no Supabase. O resultado será exibido localmente.');

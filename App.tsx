@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package } from 'lucide-react';
 import { CHECKLISTS as BASE_CHECKLISTS } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem } from './types';
+import PreVencidosManager from './components/preVencidos/PreVencidosManager';
 import SignaturePad from './components/SignaturePad';
 import { StockConference } from './components/StockConference';
 import { supabase } from './supabaseClient';
@@ -58,6 +59,8 @@ interface StockConferenceHistoryItem {
     divergent: number;
     pending: number;
     percent: number;
+    pharmacistSignature?: string | null;
+    managerSignature?: string | null;
     createdAt: string;
 }
 
@@ -232,6 +235,11 @@ const canonicalizeFilterLabel = (value: string) => {
 
 const normalizeFilterKey = (value: string) => canonicalizeFilterLabel(value).toLowerCase();
 
+const formatBranchFilterLabel = (value: string) => {
+    const canonical = canonicalizeFilterLabel(value);
+    return canonical.replace(/\d+/g, digits => digits.padStart(2, '0')).toUpperCase();
+};
+
 const sanitizeReportBranch = (report: ReportHistoryItem) => {
     const branchCandidate = report.formData['gerencial']?.filial?.trim();
     if (branchCandidate) return branchCandidate;
@@ -250,6 +258,8 @@ const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceRep
         const summary = rep.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
         const branchName = sanitizeStockBranch(rep.branch);
         const areaName = sanitizeStockArea(rep.area);
+        const summarySignatures = summary.signatures || {};
+        const rootSignatures = (rep as any).signatures || {};
         return {
             id: rep.id || `${rep.user_email}_${rep.created_at || Date.now()}`,
             userEmail: rep.user_email,
@@ -263,6 +273,8 @@ const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceRep
             divergent: summary.divergent,
             pending: summary.pending,
             percent: summary.percent,
+            pharmacistSignature: summarySignatures.pharmacist || rootSignatures.pharmacist || null,
+            managerSignature: summarySignatures.manager || rootSignatures.manager || null,
             createdAt: rep.created_at || new Date().toISOString()
         };
     });
@@ -270,8 +282,13 @@ const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceRep
 
 type StockReportItem = SupabaseService.DbStockConferenceReport['items'][number];
 
+type EnhancedStockConferenceReport = SupabaseService.DbStockConferenceReport & {
+    pharmacistSignature?: string | null;
+    managerSignature?: string | null;
+};
+
 interface StockConferenceReportViewerProps {
-    report: SupabaseService.DbStockConferenceReport;
+    report: EnhancedStockConferenceReport;
     onClose: () => void;
 }
 
@@ -279,6 +296,10 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
     const items = report.items || [];
     const summary = report.summary || { total: items.length, matched: 0, divergent: 0, pending: 0, percent: 0 };
     const createdAt = report.created_at ? new Date(report.created_at) : new Date();
+    const rootSignatures = (report as any).signatures || {};
+    const signatureData = summary.signatures || rootSignatures;
+    const pharmacistSignature = report.pharmacistSignature || signatureData.pharmacist || null;
+    const managerSignature = report.managerSignature || signatureData.manager || null;
     const summaryTotals = {
         total: summary.total ?? items.length,
         matched: summary.matched ?? 0,
@@ -398,6 +419,34 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
             }
         });
 
+        if (pharmacistSignature || managerSignature) {
+            const autoTableMeta = (doc as any).lastAutoTable;
+            const tableEndY = autoTableMeta?.finalY ?? 0;
+            const nextSignatureY = tableEndY > 0 ? tableEndY + 20 : 20;
+            const needsPageBreak = nextSignatureY > 250;
+            const signatureStartY = needsPageBreak ? 20 : nextSignatureY;
+
+            const renderSignatureSection = (imgData: string, label: string, owner: string, x: number) => {
+                doc.addImage(imgData, 'PNG', x, signatureStartY, 60, 30);
+                doc.line(x, signatureStartY + 30, x + 60, signatureStartY + 30);
+                doc.setFontSize(8);
+                doc.text(label, x, signatureStartY + 35);
+                doc.text(owner, x, signatureStartY + 40);
+            };
+
+            if (needsPageBreak) {
+                doc.addPage();
+            }
+
+            if (pharmacistSignature) {
+                renderSignatureSection(pharmacistSignature, 'Farmacêutico(a) responsável', report.pharmacist || '-', 20);
+            }
+            if (managerSignature) {
+                const offsetX = pharmacistSignature ? 110 : 20;
+                renderSignatureSection(managerSignature, 'Gestor(a) responsável', report.manager || '-', offsetX);
+            }
+        }
+
         const fileName = `conferencia_${(report.branch || 'sem_filial').replace(/\s+/g, '_')}_${createdAt.toISOString().slice(0, 10)}.pdf`;
         doc.save(fileName);
     };
@@ -468,6 +517,25 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
                         <span className="inline-flex items-center px-3 py-1 border border-gray-200 rounded-full bg-gray-50">Farmacêutico: {report.pharmacist || '-'}</span>
                         <span className="inline-flex items-center px-3 py-1 border border-gray-200 rounded-full bg-gray-50">Gestor: {report.manager || '-'}</span>
                     </div>
+
+                    {(pharmacistSignature || managerSignature) && (
+                        <div className="grid gap-4 md:grid-cols-2">
+                            {pharmacistSignature && (
+                                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-center space-y-2">
+                                    <p className="text-[10px] uppercase tracking-widest text-gray-400">Farmacêutico(a)</p>
+                                    <img src={pharmacistSignature} alt="Assinatura Farmacêutico" className="mx-auto h-28 object-contain" />
+                                    <p className="text-xs text-gray-500">{report.pharmacist || '-'}</p>
+                                </div>
+                            )}
+                            {managerSignature && (
+                                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-center space-y-2">
+                                    <p className="text-[10px] uppercase tracking-widest text-gray-400">Gestor(a)</p>
+                                    <img src={managerSignature} alt="Assinatura Gestor" className="mx-auto h-28 object-contain" />
+                                    <p className="text-xs text-gray-500">{report.manager || '-'}</p>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     <div className="overflow-x-auto border border-gray-100 rounded-2xl">
                         <table className="w-full text-sm text-left">
@@ -1056,7 +1124,7 @@ const App: React.FC = () => {
     const [signatures, setSignatures] = useState<Record<string, Record<string, string>>>({});
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [showErrors, setShowErrors] = useState(false);
-    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access'>('checklist');
+    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre'>('checklist');
     const [ignoredChecklists, setIgnoredChecklists] = useState<Set<string>>(new Set());
     const errorBoxRef = useRef<HTMLDivElement>(null);
 
@@ -1068,7 +1136,7 @@ const App: React.FC = () => {
     const [isReloadingReports, setIsReloadingReports] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [stockConferenceReportsRaw, setStockConferenceReportsRaw] = useState<SupabaseService.DbStockConferenceReport[]>([]);
-    const [viewingStockConferenceReport, setViewingStockConferenceReport] = useState<SupabaseService.DbStockConferenceReport | null>(null);
+    const [viewingStockConferenceReport, setViewingStockConferenceReport] = useState<EnhancedStockConferenceReport | null>(null);
     const [stockBranchFilters, setStockBranchFilters] = useState<string[]>([]);
     const [stockAreaFilter, setStockAreaFilter] = useState<string>('all');
 
@@ -1169,9 +1237,15 @@ const App: React.FC = () => {
         }
     };
 
-    const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceReport[]) => {
+const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceReport[]) => {
         setStockConferenceHistory(mapStockConferenceReports(reports));
         setStockConferenceReportsRaw(reports);
+    };
+
+    const refreshStockConferenceReports = async () => {
+        const dbStockReports = await SupabaseService.fetchStockConferenceReports();
+        handleStockReportsLoaded(dbStockReports);
+        return dbStockReports;
     };
 
     const handleViewStockConferenceReport = (historyId: string) => {
@@ -1180,7 +1254,22 @@ const App: React.FC = () => {
             alert('Não foi possível localizar o relatório de conferência solicitado.');
             return;
         }
-        setViewingStockConferenceReport(report);
+        const historyEntry = stockConferenceHistory.find(item => item.id === historyId);
+        const baseSummary = report.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
+        const rootSignatures = (report as any).signatures || {};
+        const enrichedSummary = {
+            ...baseSummary,
+            signatures: {
+                pharmacist: historyEntry?.pharmacistSignature || baseSummary.signatures?.pharmacist || rootSignatures.pharmacist || null,
+                manager: historyEntry?.managerSignature || baseSummary.signatures?.manager || rootSignatures.manager || null
+            }
+        };
+        setViewingStockConferenceReport({
+            ...report,
+            summary: enrichedSummary,
+            pharmacistSignature: historyEntry?.pharmacistSignature || rootSignatures.pharmacist || null,
+            managerSignature: historyEntry?.managerSignature || rootSignatures.manager || null
+        });
     };
 
     const handleReloadReports = async () => {
@@ -1201,8 +1290,7 @@ const App: React.FC = () => {
                 ignoredChecklists: r.ignored_checklists || []
             }));
             setReportHistory(formattedReports);
-            const dbStockReports = await SupabaseService.fetchStockConferenceReports();
-            handleStockReportsLoaded(dbStockReports);
+            const dbStockReports = await refreshStockConferenceReports();
             console.log('✅ Relatórios recarregados:', formattedReports.length, 'conferências:', dbStockReports.length);
             alert(`Atualizado! ${formattedReports.length} avaliação(ões) e ${dbStockReports.length} conferência(s) carregada(s).`);
         } catch (error) {
@@ -1255,8 +1343,7 @@ const App: React.FC = () => {
                         ignoredChecklists: r.ignored_checklists
                     })));
                 }
-                const dbStockReports = await SupabaseService.fetchStockConferenceReports();
-                handleStockReportsLoaded(dbStockReports);
+                await refreshStockConferenceReports();
 
                 // 4. Load Companies
                 const dbCompanies = await SupabaseService.fetchCompanies();
@@ -1515,10 +1602,10 @@ const App: React.FC = () => {
     const stockConferenceBranchOptions = useMemo(() => {
         const map = new Map<string, string>();
         stockConferenceHistory.forEach(item => {
-            const label = canonicalizeFilterLabel(sanitizeStockBranch(item.branch));
-            const key = normalizeFilterKey(label);
+            const branchValue = sanitizeStockBranch(item.branch);
+            const key = normalizeFilterKey(branchValue);
             if (!map.has(key)) {
-                map.set(key, label);
+                map.set(key, formatBranchFilterLabel(branchValue));
             }
         });
         return Array.from(map.entries())
@@ -2484,8 +2571,7 @@ const App: React.FC = () => {
                 ignoredChecklists: r.ignored_checklists || []
             }));
             setReportHistory(formattedReports);
-            const dbStockReports = await SupabaseService.fetchStockConferenceReports();
-            handleStockReportsLoaded(dbStockReports);
+            await refreshStockConferenceReports();
             console.log('✅ Relatórios atualizados:', formattedReports.length, 'itens');
 
             // Clear Draft from state
@@ -2528,8 +2614,7 @@ const App: React.FC = () => {
                     ignoredChecklists: r.ignored_checklists || []
                 }));
                 setReportHistory(formattedReports);
-                const dbStockReports = await SupabaseService.fetchStockConferenceReports();
-                handleStockReportsLoaded(dbStockReports);
+                await refreshStockConferenceReports();
                 setCurrentView('history');
             } catch (reloadError) {
                 console.error('❌ Erro ao recarregar relatórios:', reloadError);
@@ -3014,6 +3099,17 @@ const App: React.FC = () => {
                     </button>
 
                     <button
+                        onClick={() => handleViewChange('pre')}
+                        className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'pre'
+                            ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
+                            : 'text-gray-600 hover:bg-gray-50'
+                            }`}
+                    >
+                        <ClipboardList className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'pre' ? '' : 'text-gray-400'}`} />
+                        Pré-Vencidos
+                    </button>
+
+                    <button
                         onClick={() => handleViewChange('settings')}
                         className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'settings'
                             ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
@@ -3078,7 +3174,8 @@ const App: React.FC = () => {
                                     currentView === 'settings' ? 'Configurações do Sistema' :
                                         currentView === 'access' ? 'Níveis de Acesso' :
                                             currentView === 'history' ? 'Histórico de Relatórios' :
-                                                activeChecklist.title}
+                                                currentView === 'pre' ? 'Pré-Vencidos' :
+                                                    activeChecklist.title}
                         </h1>
                     <div className="flex items-center gap-2">
                         {currentView === 'checklist' && canControlChecklists && (
@@ -3112,7 +3209,8 @@ const App: React.FC = () => {
                                 currentView === 'settings' ? 'Configurações do Sistema' :
                                     currentView === 'access' ? 'Níveis de Acesso' :
                                         currentView === 'history' ? 'Histórico de Relatórios' :
-                                            activeChecklist.title}
+                                            currentView === 'pre' ? 'Pré-Vencidos' :
+                                                activeChecklist.title}
                     </h1>
 
                     <div className="flex items-center gap-4">
@@ -3195,6 +3293,17 @@ const App: React.FC = () => {
                     {currentView === 'stock' && (
                         <div className="h-full animate-fade-in relative pb-24">
                             <StockConference
+                                userEmail={currentUser?.email || ''}
+                                userName={currentUser?.name || ''}
+                                companies={companies}
+                                onReportSaved={refreshStockConferenceReports}
+                            />
+                        </div>
+                    )}
+
+                    {currentView === 'pre' && (
+                        <div className="h-full animate-fade-in relative pb-24">
+                            <PreVencidosManager
                                 userEmail={currentUser?.email || ''}
                                 userName={currentUser?.name || ''}
                                 companies={companies}

@@ -46,6 +46,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const handleReconfigure = () => {
     setHasCompletedSetup(false);
     setCurrentView(AppView.SETUP);
+    setSessionInfo(null);
   };
 
   const applySessionFromData = useCallback((session: DbPVSession) => {
@@ -59,17 +60,6 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     setFinalizedREDSByPeriod(data.finalized_reds_by_period || {});
     setSalesPeriod(data.sales_period || '');
 
-    const matchedCompany = companies.find(c => c.id === session.company_id);
-    setSessionInfo({
-      company: matchedCompany?.name || '',
-      companyId: session.company_id || undefined,
-      filial: session.branch || '',
-      area: session.area || '',
-      pharmacist: session.pharmacist || '',
-      manager: session.manager || ''
-    });
-    setHasCompletedSetup(true);
-    setCurrentView(AppView.REGISTRATION);
   }, [companies]);
 
   useEffect(() => {
