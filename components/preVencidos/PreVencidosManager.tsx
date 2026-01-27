@@ -97,7 +97,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
     setConfirmedPVSales(data.confirmed_pv_sales || {});
     setFinalizedREDSByPeriod(data.finalized_reds_by_period || {});
+    setConfirmedPVSales(data.confirmed_pv_sales || {});
+    setFinalizedREDSByPeriod(data.finalized_reds_by_period || {});
     setSalesPeriod(data.sales_period || '');
+
+    // Restore base products so user doesn't need to re-upload
+    if (data.system_products?.length) setSystemProducts(data.system_products);
+    if (data.dcb_products?.length) setDcbBaseProducts(data.dcb_products);
 
     // Restore Session Context (Company, Branch, etc.)
     if (session.company_id && session.branch) {
@@ -235,6 +241,24 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       setMasterProducts(merged);
     }
   }, [systemProducts, dcbBaseProducts]);
+
+  // Persist Products to Session Data (Local & Remote)
+  useEffect(() => {
+    if (userEmail && (systemProducts.length > 0 || dcbBaseProducts.length > 0)) {
+      const currentLocal = loadLocalPVSession(userEmail);
+      if (currentLocal) {
+        const updatedSession = {
+          ...currentLocal,
+          session_data: {
+            ...currentLocal.session_data,
+            system_products: systemProducts,
+            dcb_products: dcbBaseProducts
+          }
+        };
+        saveLocalPVSession(userEmail, updatedSession);
+      }
+    }
+  }, [systemProducts, dcbBaseProducts, userEmail]);
 
   const handleRefresh = async () => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
