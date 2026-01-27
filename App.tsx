@@ -46,6 +46,18 @@ interface ReportHistoryItem {
     ignoredChecklists: string[]; // IDs
 }
 
+type StockConferenceSummary = {
+    total: number;
+    matched: number;
+    divergent: number;
+    pending: number;
+    percent: number;
+    signatures?: {
+        pharmacist?: string | null;
+        manager?: string | null;
+    };
+};
+
 interface StockConferenceHistoryItem {
     id: string;
     userEmail: string;
@@ -253,13 +265,26 @@ const sanitizeReportArea = (report: ReportHistoryItem) => {
     return areaCandidate || 'Área não informada';
 };
 
+const parseJsonValue = <T>(value: any): T | null => {
+    if (!value) return null;
+    if (typeof value === 'string') {
+        try {
+            return JSON.parse(value) as T;
+        } catch {
+            return null;
+        }
+    }
+    return value as T;
+};
+
 const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceReport[]): StockConferenceHistoryItem[] => {
     return reports.map(rep => {
-        const summary = rep.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
+        const parsedSummary = parseJsonValue<StockConferenceSummary>((rep as any).summary) || rep.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
+        const summary: StockConferenceSummary = parsedSummary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
         const branchName = sanitizeStockBranch(rep.branch);
         const areaName = sanitizeStockArea(rep.area);
-        const summarySignatures = summary.signatures || {};
-        const rootSignatures = (rep as any).signatures || {};
+        const summarySignatures = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>(summary.signatures) || {};
+        const rootSignatures = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>((rep as any).signatures) || {};
         return {
             id: rep.id || `${rep.user_email}_${rep.created_at || Date.now()}`,
             userEmail: rep.user_email,
@@ -294,10 +319,11 @@ interface StockConferenceReportViewerProps {
 
 const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportViewerProps) => {
     const items = report.items || [];
-    const summary = report.summary || { total: items.length, matched: 0, divergent: 0, pending: 0, percent: 0 };
+    const parsedSummary = parseJsonValue<StockConferenceSummary>((report as any).summary) || report.summary || { total: items.length, matched: 0, divergent: 0, pending: 0, percent: 0 };
+    const summary: StockConferenceSummary = parsedSummary;
     const createdAt = report.created_at ? new Date(report.created_at) : new Date();
-    const rootSignatures = (report as any).signatures || {};
-    const signatureData = summary.signatures || rootSignatures;
+    const rootSignatures = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>((report as any).signatures) || {};
+    const signatureData = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>(summary.signatures) || rootSignatures;
     const pharmacistSignature = report.pharmacistSignature || signatureData.pharmacist || null;
     const managerSignature = report.managerSignature || signatureData.manager || null;
     const summaryTotals = {
@@ -1255,20 +1281,24 @@ const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceRepo
             return;
         }
         const historyEntry = stockConferenceHistory.find(item => item.id === historyId);
-        const baseSummary = report.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
-        const rootSignatures = (report as any).signatures || {};
+        const parsedSummary = parseJsonValue<StockConferenceSummary>(report.summary) || report.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
+        const baseSummary: StockConferenceSummary = typeof parsedSummary === 'object' ? parsedSummary : { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
+        const summarySignatures = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>(baseSummary.signatures) || {};
+        const rootSignatures = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>((report as any).signatures) || {};
+        const resolvedPharmacistSignature = historyEntry?.pharmacistSignature || summarySignatures.pharmacist || rootSignatures.pharmacist || null;
+        const resolvedManagerSignature = historyEntry?.managerSignature || summarySignatures.manager || rootSignatures.manager || null;
         const enrichedSummary = {
             ...baseSummary,
             signatures: {
-                pharmacist: historyEntry?.pharmacistSignature || baseSummary.signatures?.pharmacist || rootSignatures.pharmacist || null,
-                manager: historyEntry?.managerSignature || baseSummary.signatures?.manager || rootSignatures.manager || null
+                pharmacist: resolvedPharmacistSignature,
+                manager: resolvedManagerSignature
             }
         };
         setViewingStockConferenceReport({
             ...report,
             summary: enrichedSummary,
-            pharmacistSignature: historyEntry?.pharmacistSignature || rootSignatures.pharmacist || null,
-            managerSignature: historyEntry?.managerSignature || rootSignatures.manager || null
+            pharmacistSignature: resolvedPharmacistSignature,
+            managerSignature: resolvedManagerSignature
         });
     };
 

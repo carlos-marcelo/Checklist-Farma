@@ -524,6 +524,21 @@ export async function createStockConferenceReport(report: DbStockConferenceRepor
   }
 }
 
+export async function updateStockConferenceReportSummary(id: string, summary: DbStockConferenceReport['summary']): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('stock_conference_reports')
+      .update({ summary })
+      .eq('id', id);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error updating stock conference summary:', error);
+    return false;
+  }
+}
+
 // Check if a similar report already exists to avoid duplicates
 export async function reportExists(report: DbReport): Promise<boolean> {
   try {

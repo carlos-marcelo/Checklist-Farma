@@ -136,6 +136,18 @@ interface StockConferenceProps {
   onReportSaved?: () => Promise<void>;
 }
 
+type StockSummaryPayload = {
+  total: number;
+  matched: number;
+  divergent: number;
+  pending: number;
+  percent: number;
+  signatures?: {
+    pharmacist?: string | null;
+    manager?: string | null;
+  };
+};
+
 interface CompanyAreaMatch {
   companyId: string;
   areaName: string;
@@ -412,7 +424,10 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const [isSavingStockReport, setIsSavingStockReport] = useState(false);
   const [isSavingSession, setIsSavingSession] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [lastSavedReportId, setLastSavedReportId] = useState<string | null>(null);
+  const [lastSavedSummary, setLastSavedSummary] = useState<StockSummaryPayload | null>(null);
   const manualSessionStartedRef = useRef(false);
+  const signatureHashRef = useRef('');
 
   // --- Effects ---
 
@@ -1123,12 +1138,16 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     };
 
     setIsSavingStockReport(true);
-    try {
-      await SupabaseService.createStockConferenceReport(payload);
-      if (onReportSaved) {
-        await onReportSaved();
-      }
-    } catch (error) {
+      try {
+        const saved = await SupabaseService.createStockConferenceReport(payload);
+        if (saved) {
+          setLastSavedReportId(saved.id || null);
+          setLastSavedSummary(summary);
+          if (onReportSaved) {
+            await onReportSaved();
+          }
+        }
+      } catch (error) {
       console.error('Erro ao salvar conferência de estoque:', error);
       alert('Não foi possível salvar o relatório no Supabase. O resultado será exibido localmente.');
     } finally {
@@ -2080,6 +2099,37 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       </div>
     );
   };
+
+  useEffect(() => {
+    if (!lastSavedReportId || !lastSavedSummary) return;
+    if (!pharmSignature && !managerSignature) return;
+
+    const hash = `${pharmSignature || ''}-${managerSignature || ''}`;
+    if (signatureHashRef.current === hash) return;
+
+    const updatedSummary: StockSummaryPayload = {
+      ...lastSavedSummary,
+      signatures: {
+        pharmacist: pharmSignature || null,
+        manager: managerSignature || null
+      }
+    };
+
+    const applyUpdate = async () => {
+      try {
+        await SupabaseService.updateStockConferenceReportSummary(lastSavedReportId, updatedSummary);
+        setLastSavedSummary(updatedSummary);
+        signatureHashRef.current = hash;
+        if (onReportSaved) {
+          await onReportSaved();
+        }
+      } catch (error) {
+        console.error('Erro ao atualizar assinaturas no Supabase:', error);
+      }
+    };
+
+    applyUpdate();
+  }, [pharmSignature, managerSignature, lastSavedReportId, lastSavedSummary, onReportSaved]);
 
   return (
     <div className="h-full w-full">
