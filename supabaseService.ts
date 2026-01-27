@@ -119,6 +119,21 @@ export interface DbStockConferenceReport {
   created_at?: string;
 }
 
+export interface DbPVSalesHistory {
+  id?: string;
+  company_id: string;
+  branch: string;
+  user_email: string;
+  sale_period: string;
+  seller_name: string;
+  reduced_code: string;
+  product_name: string;
+  qty_sold_pv: number;
+  qty_ignored: number;
+  qty_neutral: number;
+  finalized_at?: string;
+}
+
 export interface DbPVSessionData {
   master_products?: Product[];
   system_products?: Product[];
@@ -805,6 +820,39 @@ export async function updatePVBranchRecord(id: string, quantity: number): Promis
   } catch (error) {
     console.error('Error updating PV branch record:', error);
     return false;
+  }
+}
+
+export async function insertPVSalesHistory(records: DbPVSalesHistory[]): Promise<boolean> {
+  if (!records.length) return true;
+  try {
+    const { error } = await supabase
+      .from('pv_sales_history')
+      .insert(records);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error inserting PV sales history:', JSON.stringify(error, null, 2));
+    return false;
+  }
+}
+
+export async function fetchPVSalesHistory(companyId: string, branch: string): Promise<DbPVSalesHistory[]> {
+  try {
+    const { data, error } = await supabase
+      .from('pv_sales_history')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('branch', branch)
+      // Opcional: filtrar por período se necessário, mas melhor trazer tudo para o dashboard acumulado
+      .order('finalized_at', { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching PV sales history:', error);
+    return [];
   }
 }
 

@@ -46,6 +46,8 @@ export interface PVSaleClassification {
   qtyPV: number;
   qtyNeutral: number;
   qtyIgnoredPV: number;
+  sellerName?: string;
+  reducedCode?: string;
 }
 
 export enum AppView {

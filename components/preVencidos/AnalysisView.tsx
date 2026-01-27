@@ -13,9 +13,9 @@ interface AnalysisViewProps {
   onFinalizeSale: (reducedCode: string, period: string) => void;
 }
 
-const AnalysisView: React.FC<AnalysisViewProps> = ({ 
-  pvRecords, 
-  salesRecords, 
+const AnalysisView: React.FC<AnalysisViewProps> = ({
+  pvRecords,
+  salesRecords,
   confirmedPVSales,
   finalizedREDSByPeriod,
   currentSalesPeriod,
@@ -27,7 +27,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
 
   const results = useMemo(() => {
     const periodFinalizedList = finalizedREDSByPeriod[currentSalesPeriod] || [];
-    
+
     return pvRecords.map(pv => {
       const isFinalized = periodFinalizedList.includes(pv.reducedCode);
       const directSales = salesRecords.filter(s => s.reducedCode === pv.reducedCode);
@@ -73,19 +73,19 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     else setExpanded({ id, type });
   };
 
-  const filteredResults = results.filter(r => 
+  const filteredResults = results.filter(r =>
     r.name.toLowerCase().includes(searchTerm.toLowerCase()) || r.reducedCode.includes(searchTerm)
   );
 
-  const handleClassificationChange = (saleId: string, field: keyof PVSaleClassification, val: number, maxSale: number, reducedCode: string) => {
+  const handleClassificationChange = (saleId: string, field: keyof PVSaleClassification, val: number, maxSale: number, reducedCode: string, sellerName: string) => {
     const periodFinalizedList = finalizedREDSByPeriod[currentSalesPeriod] || [];
     if (periodFinalizedList.includes(reducedCode)) return;
 
     const current = confirmedPVSales[saleId] || { confirmed: false, qtyPV: 0, qtyNeutral: 0, qtyIgnoredPV: 0 };
     const nextVal = Math.max(0, val);
-    
+
     const pvStock = pvRecords.find(r => r.reducedCode === reducedCode)?.quantity || 0;
-    
+
     // Outros vendedores no MESMO período
     const otherSellersPVInPeriod = Object.keys(confirmedPVSales)
       .filter(k => k !== saleId && k.startsWith(`${currentSalesPeriod}-`) && k.includes(`-${reducedCode}-`))
@@ -103,13 +103,19 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
       }
       updated.qtyNeutral = maxSale - sellerPVRequest;
     } else if (field === 'qtyNeutral') {
-       if (updated.qtyPV + updated.qtyIgnoredPV + nextVal > maxSale) {
-         updated.qtyIgnoredPV = Math.max(0, maxSale - nextVal - updated.qtyPV);
-       }
+      if (updated.qtyPV + updated.qtyIgnoredPV + nextVal > maxSale) {
+        updated.qtyIgnoredPV = Math.max(0, maxSale - nextVal - updated.qtyPV);
+      }
     }
 
     const isCategorized = (updated.qtyPV + updated.qtyNeutral + updated.qtyIgnoredPV) > 0;
-    onUpdatePVSale(saleId, { ...updated, confirmed: isCategorized });
+    // Include metadata in the stored record to avoid fragile parsing later
+    onUpdatePVSale(saleId, {
+      ...updated,
+      confirmed: isCategorized,
+      sellerName: sellerName,
+      reducedCode: reducedCode
+    });
   };
 
   return (
@@ -128,41 +134,41 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
           </div>
           <div className="relative w-64">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input 
-              type="text" placeholder="Buscar item..." 
+            <input
+              type="text" placeholder="Buscar item..."
               className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-blue-500 outline-none"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
             />
           </div>
         </div>
-        
+
         <div className="p-6 space-y-4 max-h-[800px] overflow-y-auto custom-scrollbar">
           {filteredResults.map(res => (
-            <div 
-              key={res.id} 
+            <div
+              key={res.id}
               className={`p-5 rounded-2xl border transition-all ${res.isFinalized ? 'border-green-100 bg-green-50/20' : 'border-slate-100 bg-white hover:shadow-sm'}`}
             >
               <div className="flex flex-col md:flex-row justify-between gap-4">
                 <div className="flex-1">
                   <div className="flex items-center gap-2 mb-1">
-                     {res.isFinalized ? (
-                       <span className="text-[8px] font-black px-2 py-0.5 rounded uppercase tracking-tighter bg-green-600 text-white flex items-center gap-1">
-                         <CheckCircle size={10} /> FINALIZADO EM {currentSalesPeriod}
-                       </span>
-                     ) : (
-                       <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase ${res.status === 'sold' ? 'bg-blue-600 text-white animate-pulse' : res.status === 'replaced' ? 'bg-amber-500 text-white' : 'bg-slate-400 text-white'}`}>
-                         {res.status === 'sold' ? 'Pendência SKU' : res.status === 'replaced' ? 'Similar Vendido' : 'Sem Movimento'}
-                       </span>
-                     )}
-                     <span className="text-[10px] font-mono text-slate-400 font-bold">RED: {res.reducedCode}</span>
+                    {res.isFinalized ? (
+                      <span className="text-[8px] font-black px-2 py-0.5 rounded uppercase tracking-tighter bg-green-600 text-white flex items-center gap-1">
+                        <CheckCircle size={10} /> FINALIZADO EM {currentSalesPeriod}
+                      </span>
+                    ) : (
+                      <span className={`text-[8px] font-black px-2 py-0.5 rounded uppercase ${res.status === 'sold' ? 'bg-blue-600 text-white animate-pulse' : res.status === 'replaced' ? 'bg-amber-500 text-white' : 'bg-slate-400 text-white'}`}>
+                        {res.status === 'sold' ? 'Pendência SKU' : res.status === 'replaced' ? 'Similar Vendido' : 'Sem Movimento'}
+                      </span>
+                    )}
+                    <span className="text-[10px] font-mono text-slate-400 font-bold">RED: {res.reducedCode}</span>
                   </div>
                   <h4 className="text-lg font-bold text-slate-900 uppercase">{res.name}</h4>
                   <div className="flex items-center gap-3 mt-2">
-                     <div className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 flex items-center gap-1">
-                       <FlaskConical size={12} /> {res.dcb}
-                     </div>
-                     <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">PV EM ESTOQUE: {res.quantity}</div>
+                    <div className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 flex items-center gap-1">
+                      <FlaskConical size={12} /> {res.dcb}
+                    </div>
+                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">PV EM ESTOQUE: {res.quantity}</div>
                   </div>
                 </div>
 
@@ -182,23 +188,23 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                 <div className="mt-4 pt-4 border-t border-slate-100 animate-in slide-in-from-top-2">
                   <div className="flex items-center justify-between mb-4">
                     <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest flex items-center gap-1.5">
-                      {expanded.type === 'sku' ? <Package size={14}/> : <Repeat size={14}/>} {res.isFinalized ? 'Lançamentos Confirmados' : 'Distribuição por Vendedor'}
+                      {expanded.type === 'sku' ? <Package size={14} /> : <Repeat size={14} />} {res.isFinalized ? 'Lançamentos Confirmados' : 'Distribuição por Vendedor'}
                     </p>
                     <button onClick={() => setExpanded(null)} className="text-[10px] font-bold text-slate-300 uppercase hover:text-red-500">Fechar Detalhes</button>
                   </div>
-                  
+
                   <div className="space-y-3">
                     {(expanded.type === 'sku' ? res.directSalesDetails : res.similarSalesDetails).map((sale) => {
                       const data = confirmedPVSales[sale.id] || { confirmed: false, qtyPV: 0, qtyNeutral: 0, qtyIgnoredPV: 0 };
                       const max = (sale as any).totalSoldInReport || (sale as any).qty;
-                      
+
                       return (
                         <div key={sale.id} className={`p-4 rounded-2xl border flex flex-col md:flex-row justify-between items-center gap-4 ${res.isFinalized ? 'border-green-100 bg-white/50' : 'border-slate-50 bg-slate-50/50'}`}>
                           <div className="flex-1 min-w-0">
                             <p className="text-xs font-bold text-slate-800 uppercase truncate">{sale.name}</p>
                             <div className="flex items-center gap-2 mt-1">
-                               <span className="text-[10px] text-blue-600 font-bold uppercase tracking-tight">Vendedor: {sale.seller}</span>
-                               <span className="text-[10px] text-slate-400 font-mono font-bold">RED: {sale.code}</span>
+                              <span className="text-[10px] text-blue-600 font-bold uppercase tracking-tight">Vendedor: {sale.seller}</span>
+                              <span className="text-[10px] text-slate-400 font-mono font-bold">RED: {sale.code}</span>
                             </div>
                             <p className="text-[10px] font-black text-slate-800 mt-1 uppercase">TOTAL VENDIDO NESTA NOTA: {max}</p>
                           </div>
@@ -208,36 +214,36 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                               <div className="flex items-center gap-3 bg-white p-3 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden">
                                 {res.isFinalized && (
                                   <div className="absolute inset-0 bg-white/60 backdrop-blur-[1px] z-10 flex items-center justify-center">
-                                     <Lock size={16} className="text-green-600" />
+                                    <Lock size={16} className="text-green-600" />
                                   </div>
                                 )}
                                 <div className="flex flex-col items-center">
                                   <span className="text-[7px] font-black text-green-600 uppercase mb-1">Vendeu PV (+)</span>
-                                  <input 
+                                  <input
                                     type="number" min="0" max={max}
                                     value={data.qtyPV || ''}
                                     disabled={res.isFinalized}
-                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyPV', Number(e.target.value), max, res.reducedCode)}
+                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyPV', Number(e.target.value), max, res.reducedCode, sale.seller)}
                                     className="w-12 h-9 text-center text-xs font-black bg-green-50 text-green-700 rounded-lg outline-none border border-green-100 focus:ring-1 focus:ring-green-400"
                                   />
                                 </div>
                                 <div className="flex flex-col items-center">
                                   <span className="text-[7px] font-black text-red-600 uppercase mb-1">Ignorou PV (-)</span>
-                                  <input 
+                                  <input
                                     type="number" min="0" max={max}
                                     value={data.qtyIgnoredPV || ''}
                                     disabled={res.isFinalized}
-                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyIgnoredPV', Number(e.target.value), max, res.reducedCode)}
+                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyIgnoredPV', Number(e.target.value), max, res.reducedCode, sale.seller)}
                                     className="w-12 h-9 text-center text-xs font-black bg-red-50 text-red-700 rounded-lg outline-none border border-red-100 focus:ring-1 focus:ring-red-400"
                                   />
                                 </div>
                                 <div className="flex flex-col items-center">
                                   <span className="text-[7px] font-black text-slate-400 uppercase mb-1">Não era PV (/)</span>
-                                  <input 
+                                  <input
                                     type="number" min="0" max={max}
                                     value={data.qtyNeutral || ''}
                                     disabled={res.isFinalized}
-                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyNeutral', Number(e.target.value), max, res.reducedCode)}
+                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyNeutral', Number(e.target.value), max, res.reducedCode, sale.seller)}
                                     className="w-12 h-9 text-center text-xs font-black bg-slate-100 text-slate-600 rounded-lg outline-none border border-slate-200 focus:ring-1 focus:ring-slate-400"
                                   />
                                 </div>
@@ -262,7 +268,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
 
                   {expanded.type === 'sku' && !res.isFinalized && (
                     <div className="mt-8 flex justify-end">
-                      <button 
+                      <button
                         onClick={() => { onFinalizeSale(res.reducedCode, currentSalesPeriod); setExpanded(null); }}
                         className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white font-black uppercase text-xs px-8 py-4 rounded-2xl shadow-xl shadow-blue-200 transition-all active:scale-95"
                       >
@@ -273,9 +279,9 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
 
                   {res.isFinalized && (
                     <div className="mt-6 flex justify-center">
-                       <div className="flex items-center gap-2 px-6 py-3 bg-green-100 text-green-700 rounded-xl border border-green-200 text-xs font-black uppercase tracking-widest">
-                         <Lock size={14} /> Finalizado para o Período {currentSalesPeriod}
-                       </div>
+                      <div className="flex items-center gap-2 px-6 py-3 bg-green-100 text-green-700 rounded-xl border border-green-200 text-xs font-black uppercase tracking-widest">
+                        <Lock size={14} /> Finalizado para o Período {currentSalesPeriod}
+                      </div>
                     </div>
                   )}
                 </div>

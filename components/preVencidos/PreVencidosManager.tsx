@@ -20,7 +20,10 @@ import {
   insertPVBranchRecord,
   fetchPVBranchRecords,
   deletePVBranchRecord,
-  updatePVBranchRecord
+  updatePVBranchRecord,
+  fetchPVSalesHistory,
+  insertPVSalesHistory,
+  DbPVSalesHistory
 } from '../../supabaseService';
 import { loadLocalPVSession, saveLocalPVSession, clearLocalPVSession } from '../../preVencidos/storage';
 
@@ -46,6 +49,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [pvSessionId, setPvSessionId] = useState<string | null>(null);
   const [isSavingSession, setIsSavingSession] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
+  const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canSwitchToView = (view: AppView) => view === AppView.SETUP || hasCompletedSetup;
   const handleNavItemClick = (view: AppView) => {
@@ -74,6 +78,26 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     setConfirmedPVSales(data.confirmed_pv_sales || {});
     setFinalizedREDSByPeriod(data.finalized_reds_by_period || {});
     setSalesPeriod(data.sales_period || '');
+
+    // Restore Session Context (Company, Branch, etc.)
+    if (session.company_id && session.branch) {
+      const foundCompany = companies.find(c => c.id === session.company_id);
+      setSessionInfo({
+        companyId: session.company_id,
+        company: foundCompany ? foundCompany.name : (session.session_data as any)?.companyName || '',
+        filial: session.branch,
+        area: session.area || '',
+        pharmacist: session.pharmacist || '',
+        manager: session.manager || ''
+      });
+      setHasCompletedSetup(true);
+      if (session.session_data?.sales_period) {
+        // If we had an active sales period, go to analysis
+        // But maybe they want to land on Setup or Dashboard?
+        // Let's default to Setup if they haven't uploaded files, OR Analysis if they have.
+        // For now, let's just restore the info. The products useEffect will determine if ready.
+      }
+    }
 
   }, [companies]);
 
@@ -130,9 +154,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     }
   }, [systemProducts, dcbBaseProducts]);
 
-  // Load persistent branch records when company/branch is selected
+  // Load persistent branch records and history when company/branch is selected
   useEffect(() => {
     if (sessionInfo?.companyId && sessionInfo?.filial) {
+      // 1. Fetch Active Stock
       fetchPVBranchRecords(sessionInfo.companyId, sessionInfo.filial)
         .then(dbRecords => {
           if (dbRecords && dbRecords.length > 0) {
@@ -154,6 +179,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           }
         })
         .catch(err => console.error('Erro carregando registros da filial:', err));
+
+      // 2. Fetch Sales History (Dashboard Persistence)
+      fetchPVSalesHistory(sessionInfo.companyId, sessionInfo.filial)
+        .then(history => {
+          if (history) setHistoryRecords(history);
+        })
+        .catch(err => console.error('Erro carregando histórico de vendas:', err));
     }
   }, [sessionInfo?.companyId, sessionInfo?.filial]);
 
@@ -161,13 +193,47 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     setConfirmedPVSales(prev => ({ ...prev, [saleId]: classification }));
   };
 
-  const handleFinalizeSale = (reducedCode: string, period: string) => {
+  const handleFinalizeSale = async (reducedCode: string, period: string) => {
     let totalPVUnitsToDeduct = 0;
+
+    // Prepare records for history
+    const historyEntries: DbPVSalesHistory[] = [];
+
     Object.keys(confirmedPVSales).forEach(key => {
-      // O ID da venda agora contém o período: `${period}-${seller}-${reducedCode}...`
+      // Key: `${period}-${seller}-${reducedCode}-${quantity}-${idx}`
       if (key.startsWith(`${period}-`) && key.includes(`-${reducedCode}-`)) {
         const item = confirmedPVSales[key];
+        const parts = key.split('-');
+        // parts[0] = period
+        // parts[1] = seller
+        // parts[2] = reducedCode (can be split if code has dashes, careful)
+        // Better to recover seller from parts or just look at data if possible. 
+        // Structure is standard so: currentSalesPeriod + '-' + seller + '-' + code + ...
+
+        // Let's rely on the iteration to sum up stuff.
         if (item.confirmed) totalPVUnitsToDeduct += item.qtyPV;
+
+        // Create history record
+        if (sessionInfo?.companyId && sessionInfo.filial && (item.qtyPV > 0 || item.qtyIgnored > 0 || item.qtyNeutral > 0 || item.qtyIgnoredPV > 0)) {
+          // Extract seller and product name using logic from AnalysisView or just parsing key roughly? 
+          // We need accurate data. SalesRecord has it.
+          // Improved Seller Extraction using metadata if available
+          const seller = item.sellerName || parts[1];
+          const product = pvRecords.find(r => r.reducedCode === reducedCode);
+
+          historyEntries.push({
+            company_id: sessionInfo.companyId,
+            branch: sessionInfo.filial,
+            user_email: userEmail || '',
+            sale_period: period,
+            seller_name: seller,
+            reduced_code: reducedCode,
+            product_name: product?.name || 'Produto Finalizado',
+            qty_sold_pv: item.qtyPV,
+            qty_ignored: item.qtyIgnoredPV,
+            qty_neutral: item.qtyNeutral
+          });
+        }
       }
     });
 
@@ -193,7 +259,17 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       });
       alert(`Sucesso! ${totalPVUnitsToDeduct} unidades baixadas do estoque PV.`);
     } else {
-      alert("Lançamento finalizado apenas como registro histórico.");
+      alert("Lançamento finalizado. Registro salvo no histórico.");
+    }
+
+    // Persist History to DB
+    if (historyEntries.length > 0) {
+      const success = await insertPVSalesHistory(historyEntries);
+      if (success) {
+        setHistoryRecords(prev => [...prev, ...historyEntries]);
+      } else {
+        alert("Atenção: Houve um erro ao salvar o histórico de vendas no banco. O dashboard pode não atualizar corretamente.");
+      }
     }
 
     setFinalizedREDSByPeriod(prev => {
@@ -310,12 +386,54 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     let totalRecovered = 0;
     let totalIgnored = 0;
 
-    // Métricas agregadas de TODOS os períodos salvos para esta filial
+    // 1. Add metrics from Persistent History (DB)
+    historyRecords.forEach(rec => {
+      const seller = rec.seller_name || 'Desconhecido';
+      if (!sellerStats[seller]) sellerStats[seller] = { positive: 0, neutral: 0, negative: 0 };
+
+      sellerStats[seller].positive += Number(rec.qty_sold_pv || 0);
+      sellerStats[seller].neutral += Number(rec.qty_neutral || 0);
+      sellerStats[seller].negative += Number(rec.qty_ignored || 0);
+
+      totalRecovered += Number(rec.qty_sold_pv || 0);
+      totalIgnored += Number(rec.qty_ignored || 0);
+    });
+
+    // 2. Add metrics from Current Session (InMemory), skipping those already finalized/saved
     Object.keys(confirmedPVSales).forEach(key => {
       const data = confirmedPVSales[key];
-      // Key format: `${period}-${seller}-${reducedCode}-${quantity}-${idx}`
+      // key format: `${period}-${seller}-${reducedCode}-...`
       const parts = key.split('-');
-      const seller = parts[1];
+
+      // Basic check: if this ReducedCode is already marked as finalized for this period, 
+      // assume it's in historyRecords now (or added optimistically), so skip to avoid duplicate.
+      // key structure is tricky, let's look for reducedCode.
+      // Actually, we can just check if we added it to history. 
+      // But let's use the 'finalizedREDSByPeriod' map.
+      // We need to parse reducedCode from key. 
+      // Safe bet: The logic in handleFinalizeSale adds to history AND adds to finalizedREDSByPeriod.
+      // So if it's in finalizedREDSByPeriod, we SKIP it here.
+
+      // Re-extract params. 
+      // "PERIOD-SELLER-CODE-QTY-IDX"
+      // If Period has dashes (e.g. "JAN-26"), this split is fragile.
+      // But let's try to assume the code is at index 2 if period and seller are simple?
+      // Better: we know 'finalizedREDSByPeriod' keys are Periods.
+      // We can check if any finalized array contains a code that matches this key.
+
+      const isFinalized = Object.keys(finalizedREDSByPeriod).some(periodKey => {
+        if (key.startsWith(periodKey)) {
+          const list = finalizedREDSByPeriod[periodKey];
+          // Check if key contains any of the finalized codes
+          return list.some(code => key.includes(`-${code}-`));
+        }
+        return false;
+      });
+
+      if (isFinalized) return; // Already counted in history
+
+      // Use stored seller name if available, fallback to key parsing
+      const seller = data.sellerName || parts[1];
 
       if (!sellerStats[seller]) sellerStats[seller] = { positive: 0, neutral: 0, negative: 0 };
 
@@ -353,7 +471,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const efficiency = totalPotentialSales > 0 ? (totalRecovered / totalPotentialSales) * 100 : 0;
 
     return { ranking, totalRecovered, totalIgnored, efficiency, pvInRegistry, sortedStockByMonth };
-  }, [pvRecords, confirmedPVSales]);
+  }, [pvRecords, confirmedPVSales, historyRecords, finalizedREDSByPeriod]);
 
   const logout = () => {
     if (confirm('Encerrar sessão?')) {
