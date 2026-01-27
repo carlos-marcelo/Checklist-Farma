@@ -1,18 +1,27 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Product, PVRecord, SalesRecord, AppView, SessionInfo, PVSaleClassification } from '../../preVencidos/types';
-import { 
-  parseSystemProductsXLSX, 
-  parseDCBProductsXLSX, 
-  parseSalesXLSX, 
-  parseSalesCSV 
+import {
+  parseSystemProductsXLSX,
+  parseDCBProductsXLSX,
+  parseSalesXLSX,
+  parseSalesCSV
 } from '../../preVencidos/dataService';
 import PVRegistration from './PVRegistration';
 import AnalysisView from './AnalysisView';
 import SetupView from './SetupView';
 import { NAV_ITEMS } from '../../preVencidos/constants';
 import { Package, AlertTriangle, LogOut, Settings, Trophy, TrendingUp, MinusCircle, CheckCircle, ArrowRightLeft, Calendar, Info, X } from 'lucide-react';
-import { DbCompany, DbPVSession, fetchPVSession, upsertPVSession } from '../../supabaseService';
+import {
+  DbCompany,
+  DbPVSession,
+  fetchPVSession,
+  upsertPVSession,
+  insertPVBranchRecord,
+  fetchPVBranchRecords,
+  deletePVBranchRecord,
+  updatePVBranchRecord
+} from '../../supabaseService';
 import { loadLocalPVSession, saveLocalPVSession, clearLocalPVSession } from '../../preVencidos/storage';
 
 interface PreVencidosManagerProps {
@@ -52,10 +61,16 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const applySessionFromData = useCallback((session: DbPVSession) => {
     const data = session.session_data || {};
     setPvSessionId(session.id || null);
-    setSystemProducts(data.system_products || []);
-    setDcbBaseProducts(data.dcb_products || []);
-    setMasterProducts(data.master_products || []);
-    setPvRecords(data.pv_records || []);
+    // User requested to NOT restore reports/products on exit/enter.
+    // setSystemProducts(data.system_products || []);
+    // setDcbBaseProducts(data.dcb_products || []);
+
+    // We should NOT restore manual records from the blob anymore, as they are now in the DB.
+    // setPvRecords(data.pv_records || []); 
+
+    // We can restore other session state if needed, like sales progress?
+    // For now, let's keep it clean as requested "solicitados novamente".
+
     setConfirmedPVSales(data.confirmed_pv_sales || {});
     setFinalizedREDSByPeriod(data.finalized_reds_by_period || {});
     setSalesPeriod(data.sales_period || '');
@@ -115,6 +130,33 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     }
   }, [systemProducts, dcbBaseProducts]);
 
+  // Load persistent branch records when company/branch is selected
+  useEffect(() => {
+    if (sessionInfo?.companyId && sessionInfo?.filial) {
+      fetchPVBranchRecords(sessionInfo.companyId, sessionInfo.filial)
+        .then(dbRecords => {
+          if (dbRecords && dbRecords.length > 0) {
+            setPvRecords(prev => {
+              const existingIds = new Set(prev.map(r => r.id));
+              const newRecords = dbRecords
+                .filter(rec => !existingIds.has(rec.id || ''))
+                .map(rec => ({
+                  id: rec.id || `db-${rec.reduced_code}-${Date.now()}`,
+                  reducedCode: rec.reduced_code,
+                  name: rec.product_name,
+                  quantity: rec.quantity,
+                  expiryDate: rec.expiry_date,
+                  entryDate: rec.entry_date,
+                  dcb: rec.dcb
+                }));
+              return [...prev, ...newRecords];
+            });
+          }
+        })
+        .catch(err => console.error('Erro carregando registros da filial:', err));
+    }
+  }, [sessionInfo?.companyId, sessionInfo?.filial]);
+
   const handleUpdatePVSale = (saleId: string, classification: PVSaleClassification) => {
     setConfirmedPVSales(prev => ({ ...prev, [saleId]: classification }));
   };
@@ -134,9 +176,18 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         const updated = [...prev];
         const index = updated.findIndex(r => r.reducedCode === reducedCode);
         if (index !== -1) {
-          const newQty = Math.max(0, updated[index].quantity - totalPVUnitsToDeduct);
-          if (newQty <= 0) updated.splice(index, 1);
-          else updated[index] = { ...updated[index], quantity: newQty };
+          const targetRecord = updated[index];
+          const newQty = Math.max(0, targetRecord.quantity - totalPVUnitsToDeduct);
+
+          if (newQty <= 0) {
+            updated.splice(index, 1);
+            // Sync with DB: Delete if empty
+            if (targetRecord.id) deletePVBranchRecord(targetRecord.id);
+          } else {
+            updated[index] = { ...targetRecord, quantity: newQty };
+            // Sync with DB: Update quantity
+            if (targetRecord.id) updatePVBranchRecord(targetRecord.id, newQty);
+          }
         }
         return updated;
       });
@@ -158,19 +209,19 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const file = e.target.files?.[0];
     if (file) {
       try {
-        let salesData: {sales: SalesRecord[], period: string};
+        let salesData: { sales: SalesRecord[], period: string };
         const fileName = file.name.toLowerCase();
         if (fileName.endsWith('.csv') || fileName.endsWith('.txt')) {
-           const reader = new FileReader();
-           reader.onload = (event) => {
-             const text = event.target?.result as string;
-             const sales = parseSalesCSV(text);
-             processAndSetSales(sales, "CSV-Upload-" + new Date().toLocaleDateString());
-           };
-           reader.readAsText(file);
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            const text = event.target?.result as string;
+            const sales = parseSalesCSV(text);
+            processAndSetSales(sales, "CSV-Upload-" + new Date().toLocaleDateString());
+          };
+          reader.readAsText(file);
         } else {
-           salesData = await parseSalesXLSX(file);
-           processAndSetSales(salesData.sales, salesData.period);
+          salesData = await parseSalesXLSX(file);
+          processAndSetSales(salesData.sales, salesData.period);
         }
       } catch (error) {
         alert('Erro ao processar arquivo de vendas.');
@@ -204,10 +255,15 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       pharmacist: sessionInfo?.pharmacist || '',
       manager: sessionInfo?.manager || '',
       session_data: {
-        master_products: masterProducts,
-        system_products: systemProducts,
-        dcb_products: dcbBaseProducts,
-        pv_records: pvRecords,
+        // We do NOT save the big product lists to session anymore to keep it light 
+        // and force re-upload as requested.
+        // master_products: masterProducts, 
+        // system_products: systemProducts,
+        // dcb_products: dcbBaseProducts,
+
+        // PV Records are now in DB (pv_branch_records), do not duplicate in blob
+        // pv_records: pvRecords, 
+
         confirmed_pv_sales: confirmedPVSales,
         finalized_reds_by_period: finalizedREDSByPeriod,
         sales_period: salesPeriod
@@ -217,6 +273,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     saveLocalPVSession(userEmail, payload);
     setIsSavingSession(true);
     try {
+      // Upserting session mainly for metadata now
       const saved = await upsertPVSession(payload);
       if (saved) setPvSessionId(saved.id || null);
     } catch (error) {
@@ -224,7 +281,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     } finally {
       setIsSavingSession(false);
     }
-  }, [userEmail, pvSessionId, sessionInfo, masterProducts, systemProducts, dcbBaseProducts, pvRecords, confirmedPVSales, finalizedREDSByPeriod, salesPeriod]);
+  }, [userEmail, pvSessionId, sessionInfo, confirmedPVSales, finalizedREDSByPeriod, salesPeriod]);
+
 
   const schedulePersist = useCallback(() => {
     if (persistTimeoutRef.current) clearTimeout(persistTimeoutRef.current);
@@ -257,10 +315,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       const data = confirmedPVSales[key];
       // Key format: `${period}-${seller}-${reducedCode}-${quantity}-${idx}`
       const parts = key.split('-');
-      const seller = parts[1]; 
-      
+      const seller = parts[1];
+
       if (!sellerStats[seller]) sellerStats[seller] = { positive: 0, neutral: 0, negative: 0 };
-      
+
       sellerStats[seller].positive += data.qtyPV;
       sellerStats[seller].neutral += data.qtyNeutral;
       sellerStats[seller].negative += data.qtyIgnoredPV;
@@ -269,8 +327,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     });
 
     const ranking = Object.entries(sellerStats)
-      .map(([name, data]) => ({ 
-        name, 
+      .map(([name, data]) => ({
+        name,
         score: data.positive - data.negative,
         positive: data.positive,
         neutral: data.neutral,
@@ -279,7 +337,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       .sort((a, b) => b.score - a.score || b.positive - a.positive);
 
     const pvInRegistry = pvRecords.reduce((acc, r) => acc + r.quantity, 0);
-    
+
     const stockByMonth: Record<string, number> = {};
     pvRecords.forEach(r => {
       stockByMonth[r.expiryDate] = (stockByMonth[r.expiryDate] || 0) + r.quantity;
@@ -290,7 +348,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         const [m2, y2] = b[0].split('/').map(Number);
         return (y1 * 12 + m1) - (y2 * 12 + m2);
       });
-    
+
     const totalPotentialSales = totalRecovered + totalIgnored;
     const efficiency = totalPotentialSales > 0 ? (totalRecovered / totalPotentialSales) * 100 : 0;
 
@@ -298,7 +356,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   }, [pvRecords, confirmedPVSales]);
 
   const logout = () => {
-    if(confirm('Encerrar sessão?')) {
+    if (confirm('Encerrar sessão?')) {
       if (userEmail) clearLocalPVSession(userEmail);
       window.location.reload();
     }
@@ -340,7 +398,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             <Settings size={20} />
             <span className="text-sm font-medium">Reconfigurar</span>
           </button>
-          
+
           <label className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-slate-800 text-slate-400 transition-colors group">
             <TrendingUp size={20} className="group-hover:text-green-400" />
             <div className="flex-1">
@@ -367,7 +425,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                 <p className="text-sm font-bold text-slate-800">{sessionInfo.pharmacist}</p>
                 <p className="text-xs text-slate-500">Filial: {sessionInfo.filial}</p>
               </div>
-              <button onClick={logout} className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors">
+              <button onClick={logout} className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors" title="Sair e Limpar Sessão">
                 <LogOut size={18} />
               </button>
             </div>
@@ -376,16 +434,16 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
         <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-slate-50">
           {currentView === AppView.SETUP && (
-              <SetupView 
-          onComplete={(info) => { 
-            setSessionInfo(info); 
-            setPvRecords([]);
-            setConfirmedPVSales({});
-            setFinalizedREDSByPeriod({});
-            setSalesPeriod('');
-            setHasCompletedSetup(true);
-            setCurrentView(AppView.REGISTRATION); 
-          }}
+            <SetupView
+              onComplete={(info) => {
+                setSessionInfo(info);
+                setPvRecords([]);
+                setConfirmedPVSales({});
+                setFinalizedREDSByPeriod({});
+                setSalesPeriod('');
+                setHasCompletedSetup(true);
+                setCurrentView(AppView.REGISTRATION);
+              }}
               onSystemProductsUpload={async (f) => setSystemProducts(await parseSystemProductsXLSX(f))}
               onDCBBaseUpload={async (f) => setDcbBaseProducts(await parseDCBProductsXLSX(f))}
               productsLoaded={masterProducts.length > 0}
@@ -395,24 +453,53 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             />
           )}
           {currentView === AppView.REGISTRATION && (
-            <PVRegistration 
+            <PVRegistration
               masterProducts={masterProducts} pvRecords={pvRecords} sessionInfo={sessionInfo}
-              onAddPV={(rec) => setPvRecords(prev => [rec, ...prev])}
-              onRemovePV={(id) => setPvRecords(prev => prev.filter(r => r.id !== id))}
+              onAddPV={async (rec) => {
+                // Save to Supabase (pv_branch_records)
+                if (sessionInfo && sessionInfo.companyId) {
+                  try {
+                    const saved = await insertPVBranchRecord({
+                      company_id: sessionInfo.companyId,
+                      branch: sessionInfo.filial,
+                      reduced_code: rec.reducedCode,
+                      product_name: rec.name,
+                      dcb: rec.dcb,
+                      quantity: rec.quantity,
+                      expiry_date: rec.expiryDate,
+                      entry_date: rec.entryDate,
+                      user_email: userEmail || ''
+                    });
+                    if (saved && saved.id) {
+                      rec.id = saved.id;
+                    } else {
+                      alert("Aviso: O registro foi adicionado à lista mas NÃO foi confirmado no banco de dados. Ao sair, ele pode ser perdido. Tente novamente.");
+                    }
+                  } catch (e) {
+                    console.error('Erro ao salvar registro de filial:', e);
+                    alert("Erro ao salvar no banco de dados. Verifique a conexão.");
+                  }
+                }
+                setPvRecords(prev => [rec, ...prev]);
+              }}
+              onRemovePV={async (id) => {
+                setPvRecords(prev => prev.filter(r => r.id !== id));
+                await deletePVBranchRecord(id);
+              }}
             />
           )}
           {currentView === AppView.ANALYSIS && (
             <div className="space-y-4">
               {salesPeriod && (
                 <div className="bg-blue-600 text-white p-4 rounded-2xl shadow-lg flex items-center justify-between">
-                   <div className="flex items-center gap-3">
-                     <Calendar size={20} />
-                     <span className="text-sm font-black uppercase tracking-widest">Período de Vendas Reconhecido: {salesPeriod}</span>
-                   </div>
-                   <span className="text-[10px] font-bold bg-white/20 px-3 py-1 rounded-full uppercase">Excel Linha 5 / Coluna I</span>
+                  <div className="flex items-center gap-3">
+                    <Calendar size={20} />
+                    <span className="text-sm font-black uppercase tracking-widest">Período de Vendas Reconhecido: {salesPeriod}</span>
+                  </div>
+                  <span className="text-[10px] font-bold bg-white/20 px-3 py-1 rounded-full uppercase">Excel Linha 5 / Coluna I</span>
                 </div>
               )}
-              <AnalysisView 
+              <AnalysisView
                 pvRecords={pvRecords} salesRecords={salesRecords} confirmedPVSales={confirmedPVSales}
                 finalizedREDSByPeriod={finalizedREDSByPeriod}
                 currentSalesPeriod={salesPeriod}
@@ -421,111 +508,111 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             </div>
           )}
           {currentView === AppView.DASHBOARD && (
-             <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500">
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recuperado PV (Filial)</p>
-                    <p className="text-4xl font-black text-green-600 mt-2">{dashboardMetrics.totalRecovered}</p>
-                    <p className="text-[9px] font-bold text-green-500 mt-2 uppercase flex items-center gap-1"><CheckCircle size={10}/> Positivo</p>
+            <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500">
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recuperado PV (Filial)</p>
+                  <p className="text-4xl font-black text-green-600 mt-2">{dashboardMetrics.totalRecovered}</p>
+                  <p className="text-[9px] font-bold text-green-500 mt-2 uppercase flex items-center gap-1"><CheckCircle size={10} /> Positivo</p>
+                </div>
+                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Ignorou PV (Filial)</p>
+                  <p className="text-4xl font-black text-red-500 mt-2">{dashboardMetrics.totalIgnored}</p>
+                  <p className="text-[9px] font-bold text-red-400 mt-2 uppercase flex items-center gap-1"><MinusCircle size={10} /> Negativo</p>
+                </div>
+                <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white">
+                  <p className="text-[9px] font-black text-blue-400 uppercase tracking-widest">Eficiência Geral Acumulada</p>
+                  <p className="text-4xl font-black mt-2">{dashboardMetrics.efficiency.toFixed(1)}%</p>
+                  <div className="mt-4 h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                    <div className="h-full bg-blue-500" style={{ width: `${dashboardMetrics.efficiency}%` }}></div>
                   </div>
-                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Ignorou PV (Filial)</p>
-                    <p className="text-4xl font-black text-red-500 mt-2">{dashboardMetrics.totalIgnored}</p>
-                    <p className="text-[9px] font-bold text-red-400 mt-2 uppercase flex items-center gap-1"><MinusCircle size={10}/> Negativo</p>
-                  </div>
-                  <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white">
-                    <p className="text-[9px] font-black text-blue-400 uppercase tracking-widest">Eficiência Geral Acumulada</p>
-                    <p className="text-4xl font-black mt-2">{dashboardMetrics.efficiency.toFixed(1)}%</p>
-                    <div className="mt-4 h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                      <div className="h-full bg-blue-500" style={{ width: `${dashboardMetrics.efficiency}%` }}></div>
+                </div>
+                <button
+                  onClick={() => setShowStockDetail(true)}
+                  className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95 group"
+                >
+                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Estoque Restante PV</p>
+                  <p className="text-4xl font-black text-slate-800 mt-2 group-hover:text-blue-600 transition-colors">{dashboardMetrics.pvInRegistry}</p>
+                  <p className="text-[9px] font-bold text-slate-400 mt-2 uppercase flex items-center gap-1">
+                    <Info size={10} /> Clique para detalhar
+                  </p>
+                </button>
+              </div>
+
+              {showStockDetail && (
+                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                  <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+                    <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                      <h3 className="font-bold text-slate-800 flex items-center gap-2 uppercase text-xs tracking-widest">
+                        <Calendar size={18} className="text-blue-500" /> Detalhamento por Vencimento
+                      </h3>
+                      <button onClick={() => setShowStockDetail(false)} className="text-slate-400 hover:text-red-500 transition-colors">
+                        <X size={20} />
+                      </button>
+                    </div>
+                    <div className="p-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                      <div className="space-y-3">
+                        {dashboardMetrics.sortedStockByMonth.length === 0 ? (
+                          <p className="text-center py-10 text-slate-400 text-sm italic">Nenhum estoque PV cadastrado.</p>
+                        ) : (
+                          dashboardMetrics.sortedStockByMonth.map(([month, qty]) => (
+                            <div key={month} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                              <div className="flex items-center gap-3">
+                                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm border border-slate-200">
+                                  <Calendar size={16} className="text-blue-500" />
+                                </div>
+                                <div>
+                                  <p className="text-xs font-black text-slate-800 uppercase">{month}</p>
+                                  <p className="text-[10px] text-slate-400 font-bold">Mês de Vencimento</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xl font-black text-blue-600">{qty}</p>
+                                <p className="text-[9px] font-black text-slate-400 uppercase">UNIDADES</p>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                    <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
+                      <span className="text-xs font-bold text-slate-400 uppercase">Total Geral</span>
+                      <span className="text-xl font-black text-slate-800">{dashboardMetrics.pvInRegistry}</span>
                     </div>
                   </div>
-                  <button 
-                    onClick={() => setShowStockDetail(true)}
-                    className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95 group"
-                  >
-                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Estoque Restante PV</p>
-                    <p className="text-4xl font-black text-slate-800 mt-2 group-hover:text-blue-600 transition-colors">{dashboardMetrics.pvInRegistry}</p>
-                    <p className="text-[9px] font-bold text-slate-400 mt-2 uppercase flex items-center gap-1">
-                       <Info size={10} /> Clique para detalhar
-                    </p>
-                  </button>
                 </div>
+              )}
 
-                {showStockDetail && (
-                  <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                    <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
-                      <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                        <h3 className="font-bold text-slate-800 flex items-center gap-2 uppercase text-xs tracking-widest">
-                          <Calendar size={18} className="text-blue-500" /> Detalhamento por Vencimento
-                        </h3>
-                        <button onClick={() => setShowStockDetail(false)} className="text-slate-400 hover:text-red-500 transition-colors">
-                          <X size={20} />
-                        </button>
-                      </div>
-                      <div className="p-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
-                        <div className="space-y-3">
-                           {dashboardMetrics.sortedStockByMonth.length === 0 ? (
-                             <p className="text-center py-10 text-slate-400 text-sm italic">Nenhum estoque PV cadastrado.</p>
-                           ) : (
-                             dashboardMetrics.sortedStockByMonth.map(([month, qty]) => (
-                               <div key={month} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                                 <div className="flex items-center gap-3">
-                                   <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm border border-slate-200">
-                                      <Calendar size={16} className="text-blue-500" />
-                                   </div>
-                                   <div>
-                                      <p className="text-xs font-black text-slate-800 uppercase">{month}</p>
-                                      <p className="text-[10px] text-slate-400 font-bold">Mês de Vencimento</p>
-                                   </div>
-                                 </div>
-                                 <div className="text-right">
-                                    <p className="text-xl font-black text-blue-600">{qty}</p>
-                                    <p className="text-[9px] font-black text-slate-400 uppercase">UNIDADES</p>
-                                 </div>
-                               </div>
-                             ))
-                           )}
+              <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+                <h3 className="text-lg font-bold flex items-center gap-3 mb-8 uppercase tracking-tight">
+                  <Trophy className="text-amber-500" /> Ranking de Eficiência por Vendedor
+                </h3>
+                {dashboardMetrics.ranking.length === 0 ? (
+                  <div className="py-12 text-center text-slate-400 bg-slate-50 rounded-2xl border border-dashed text-sm">
+                    Sem dados de classificação para exibir no ranking.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    {dashboardMetrics.ranking.map((s, i) => (
+                      <div key={s.name} className="flex items-center gap-4 p-5 bg-slate-50 rounded-2xl border border-slate-100 hover:shadow-md transition-all">
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black ${i === 0 ? 'bg-amber-100 text-amber-600 shadow-sm' : 'bg-white text-slate-300 border'}`}>
+                          {i + 1}º
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-slate-800 uppercase text-xs truncate">{s.name}</p>
+                          <div className="flex flex-wrap gap-2 mt-2">
+                            <span className="text-[8px] font-black text-green-600 bg-green-50 px-1.5 py-0.5 rounded border border-green-100">+{s.positive} PV</span>
+                            <span className="text-[8px] font-black text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-200">{s.neutral} N</span>
+                            <span className="text-[8px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded border border-red-100">-{s.negative} ERR</span>
+                          </div>
+                          <p className="text-[9px] font-bold text-blue-600 mt-2 uppercase tracking-widest">Saldo: {s.score}</p>
                         </div>
                       </div>
-                      <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
-                         <span className="text-xs font-bold text-slate-400 uppercase">Total Geral</span>
-                         <span className="text-xl font-black text-slate-800">{dashboardMetrics.pvInRegistry}</span>
-                      </div>
-                    </div>
+                    ))}
                   </div>
                 )}
-
-                <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
-                  <h3 className="text-lg font-bold flex items-center gap-3 mb-8 uppercase tracking-tight">
-                    <Trophy className="text-amber-500" /> Ranking de Eficiência por Vendedor
-                  </h3>
-                  {dashboardMetrics.ranking.length === 0 ? (
-                    <div className="py-12 text-center text-slate-400 bg-slate-50 rounded-2xl border border-dashed text-sm">
-                      Sem dados de classificação para exibir no ranking.
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                      {dashboardMetrics.ranking.map((s, i) => (
-                        <div key={s.name} className="flex items-center gap-4 p-5 bg-slate-50 rounded-2xl border border-slate-100 hover:shadow-md transition-all">
-                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black ${i === 0 ? 'bg-amber-100 text-amber-600 shadow-sm' : 'bg-white text-slate-300 border'}`}>
-                            {i + 1}º
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <p className="font-bold text-slate-800 uppercase text-xs truncate">{s.name}</p>
-                            <div className="flex flex-wrap gap-2 mt-2">
-                               <span className="text-[8px] font-black text-green-600 bg-green-50 px-1.5 py-0.5 rounded border border-green-100">+{s.positive} PV</span>
-                               <span className="text-[8px] font-black text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-200">{s.neutral} N</span>
-                               <span className="text-[8px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded border border-red-100">-{s.negative} ERR</span>
-                            </div>
-                            <p className="text-[9px] font-bold text-blue-600 mt-2 uppercase tracking-widest">Saldo: {s.score}</p>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-             </div>
+              </div>
+            </div>
           )}
         </div>
       </main>

@@ -498,7 +498,7 @@ export async function fetchStockConferenceReports(): Promise<DbStockConferenceRe
       .range(0, 9999);
 
     if (error) throw error;
-  return data || [];
+    return data || [];
   } catch (error) {
     console.error('Error fetching stock conference reports:', error);
     return [];
@@ -711,6 +711,100 @@ export async function upsertPVSession(session: DbPVSession): Promise<DbPVSession
   } catch (error) {
     console.error('Erro salvando sessÆo PV no Supabase:', error);
     return null;
+  }
+}
+
+export interface DbPVBranchRecord {
+  id?: string;
+  company_id: string | null;
+  branch: string;
+  reduced_code: string;
+  product_name: string;
+  dcb: string;
+  quantity: number;
+  expiry_date: string;
+  entry_date: string;
+  user_email: string;
+  created_at?: string;
+}
+
+export async function fetchPVBranchRecords(companyId: string, branch: string): Promise<DbPVBranchRecord[]> {
+  try {
+    if (!branch) return [];
+
+    let query = supabase
+      .from('pv_branch_records')
+      .select('*')
+      .eq('branch', branch)
+      .order('created_at', { ascending: false });
+
+    if (companyId) {
+      query = query.eq('company_id', companyId);
+    }
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching PV branch records:', error);
+    return [];
+  }
+}
+
+export async function insertPVBranchRecord(record: DbPVBranchRecord): Promise<DbPVBranchRecord | null> {
+  try {
+    const { data, error } = await supabase
+      .from('pv_branch_records')
+      .insert([{
+        company_id: record.company_id,
+        branch: record.branch,
+        reduced_code: record.reduced_code,
+        product_name: record.product_name,
+        dcb: record.dcb,
+        quantity: record.quantity,
+        expiry_date: record.expiry_date,
+        entry_date: record.entry_date,
+        user_email: record.user_email
+      }])
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error inserting PV branch record:', JSON.stringify(error, null, 2));
+    return null;
+  }
+}
+
+export async function deletePVBranchRecord(id: string): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('pv_branch_records')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error deleting PV branch record:', error);
+    return false;
+  }
+}
+
+export async function updatePVBranchRecord(id: string, quantity: number): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('pv_branch_records')
+      .update({ quantity })
+      .eq('id', id);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error updating PV branch record:', error);
+    return false;
   }
 }
 
