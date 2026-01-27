@@ -142,6 +142,8 @@ export interface DbPVSessionData {
   confirmed_pv_sales?: Record<string, PVSaleClassification>;
   finalized_reds_by_period?: Record<string, string[]>;
   sales_period?: string;
+  companyName?: string;
+  currentView?: string;
 }
 
 export interface DbPVSession {

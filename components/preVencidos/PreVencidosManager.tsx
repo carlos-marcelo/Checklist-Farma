@@ -53,29 +53,47 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [isClearingDashboard, setIsClearingDashboard] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
+
   const canSwitchToView = (view: AppView) => view === AppView.SETUP || hasCompletedSetup;
+
   const handleNavItemClick = (view: AppView) => {
     if (!canSwitchToView(view)) return;
     setCurrentView(view);
+    // Determine active view label
+    let viewLabel = '';
+    switch (view) {
+      case AppView.DASHBOARD: viewLabel = 'dashboard'; break;
+      case AppView.REGISTRATION: viewLabel = 'registration'; break;
+      case AppView.ANALYSIS: viewLabel = 'analysis'; break;
+      case AppView.SETUP: viewLabel = 'setup'; break;
+    }
+    // Update local storage directly for faster UX restoration
+    if (sessionInfo) {
+      const tempSession = {
+        ...loadLocalPVSession(userEmail || ''),
+        session_data: {
+          ...(loadLocalPVSession(userEmail || '')?.session_data || {}),
+          currentView: viewLabel
+        }
+      };
+      // @ts-ignore
+      saveLocalPVSession(userEmail || '', tempSession);
+    }
   };
+
   const handleReconfigure = () => {
-    setHasCompletedSetup(false);
-    setCurrentView(AppView.SETUP);
-    setSessionInfo(null);
+    if (confirm('Tem certeza que deseja reconfigurar? Isso fechará a sessão atual.')) {
+      setHasCompletedSetup(false);
+      setCurrentView(AppView.SETUP);
+      setSessionInfo(null);
+      clearLocalPVSession(userEmail || '');
+    }
   };
 
   const applySessionFromData = useCallback((session: DbPVSession) => {
     const data = session.session_data || {};
     setPvSessionId(session.id || null);
-    // User requested to NOT restore reports/products on exit/enter.
-    // setSystemProducts(data.system_products || []);
-    // setDcbBaseProducts(data.dcb_products || []);
-
-    // We should NOT restore manual records from the blob anymore, as they are now in the DB.
-    // setPvRecords(data.pv_records || []); 
-
-    // We can restore other session state if needed, like sales progress?
-    // For now, let's keep it clean as requested "solicitados novamente".
 
     setConfirmedPVSales(data.confirmed_pv_sales || {});
     setFinalizedREDSByPeriod(data.finalized_reds_by_period || {});
@@ -93,16 +111,22 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         manager: session.manager || ''
       });
       setHasCompletedSetup(true);
-      if (session.session_data?.sales_period) {
-        // If we had an active sales period, go to analysis
-        // But maybe they want to land on Setup or Dashboard?
-        // Let's default to Setup if they haven't uploaded files, OR Analysis if they have.
-        // For now, let's just restore the info. The products useEffect will determine if ready.
+
+      // Restore View
+      if (data.currentView) {
+        switch (data.currentView) {
+          case 'dashboard': setCurrentView(AppView.DASHBOARD); break;
+          case 'registration': setCurrentView(AppView.REGISTRATION); break;
+          case 'analysis': setCurrentView(AppView.ANALYSIS); break;
+          default: setCurrentView(AppView.REGISTRATION);
+        }
+      } else {
+        setCurrentView(AppView.REGISTRATION);
       }
     }
-
   }, [companies]);
 
+  // Load Session Logic
   useEffect(() => {
     if (!userEmail) return;
 
@@ -112,6 +136,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const localSession = loadLocalPVSession(userEmail);
     if (localSession) {
       applySessionFromData(localSession);
+      setIsLoadingSession(false); // Assume local is fast
     }
 
     fetchPVSession(userEmail)
@@ -131,6 +156,61 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       isMounted = false;
     };
   }, [userEmail, applySessionFromData]);
+
+  // Auto-Retry Fetch Logic for PV Records
+  useEffect(() => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
+
+    let retries = 3;
+    let isMounted = true;
+
+    const loadRecords = async () => {
+      setConnectionStatus('syncing');
+      try {
+        const records = await fetchPVBranchRecords(sessionInfo.companyId, sessionInfo.filial!);
+        if (isMounted) {
+          if (records && records.length > 0) {
+            setPvRecords(prev => {
+              const existingIds = new Set(prev.map(r => r.id));
+              const newRecords = records
+                .filter(rec => !existingIds.has(rec.id || ''))
+                .map(rec => ({
+                  id: rec.id || `db-${rec.reduced_code}-${Date.now()}`,
+                  reducedCode: rec.reduced_code,
+                  name: rec.product_name,
+                  quantity: rec.quantity,
+                  expiryDate: rec.expiry_date,
+                  entryDate: rec.entry_date,
+                  dcb: rec.dcb,
+                  userEmail: rec.user_email,
+                  userName: ''
+                }));
+              return [...prev, ...newRecords].filter((v, i, a) => a.findIndex(t => (t.id === v.id)) === i);
+            });
+            setConnectionStatus('online');
+          } else {
+            // Maybe empty, let's just say online
+            console.log('[PV AutoLoad] 0 records found via DB.');
+            setConnectionStatus('online');
+          }
+        }
+      } catch (err) {
+        console.error('[PV AutoLoad] Fetch error:', err);
+        if (retries > 0 && isMounted) {
+          retries--;
+          console.log(`[PV AutoLoad] Retrying in 2s... attempts left: ${retries}`);
+          setConnectionStatus('offline');
+          setTimeout(loadRecords, 2000);
+        } else {
+          setConnectionStatus('offline');
+        }
+      }
+    };
+
+    loadRecords();
+
+    return () => { isMounted = false; };
+  }, [sessionInfo?.companyId, sessionInfo?.filial]); // Depend only on context changes
 
   useEffect(() => {
     if (systemProducts.length > 0 || dcbBaseProducts.length > 0) {
@@ -158,6 +238,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
   const handleRefresh = async () => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
+    setConnectionStatus('syncing');
 
     // 1. Fetch Active Stock
     console.log('🔄 [PV] Forçando atualização da lista...');
@@ -681,11 +762,17 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           </div>
           {sessionInfo && (
             <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2 mr-2 px-3 py-1 bg-white rounded-full border border-gray-100 shadow-sm" title={`Status da Conexão: ${connectionStatus === 'online' ? 'Online' : connectionStatus === 'syncing' ? 'Sincronizando' : 'Offline'}`}>
+                <div className={`w-2.5 h-2.5 rounded-full ${connectionStatus === 'online' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : connectionStatus === 'syncing' ? 'bg-amber-500 animate-pulse' : 'bg-red-500'}`}></div>
+                <span className={`text-xs font-bold hidden md:block ${connectionStatus === 'online' ? 'text-emerald-700' : connectionStatus === 'syncing' ? 'text-amber-700' : 'text-red-700'}`}>
+                  {connectionStatus === 'online' ? 'ONLINE' : connectionStatus === 'syncing' ? 'SYNC' : 'OFFLINE'}
+                </span>
+              </div>
               <div className="text-right mr-4 hidden md:block">
                 <p className="text-sm font-bold text-slate-800">{sessionInfo.pharmacist}</p>
                 <p className="text-xs text-slate-500">Filial: {sessionInfo.filial}</p>
               </div>
-              <button onClick={logout} className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors" title="Sair e Limpar Sessão">
+              <button onClick={handleReconfigure} className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors" title="Sair e Limpar Sessão">
                 <LogOut size={18} />
               </button>
             </div>

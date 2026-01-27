@@ -740,7 +740,7 @@ const Logo = ({ config, large = false, companies = [], selectedCompanyId = null 
     return (
         <div className="flex items-center gap-3">
             {/* System Logo (MF) */}
-        <div className={`relative ${large ? 'w-[6.666rem] h-[6.666rem]' : 'w-10 h-10'} flex-shrink-0 filter drop-shadow-md`}>
+            <div className={`relative ${large ? 'w-[6.666rem] h-[6.666rem]' : 'w-10 h-10'} flex-shrink-0 filter drop-shadow-md`}>
                 <MFLogo className="w-full h-full" />
             </div>
 
@@ -1226,7 +1226,17 @@ const App: React.FC = () => {
     const [signatures, setSignatures] = useState<Record<string, Record<string, string>>>({});
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [showErrors, setShowErrors] = useState(false);
-    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre'>('checklist');
+
+    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre'>(() => {
+        const saved = localStorage.getItem('APP_CURRENT_VIEW');
+        return (saved as any) || 'checklist';
+    });
+
+    useEffect(() => {
+        if (currentView) {
+            localStorage.setItem('APP_CURRENT_VIEW', currentView);
+        }
+    }, [currentView]);
     const [ignoredChecklists, setIgnoredChecklists] = useState<Set<string>>(new Set());
     const errorBoxRef = useRef<HTMLDivElement>(null);
 
@@ -1339,7 +1349,7 @@ const App: React.FC = () => {
         }
     };
 
-const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceReport[]) => {
+    const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceReport[]) => {
         setStockConferenceHistory(mapStockConferenceReports(reports));
         setStockConferenceReportsRaw(reports);
     };
@@ -1802,6 +1812,7 @@ const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceRepo
     const handleLogout = () => {
         // Clear persisted session on logout
         localStorage.removeItem('APP_CURRENT_EMAIL');
+        localStorage.removeItem('APP_CURRENT_VIEW');
         setCurrentUser(null);
         setFormData({}); // Clear state from memory, relies on draft re-load
         setImages({});
@@ -2167,11 +2178,11 @@ const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceRepo
             sections: draft.sections.map(section =>
                 section.id === sectionId
                     ? {
-                          ...section,
-                          items: section.items.map(item =>
-                              item.id === itemId ? { ...item, text } : item
-                          )
-                      }
+                        ...section,
+                        items: section.items.map(item =>
+                            item.id === itemId ? { ...item, text } : item
+                        )
+                    }
                     : section
             )
         }));
@@ -2183,11 +2194,11 @@ const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceRepo
             sections: draft.sections.map(section =>
                 section.id === sectionId
                     ? {
-                          ...section,
-                          items: section.items.map(item =>
-                              item.id === itemId ? { ...item, type } : item
-                          )
-                      }
+                        ...section,
+                        items: section.items.map(item =>
+                            item.id === itemId ? { ...item, type } : item
+                        )
+                    }
                     : section
             )
         }));
@@ -2199,11 +2210,11 @@ const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceRepo
             sections: draft.sections.map(section =>
                 section.id === sectionId
                     ? {
-                          ...section,
-                          items: section.items.map(item =>
-                              item.id === itemId ? { ...item, required } : item
-                          )
-                      }
+                        ...section,
+                        items: section.items.map(item =>
+                            item.id === itemId ? { ...item, required } : item
+                        )
+                    }
                     : section
             )
         }));
@@ -2458,7 +2469,7 @@ const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceRepo
 
         try {
             // Get active checklists (not marked as "Não se Aplica")
-        const activeChecklistIds = checklists.filter(cl => !ignoredChecklists.has(cl.id)).map(cl => cl.id);
+            const activeChecklistIds = checklists.filter(cl => !ignoredChecklists.has(cl.id)).map(cl => cl.id);
 
             console.log('🔍 DEBUG - Checklists ativos:', activeChecklistIds);
             console.log('🔍 DEBUG - Checklists ignorados:', Array.from(ignoredChecklists));
@@ -2914,7 +2925,7 @@ const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceRepo
         if (stats.missingItems.length > 0) {
             const firstMissing = stats.missingItems[0];
             // Encontrar o elemento no DOM pelo ID do item
-        const checklist = checklists.find(c => c.id === checklistId);
+            const checklist = checklists.find(c => c.id === checklistId);
             if (checklist) {
                 for (const section of checklist.sections) {
                     for (const item of section.items) {
@@ -3273,16 +3284,16 @@ const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceRepo
                 </header>
 
                 {/* Mobile Actions Bar: Title + Recomeçar */}
-                    <div className="lg:hidden no-print bg-white/90 backdrop-blur-sm border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-18 z-20">
-                        <h1 className="text-base font-extrabold text-gray-800 truncate tracking-tight">
-                            {currentView === 'report' || currentView === 'view_history' ? 'Relatório Consolidado' :
-                                currentView === 'summary' ? 'Visão Geral da Avaliação' :
-                                    currentView === 'settings' ? 'Configurações do Sistema' :
-                                        currentView === 'access' ? 'Níveis de Acesso' :
-                                            currentView === 'history' ? 'Histórico de Relatórios' :
-                                                currentView === 'pre' ? 'Pré-Vencidos' :
-                                                    activeChecklist.title}
-                        </h1>
+                <div className="lg:hidden no-print bg-white/90 backdrop-blur-sm border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-18 z-20">
+                    <h1 className="text-base font-extrabold text-gray-800 truncate tracking-tight">
+                        {currentView === 'report' || currentView === 'view_history' ? 'Relatório Consolidado' :
+                            currentView === 'summary' ? 'Visão Geral da Avaliação' :
+                                currentView === 'settings' ? 'Configurações do Sistema' :
+                                    currentView === 'access' ? 'Níveis de Acesso' :
+                                        currentView === 'history' ? 'Histórico de Relatórios' :
+                                            currentView === 'pre' ? 'Pré-Vencidos' :
+                                                activeChecklist.title}
+                    </h1>
                     <div className="flex items-center gap-2">
                         {currentView === 'checklist' && canControlChecklists && (
                             <button
@@ -3305,7 +3316,7 @@ const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceRepo
                             </button>
                         )}
                     </div>
-                    </div>
+                </div>
 
                 {/* Desktop Header */}
                 <header className="hidden lg:flex items-center justify-between h-20 bg-white/80 backdrop-blur-md border-b border-gray-200 px-10 shadow-sm no-print sticky top-0 z-30">
@@ -5486,9 +5497,8 @@ const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceRepo
                                     <button
                                         onClick={handleReloadReports}
                                         disabled={isReloadingReports}
-                                        className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors text-white ${
-                                            isReloadingReports ? 'bg-blue-400 hover:bg-blue-400 cursor-wait opacity-80' : 'bg-blue-500 hover:bg-blue-600'
-                                        }`}
+                                        className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors text-white ${isReloadingReports ? 'bg-blue-400 hover:bg-blue-400 cursor-wait opacity-80' : 'bg-blue-500 hover:bg-blue-600'
+                                            }`}
                                         title="Recarregar relatórios do Supabase"
                                     >
                                         {isReloadingReports ? (
