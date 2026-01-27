@@ -353,14 +353,80 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     }
   };
 
+  const generateClosingReportPDF = (records: DbPVSalesHistory[]) => {
+    const jsPDF = (window as any).jspdf?.jsPDF;
+    if (!jsPDF) {
+      alert('Biblioteca de PDF não carregada. O relatório não pôde ser gerado.');
+      return false;
+    }
+
+    try {
+      const doc = new jsPDF();
+      doc.setFontSize(16);
+      doc.text('Relatório de Fechamento de Vendas PV', 14, 20);
+      doc.setFontSize(10);
+      doc.text(`Filial: ${sessionInfo?.filial || 'N/A'} - Gerado em: ${new Date().toLocaleString()}`, 14, 28);
+
+      if (sessionInfo?.pharmacist) {
+        doc.text(`Farmacêutico: ${sessionInfo.pharmacist}`, 14, 34);
+      }
+
+      const tableColumn = ['Vendedor', 'Produto', 'Reduzido', 'Qtd Vendida', 'Qtd Ignorada', 'Período'];
+      const tableRows: any[] = [];
+
+      let totalSold = 0;
+      let totalIgnored = 0;
+
+      records.forEach(rec => {
+        tableRows.push([
+          rec.seller_name || '-',
+          rec.product_name,
+          rec.reduced_code,
+          rec.qty_sold_pv || 0,
+          rec.qty_ignored || 0,
+          rec.sale_period || '-'
+        ]);
+        totalSold += Number(rec.qty_sold_pv || 0);
+        totalIgnored += Number(rec.qty_ignored || 0);
+      });
+
+      (doc as any).autoTable({
+        startY: 40,
+        head: [tableColumn],
+        body: tableRows,
+        theme: 'grid',
+        styles: { fontSize: 8 },
+        foot: [['TOTAIS', '', '', totalSold, totalIgnored, '']]
+      });
+
+      doc.save(`fechamento_pv_${sessionInfo?.filial || 'filial'}_${new Date().toISOString().slice(0, 10)}.pdf`);
+      return true;
+    } catch (e) {
+      console.error("Erro gerando PDF de fechamento:", e);
+      return false;
+    }
+  };
+
   const handleClearDashboard = async () => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) {
       alert('Selecione a filial antes de limpar o dashboard.');
       return;
     }
 
-    const confirmed = confirm(`Tem certeza que deseja limpar o dashboard da filial ${sessionInfo.filial}? Isso apagará todos os dados acumulados desta filial.`);
-    if (!confirmed) return;
+    if (historyRecords.length > 0) {
+      const confirmed = confirm(`Tem certeza que deseja limpar o dashboard da filial ${sessionInfo.filial}? \n\nUm relatório PDF será gerado automaticamente com os dados atuais antes da limpeza.`);
+      if (!confirmed) return;
+    } else {
+      if (!confirm('O dashboard já está vazio. Deseja limpá-lo mesmo assim?')) return;
+    }
+
+    // Generate PDF Report BEFORE clearing
+    if (historyRecords.length > 0) {
+      const pdfSuccess = generateClosingReportPDF(historyRecords);
+      if (!pdfSuccess) {
+        if (!confirm('Falha ao gerar o relatório PDF. Deseja continuar com a limpeza mesmo assim? (Os dados serão perdidos)')) return;
+      }
+    }
 
     setIsClearingDashboard(true);
     try {
@@ -375,7 +441,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       setFinalizedREDSByPeriod({});
       setSalesPeriod('');
       setShowStockDetail(false);
-      alert('Dashboard limpo. As contagens foram zeradas para esta filial.');
+      alert('Dashboard limpo com sucesso! Os registros de vendas foram arquivados (PDF) e removidos da visualização.');
     } finally {
       setIsClearingDashboard(false);
     }
