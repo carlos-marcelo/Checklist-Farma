@@ -56,6 +56,12 @@ type StockConferenceSummary = {
         pharmacist?: string | null;
         manager?: string | null;
     };
+    duration_ms?: number;
+    durationMs?: number;
+    startedAt?: string;
+    started_at?: string;
+    endedAt?: string;
+    ended_at?: string;
 };
 
 interface StockConferenceHistoryItem {
@@ -73,6 +79,9 @@ interface StockConferenceHistoryItem {
     percent: number;
     pharmacistSignature?: string | null;
     managerSignature?: string | null;
+    startTime?: string | null;
+    endTime?: string | null;
+    durationMs?: number | null;
     createdAt: string;
 }
 
@@ -277,6 +286,27 @@ const parseJsonValue = <T>(value: any): T | null => {
     return value as T;
 };
 
+const formatDurationMs = (ms: number) => {
+    if (!ms || ms <= 0) return null;
+    const totalSeconds = Math.floor(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+    const parts: string[] = [];
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (seconds > 0 || parts.length === 0) parts.push(`${seconds}s`);
+    return parts.join(' ');
+};
+
+const formatFullDateTime = (value?: string | null) => {
+    if (!value) return '—';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '—';
+    const datePart = date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    const timePart = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return datePart + ' às ' + timePart;
+};
 const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceReport[]): StockConferenceHistoryItem[] => {
     return reports.map(rep => {
         const parsedSummary = parseJsonValue<StockConferenceSummary>((rep as any).summary) || rep.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
@@ -285,6 +315,10 @@ const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceRep
         const areaName = sanitizeStockArea(rep.area);
         const summarySignatures = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>(summary.signatures) || {};
         const rootSignatures = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>((rep as any).signatures) || {};
+        const startTime = summary.startedAt || summary.started_at || null;
+        const endTime = summary.endedAt || summary.ended_at || null;
+        const durationMs = summary.durationMs ?? summary.duration_ms ?? null;
+
         return {
             id: rep.id || `${rep.user_email}_${rep.created_at || Date.now()}`,
             userEmail: rep.user_email,
@@ -300,6 +334,9 @@ const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceRep
             percent: summary.percent,
             pharmacistSignature: summarySignatures.pharmacist || rootSignatures.pharmacist || null,
             managerSignature: summarySignatures.manager || rootSignatures.manager || null,
+            startTime,
+            endTime,
+            durationMs,
             createdAt: rep.created_at || new Date().toISOString()
         };
     });
@@ -326,6 +363,29 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
     const signatureData = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>(summary.signatures) || rootSignatures;
     const pharmacistSignature = report.pharmacistSignature || signatureData.pharmacist || null;
     const managerSignature = report.managerSignature || signatureData.manager || null;
+    const startTimestamp = summary.startedAt || summary.started_at || null;
+    const endTimestamp = summary.endedAt || summary.ended_at || null;
+    let durationMs = summary.durationMs ?? summary.duration_ms ?? null;
+    if (
+        (durationMs === null || durationMs === undefined) &&
+        startTimestamp &&
+        endTimestamp
+    ) {
+        const startDate = new Date(startTimestamp);
+        const endDate = new Date(endTimestamp);
+        if (!Number.isNaN(startDate.getTime()) && !Number.isNaN(endDate.getTime())) {
+            durationMs = Math.max(0, endDate.getTime() - startDate.getTime());
+        }
+    }
+    const durationLabel = formatDurationMs(durationMs ?? 0) || '0s';
+    const startLabel = formatFullDateTime(startTimestamp);
+    const endLabel = formatFullDateTime(endTimestamp);
+    const recordedAtLabel = formatFullDateTime(createdAt.toISOString());
+    const statusLabelText: Record<'divergent' | 'pending' | 'matched', string> = {
+        matched: 'Correto',
+        divergent: 'Divergente',
+        pending: 'Pendente'
+    };
     const summaryTotals = {
         total: summary.total ?? items.length,
         matched: summary.matched ?? 0,
@@ -360,7 +420,8 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
         const headers = 'Codigo Reduzido;Descricao;Estoque Sistema;Contagem;Diferenca;Status\n';
         const rows = sortedItems.map(item => {
             const diff = (item.counted_qty ?? 0) - (item.system_qty ?? 0);
-            const statusLabel = item.status?.toUpperCase() || 'PENDENTE';
+            const statusKey = (item.status || 'pending') as 'divergent' | 'pending' | 'matched';
+            const statusLabel = statusLabelText[statusKey] || 'Pendente';
             return `${item.reduced_code};"${item.description || ''}";${item.system_qty ?? 0};${item.counted_qty ?? 0};${diff};${statusLabel}`;
         }).join('\n');
 
@@ -382,48 +443,56 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
         }
 
         const doc = new jsPDF();
-        const dateStr = createdAt.toLocaleDateString('pt-BR');
-        const timeStr = createdAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-
         doc.setFontSize(18);
         doc.text('Relatório de Conferência de Estoque', 14, 20);
         doc.setFontSize(10);
-        doc.text(`Filial: ${report.branch || 'Sem filial'}`, 14, 28);
-        doc.text(`Área: ${report.area || 'Área não informada'}`, 14, 33);
-        doc.text(`Farmacêutico(a): ${report.pharmacist || '-'}`, 14, 38);
-        doc.text(`Gestor(a): ${report.manager || '-'}`, 14, 43);
-        doc.text(`Responsável: ${report.userName || report.user_email}`, 14, 48);
-        doc.text(`Data: ${dateStr} às ${timeStr}`, 14, 53);
-        doc.text(`Total itens: ${summaryTotals.total}`, 14, 59);
+
+        let headerY = 28;
+        const infoLines = [
+            'Filial: ' + (report.branch || 'Sem filial'),
+            'Área: ' + (report.area || 'Área não informada'),
+            'Farmacêutico(a): ' + (report.pharmacist || '-'),
+            'Gestor(a): ' + (report.manager || '-'),
+            'Responsável: ' + (report.userName || report.user_email),
+            'Início: ' + startLabel,
+            'Término: ' + endLabel,
+            'Duração: ' + durationLabel,
+            'Registrado em: ' + recordedAtLabel
+        ];
+
+        infoLines.forEach(line => {
+            doc.text(line, 14, headerY);
+            headerY += 5;
+        });
+
+        const totalsY = headerY + 2;
+        doc.text('Total itens: ' + summaryTotals.total, 14, totalsY);
         doc.setTextColor(0, 128, 0);
-        doc.text(`Corretos: ${summaryTotals.matched}`, 14, 64);
+        doc.text('Corretos: ' + summaryTotals.matched, 14, totalsY + 5);
         doc.setTextColor(200, 0, 0);
-        doc.text(`Divergentes: ${summaryTotals.divergent}`, 70, 64);
+        doc.text('Divergentes: ' + summaryTotals.divergent, 70, totalsY + 5);
         doc.setTextColor(255, 165, 0);
-        doc.text(`Pendentes: ${summaryTotals.pending}`, 120, 64);
+        doc.text('Pendentes: ' + summaryTotals.pending, 120, totalsY + 5);
         doc.setTextColor(0, 0, 0);
 
         const tableColumn = ['Reduzido', 'Descrição', 'Sistema', 'Contagem', 'Diferença', 'Status'];
         const tableRows: any[] = [];
         sortedItems.forEach(item => {
             const diff = (item.counted_qty ?? 0) - (item.system_qty ?? 0);
-            const statusLabels: Record<string, string> = {
-                matched: 'OK',
-                divergent: 'DIVERGENTE',
-                pending: 'PENDENTE'
-            };
+            const statusKey = (item.status || 'pending') as 'divergent' | 'pending' | 'matched';
+            const statusLabel = statusLabelText[statusKey] || 'Pendente';
             tableRows.push([
                 item.reduced_code,
                 item.description || '',
                 (item.system_qty ?? 0).toString(),
                 (item.counted_qty ?? 0).toString(),
                 diff.toString(),
-                statusLabels[item.status || 'pending']
+                statusLabel
             ]);
         });
 
         (doc as any).autoTable({
-            startY: 71,
+            startY: totalsY + 16,
             head: [tableColumn],
             body: tableRows,
             theme: 'grid',
@@ -444,7 +513,6 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
                 }
             }
         });
-
         if (pharmacistSignature || managerSignature) {
             const autoTableMeta = (doc as any).lastAutoTable;
             const tableEndY = autoTableMeta?.finalY ?? 0;
@@ -498,10 +566,18 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
                             <p className="text-sm text-gray-500">
                                 {report.pharmacist || 'Farmacêutico não informado'} · {report.manager || 'Gestor não informado'}
                             </p>
-                            <p className="text-xs text-gray-400 mt-1">
-                                {createdAt.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })} às {createdAt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                            <p className="text-xs text-gray-400 mt-2">
+                                Início: {startLabel}
                             </p>
-                            <p className="text-xs text-gray-400">Registrado por {report.userName || report.user_email}</p>
+                            <p className="text-xs text-gray-400">
+                                Término: {endLabel}
+                            </p>
+                            <p className="text-xs text-gray-400">
+                                Duração total: {durationLabel}
+                            </p>
+                            <p className="text-xs text-gray-400">
+                                Registrado em {recordedAtLabel} por {report.userName || report.user_email}
+                            </p>
                         </div>
                     </div>
                     <button
@@ -600,7 +676,7 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
                                             </td>
                                             <td className="px-4 py-3 text-center">
                                                 <span className={`text-[10px] font-bold rounded-full px-3 py-1 border ${badge.border} ${badge.badge}`}>
-                                                    {statusKey.toUpperCase()}
+                                                    {statusLabelText[statusKey] || 'Pendente'}
                                                 </span>
                                             </td>
                                         </tr>

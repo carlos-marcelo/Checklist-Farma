@@ -146,6 +146,12 @@ type StockSummaryPayload = {
     pharmacist?: string | null;
     manager?: string | null;
   };
+  duration_ms?: number;
+  durationMs?: number;
+  startedAt?: string;
+  started_at?: string;
+  endedAt?: string;
+  ended_at?: string;
 };
 
 interface CompanyAreaMatch {
@@ -424,6 +430,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const [isSavingStockReport, setIsSavingStockReport] = useState(false);
   const [isSavingSession, setIsSavingSession] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [lastSavedReportId, setLastSavedReportId] = useState<string | null>(null);
   const [lastSavedSummary, setLastSavedSummary] = useState<StockSummaryPayload | null>(null);
   const manualSessionStartedRef = useRef(false);
@@ -956,7 +963,14 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     }
   };
 
+  const ensureSessionStart = () => {
+    if (!sessionStartTime) {
+      setSessionStartTime(Date.now());
+    }
+  };
+
   const applyAccumulation = async (product: Product) => {
+    ensureSessionStart();
     const currentStock = inventory.get(product.reducedCode);
     if (!currentStock) return;
 
@@ -985,6 +999,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     e.preventDefault();
     if (!activeItem) return;
 
+    ensureSessionStart();
     const qty = parseFloat(countInput);
     if (isNaN(qty)) return;
 
@@ -1100,16 +1115,27 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     const matched = allItems.filter(item => item.status === 'matched').length;
     const divergent = allItems.filter(item => item.status === 'divergent').length;
     const pending = allItems.filter(item => item.status === 'pending').length;
+    const finalizedAt = new Date();
+    const startTimestamp = sessionStartTime ? new Date(sessionStartTime).toISOString() : null;
+    const endTimestamp = finalizedAt.toISOString();
+    const durationMs = sessionStartTime ? Math.max(0, finalizedAt.getTime() - sessionStartTime) : 0;
+
     const summary = {
-      total: allItems.length,
-      matched,
-      divergent,
-      pending,
-      percent: stats.percent,
-      signatures: {
-        pharmacist: pharmSignature,
-        manager: managerSignature
-      }
+        total: allItems.length,
+        matched,
+        divergent,
+        pending,
+        percent: stats.percent,
+        duration_ms: durationMs,
+        durationMs,
+        started_at: startTimestamp,
+        startedAt: startTimestamp,
+        ended_at: endTimestamp,
+        endedAt: endTimestamp,
+        signatures: {
+          pharmacist: pharmSignature,
+          manager: managerSignature
+        }
     };
 
     const inventorySnapshot = allItems.map(item => {

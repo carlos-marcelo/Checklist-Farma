@@ -99,6 +99,12 @@ export interface DbStockConferenceReport {
       pharmacist?: string | null;
       manager?: string | null;
     };
+    duration_ms?: number;
+    durationMs?: number;
+    startedAt?: string;
+    started_at?: string;
+    endedAt?: string;
+    ended_at?: string;
   };
   items: {
     reduced_code: string;
