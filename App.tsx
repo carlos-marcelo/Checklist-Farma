@@ -274,7 +274,7 @@ const sanitizeReportArea = (report: ReportHistoryItem) => {
     return areaCandidate || 'Área não informada';
 };
 
-const parseJsonValue = <T>(value: any): T | null => {
+const parseJsonValue = <T,>(value: any): T | null => {
     if (!value) return null;
     if (typeof value === 'string') {
         try {
