@@ -11,7 +11,7 @@ import PVRegistration from './PVRegistration';
 import AnalysisView from './AnalysisView';
 import SetupView from './SetupView';
 import { NAV_ITEMS } from '../../preVencidos/constants';
-import { Package, AlertTriangle, LogOut, Settings, Trophy, TrendingUp, MinusCircle, CheckCircle, ArrowRightLeft, Calendar, Info, X } from 'lucide-react';
+import { Package, AlertTriangle, LogOut, Settings, Trophy, TrendingUp, MinusCircle, CheckCircle, Calendar, Info, Trash2, X } from 'lucide-react';
 import {
   DbCompany,
   DbPVSession,
@@ -22,6 +22,7 @@ import {
   deletePVBranchRecord,
   updatePVBranchRecord,
   fetchPVSalesHistory,
+  deletePVBranchSalesHistory,
   insertPVSalesHistory,
   DbPVSalesHistory
 } from '../../supabaseService';
@@ -49,6 +50,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [pvSessionId, setPvSessionId] = useState<string | null>(null);
   const [isSavingSession, setIsSavingSession] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
+  const [isClearingDashboard, setIsClearingDashboard] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const canSwitchToView = (view: AppView) => view === AppView.SETUP || hasCompletedSetup;
@@ -302,6 +304,34 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       } catch (error) {
         alert('Erro ao processar arquivo de vendas.');
       }
+    }
+  };
+
+  const handleClearDashboard = async () => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) {
+      alert('Selecione a filial antes de limpar o dashboard.');
+      return;
+    }
+
+    const confirmed = confirm(`Tem certeza que deseja limpar o dashboard da filial ${sessionInfo.filial}? Isso apagará todos os dados acumulados desta filial.`);
+    if (!confirmed) return;
+
+    setIsClearingDashboard(true);
+    try {
+      const cleared = await deletePVBranchSalesHistory(sessionInfo.companyId, sessionInfo.filial);
+      if (!cleared) {
+        alert('Não foi possível limpar o dashboard agora. Tente novamente em alguns instantes.');
+        return;
+      }
+
+      setHistoryRecords([]);
+      setConfirmedPVSales({});
+      setFinalizedREDSByPeriod({});
+      setSalesPeriod('');
+      setShowStockDetail(false);
+      alert('Dashboard limpo. As contagens foram zeradas para esta filial.');
+    } finally {
+      setIsClearingDashboard(false);
     }
   };
 
@@ -626,7 +656,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             </div>
           )}
           {currentView === AppView.DASHBOARD && (
-            <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500">
+            <>
+              <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500">
               <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                 <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
                   <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recuperado PV (Filial)</p>
@@ -731,6 +762,18 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                 )}
               </div>
             </div>
+            {sessionInfo?.filial && (
+              <button
+                onClick={handleClearDashboard}
+                disabled={isClearingDashboard}
+                className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-2xl border border-rose-200 bg-white/90 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-rose-600 shadow-lg shadow-rose-200 transition hover:bg-rose-50 active:scale-95 disabled:cursor-wait disabled:opacity-60"
+                title="Limpar os dados acumulados deste dashboard"
+              >
+                <Trash2 size={16} />
+                <span>Limpar dashboard</span>
+              </button>
+            )}
+            </>
           )}
         </div>
       </main>

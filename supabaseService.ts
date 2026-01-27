@@ -856,6 +856,22 @@ export async function fetchPVSalesHistory(companyId: string, branch: string): Pr
   }
 }
 
+export async function deletePVBranchSalesHistory(companyId: string, branch: string): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('pv_sales_history')
+      .delete()
+      .eq('company_id', companyId)
+      .eq('branch', branch);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error deleting PV sales history for branch:', error);
+    return false;
+  }
+}
+
 // ==================== DRAFTS ====================
 
 export async function fetchDraft(userEmail: string): Promise<DbDraft | null> {
