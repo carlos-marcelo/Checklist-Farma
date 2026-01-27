@@ -171,12 +171,58 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     return { label: 'NO PRAZO', color: 'text-blue-600', days: diffDays, bg: 'bg-blue-50 border-blue-100' };
   };
 
+  // Sorting State
+  const [sortConfig, setSortConfig] = useState<{ key: keyof PVRecord, direction: 'asc' | 'desc' } | null>(null);
+
+  const handleSort = (key: keyof PVRecord) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const getSortIcon = (key: keyof PVRecord) => {
+    if (!sortConfig || sortConfig.key !== key) return <div className="w-3 h-3 ml-1 opacity-20 filter grayscale"><ChevronRight className="rotate-90" size={12} /></div>;
+    return sortConfig.direction === 'asc'
+      ? <div className="w-3 h-3 ml-1 text-blue-600"><ChevronRight className="-rotate-90" size={12} /></div>
+      : <div className="w-3 h-3 ml-1 text-blue-600"><ChevronRight className="rotate-90" size={12} /></div>;
+  };
+
   const filteredRecords = pvRecords.filter(rec => {
     const search = filterText.toLowerCase();
     const matchText = rec.name.toLowerCase().includes(search) || rec.reducedCode.includes(search) || rec.dcb.toLowerCase().includes(search);
     const matchMonth = filterMonth ? rec.expiryDate.includes(filterMonth) : true;
     return matchText && matchMonth;
   });
+
+  // Apply Sorting
+  if (sortConfig) {
+    filteredRecords.sort((a, b) => {
+      if (sortConfig.key === 'expiryDate') {
+        const [m1, y1] = a.expiryDate.split('/').map(Number);
+        const [m2, y2] = b.expiryDate.split('/').map(Number);
+        // Convert to comparable value (Year * 12 + Month)
+        const v1 = (y1 * 12) + m1;
+        const v2 = (y2 * 12) + m2;
+        return sortConfig.direction === 'asc' ? v1 - v2 : v2 - v1;
+      }
+
+      const v1 = a[sortConfig.key];
+      const v2 = b[sortConfig.key];
+
+      if (typeof v1 === 'string' && typeof v2 === 'string') {
+        return sortConfig.direction === 'asc'
+          ? v1.localeCompare(v2)
+          : v2.localeCompare(v1);
+      }
+
+      if (typeof v1 === 'number' && typeof v2 === 'number') {
+        return sortConfig.direction === 'asc' ? v1 - v2 : v2 - v1;
+      }
+      return 0;
+    });
+  }
 
   return (
     <div className="space-y-6">
@@ -334,10 +380,16 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
               <table className="w-full">
                 <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase font-bold tracking-widest border-b border-slate-100">
                   <tr>
-                    <th className="px-6 py-4 text-left w-24">Reduzido (C)</th>
-                    <th className="px-6 py-4 text-left">
+                    <th className="px-6 py-4 text-left w-24 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('reducedCode')}>
+                      <div className="flex items-center">
+                        Reduzido (C) {getSortIcon('reducedCode')}
+                      </div>
+                    </th>
+                    <th className="px-6 py-4 text-left cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('name')}>
                       <div className="space-y-2">
-                        <span>Descrição (D)</span>
+                        <div className="flex items-center">
+                          Descrição (D) {getSortIcon('name')}
+                        </div>
                         <div className="relative">
                           <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
                           <input
@@ -351,10 +403,16 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                         </div>
                       </div>
                     </th>
-                    <th className="px-6 py-4 text-center w-20">Qtd</th>
-                    <th className="px-6 py-4 text-center w-32 border-l border-slate-100">
+                    <th className="px-6 py-4 text-center w-20 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('quantity')}>
+                      <div className="flex items-center justify-center">
+                        Qtd {getSortIcon('quantity')}
+                      </div>
+                    </th>
+                    <th className="px-6 py-4 text-center w-32 border-l border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('expiryDate')}>
                       <div className="space-y-2">
-                        <span>Vencimento</span>
+                        <div className="flex items-center justify-center">
+                          Vencimento {getSortIcon('expiryDate')}
+                        </div>
                         <div className="relative">
                           <Calendar className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
                           <input
