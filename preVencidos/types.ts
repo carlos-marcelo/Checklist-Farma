@@ -14,6 +14,8 @@ export interface PVRecord {
   expiryDate: string;
   entryDate: string;
   dcb: string;
+  userEmail?: string;
+  userName?: string;
 }
 
 export interface SalesRecord {

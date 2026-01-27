@@ -156,6 +156,47 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     }
   }, [systemProducts, dcbBaseProducts]);
 
+  const handleRefresh = async () => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
+
+    // 1. Fetch Active Stock
+    console.log('🔄 [PV] Forçando atualização da lista...');
+    fetchPVBranchRecords(sessionInfo.companyId, sessionInfo.filial)
+      .then(dbRecords => {
+        if (dbRecords && dbRecords.length > 0) {
+          setPvRecords(prev => {
+            const existingIds = new Set(prev.map(r => r.id));
+            const newRecords = dbRecords
+              .filter(rec => !existingIds.has(rec.id || ''))
+              .map(rec => ({
+                id: rec.id || `db-${rec.reduced_code}-${Date.now()}`,
+                reducedCode: rec.reduced_code,
+                name: rec.product_name,
+                quantity: rec.quantity,
+                expiryDate: rec.expiry_date,
+                entryDate: rec.entry_date,
+                dcb: rec.dcb,
+                userEmail: rec.user_email,
+                userName: ''
+              }));
+            // Replace entirely on refresh to ensure sync, or merge? 
+            // Better to merge carefully or just set if we trust DB is source of truth.
+            // For persistence debugging, let's prioritize DB records + current session additions that might not be there yet?
+            // Actually, if we refresh, we want to see what is in DB.
+            return [...prev, ...newRecords].filter((v, i, a) => a.findIndex(t => (t.id === v.id)) === i);
+          });
+          alert('Lista atualizada com sucesso!');
+        } else {
+          console.log('🔍 [PV DEBUG] Refresh retornou 0 registros.');
+          alert('Nenhum registro encontrado no banco de dados para esta filial.');
+        }
+      })
+      .catch(err => {
+        console.error('❌ [PV DEBUG] Erro no refresh:', err);
+        alert('Erro ao atualizar lista via banco de dados.');
+      });
+  };
+
   // Load persistent branch records and history when company/branch is selected
   useEffect(() => {
     if (sessionInfo?.companyId && sessionInfo?.filial) {
@@ -174,15 +215,20 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                   quantity: rec.quantity,
                   expiryDate: rec.expiry_date,
                   entryDate: rec.entry_date,
-                  dcb: rec.dcb
+                  dcb: rec.dcb,
+                  userEmail: rec.user_email,
+                  userName: '' // Add logic to get name if possible or just use email
                 }));
               return [...prev, ...newRecords];
             });
+          } else {
+            console.log('🔍 [PV DEBUG] fetchPVBranchRecords retornou 0 registros para', sessionInfo.companyId, sessionInfo.filial);
           }
         })
-        .catch(err => console.error('Erro carregando registros da filial:', err));
+        .catch(err => console.error('❌ [PV DEBUG] Erro carregando registros da filial:', err));
 
       // 2. Fetch Sales History (Dashboard Persistence)
+      console.log('🔍 [PV DEBUG] Buscando histórico de vendas...');
       fetchPVSalesHistory(sessionInfo.companyId, sessionInfo.filial)
         .then(history => {
           if (history) setHistoryRecords(history);
@@ -603,6 +649,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           {currentView === AppView.REGISTRATION && (
             <PVRegistration
               masterProducts={masterProducts} pvRecords={pvRecords} sessionInfo={sessionInfo}
+              onRefresh={handleRefresh}
               onAddPV={async (rec) => {
                 // Save to Supabase (pv_branch_records)
                 if (sessionInfo && sessionInfo.companyId) {
@@ -628,7 +675,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                     alert("Erro ao salvar no banco de dados. Verifique a conexão.");
                   }
                 }
-                setPvRecords(prev => [rec, ...prev]);
+
+                // Adiciona infos do usuário localmente para exibição imediata
+                const recordWithUser = {
+                  ...rec,
+                  userEmail: userEmail || '',
+                  userName: userName || ''
+                };
+                setPvRecords(prev => [recordWithUser, ...prev]);
               }}
               onRemovePV={async (id) => {
                 setPvRecords(prev => prev.filter(r => r.id !== id));
@@ -658,121 +712,121 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           {currentView === AppView.DASHBOARD && (
             <>
               <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500">
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recuperado PV (Filial)</p>
-                  <p className="text-4xl font-black text-green-600 mt-2">{dashboardMetrics.totalRecovered}</p>
-                  <p className="text-[9px] font-bold text-green-500 mt-2 uppercase flex items-center gap-1"><CheckCircle size={10} /> Positivo</p>
-                </div>
-                <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
-                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Ignorou PV (Filial)</p>
-                  <p className="text-4xl font-black text-red-500 mt-2">{dashboardMetrics.totalIgnored}</p>
-                  <p className="text-[9px] font-bold text-red-400 mt-2 uppercase flex items-center gap-1"><MinusCircle size={10} /> Negativo</p>
-                </div>
-                <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white">
-                  <p className="text-[9px] font-black text-blue-400 uppercase tracking-widest">Eficiência Geral Acumulada</p>
-                  <p className="text-4xl font-black mt-2">{dashboardMetrics.efficiency.toFixed(1)}%</p>
-                  <div className="mt-4 h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
-                    <div className="h-full bg-blue-500" style={{ width: `${dashboardMetrics.efficiency}%` }}></div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recuperado PV (Filial)</p>
+                    <p className="text-4xl font-black text-green-600 mt-2">{dashboardMetrics.totalRecovered}</p>
+                    <p className="text-[9px] font-bold text-green-500 mt-2 uppercase flex items-center gap-1"><CheckCircle size={10} /> Positivo</p>
                   </div>
-                </div>
-                <button
-                  onClick={() => setShowStockDetail(true)}
-                  className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95 group"
-                >
-                  <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Estoque Restante PV</p>
-                  <p className="text-4xl font-black text-slate-800 mt-2 group-hover:text-blue-600 transition-colors">{dashboardMetrics.pvInRegistry}</p>
-                  <p className="text-[9px] font-bold text-slate-400 mt-2 uppercase flex items-center gap-1">
-                    <Info size={10} /> Clique para detalhar
-                  </p>
-                </button>
-              </div>
-
-              {showStockDetail && (
-                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-                  <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
-                    <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                      <h3 className="font-bold text-slate-800 flex items-center gap-2 uppercase text-xs tracking-widest">
-                        <Calendar size={18} className="text-blue-500" /> Detalhamento por Vencimento
-                      </h3>
-                      <button onClick={() => setShowStockDetail(false)} className="text-slate-400 hover:text-red-500 transition-colors">
-                        <X size={20} />
-                      </button>
+                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Ignorou PV (Filial)</p>
+                    <p className="text-4xl font-black text-red-500 mt-2">{dashboardMetrics.totalIgnored}</p>
+                    <p className="text-[9px] font-bold text-red-400 mt-2 uppercase flex items-center gap-1"><MinusCircle size={10} /> Negativo</p>
+                  </div>
+                  <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white">
+                    <p className="text-[9px] font-black text-blue-400 uppercase tracking-widest">Eficiência Geral Acumulada</p>
+                    <p className="text-4xl font-black mt-2">{dashboardMetrics.efficiency.toFixed(1)}%</p>
+                    <div className="mt-4 h-1.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                      <div className="h-full bg-blue-500" style={{ width: `${dashboardMetrics.efficiency}%` }}></div>
                     </div>
-                    <div className="p-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
-                      <div className="space-y-3">
-                        {dashboardMetrics.sortedStockByMonth.length === 0 ? (
-                          <p className="text-center py-10 text-slate-400 text-sm italic">Nenhum estoque PV cadastrado.</p>
-                        ) : (
-                          dashboardMetrics.sortedStockByMonth.map(([month, qty]) => (
-                            <div key={month} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
-                              <div className="flex items-center gap-3">
-                                <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm border border-slate-200">
-                                  <Calendar size={16} className="text-blue-500" />
+                  </div>
+                  <button
+                    onClick={() => setShowStockDetail(true)}
+                    className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95 group"
+                  >
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Estoque Restante PV</p>
+                    <p className="text-4xl font-black text-slate-800 mt-2 group-hover:text-blue-600 transition-colors">{dashboardMetrics.pvInRegistry}</p>
+                    <p className="text-[9px] font-bold text-slate-400 mt-2 uppercase flex items-center gap-1">
+                      <Info size={10} /> Clique para detalhar
+                    </p>
+                  </button>
+                </div>
+
+                {showStockDetail && (
+                  <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+                      <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2 uppercase text-xs tracking-widest">
+                          <Calendar size={18} className="text-blue-500" /> Detalhamento por Vencimento
+                        </h3>
+                        <button onClick={() => setShowStockDetail(false)} className="text-slate-400 hover:text-red-500 transition-colors">
+                          <X size={20} />
+                        </button>
+                      </div>
+                      <div className="p-6 max-h-[60vh] overflow-y-auto custom-scrollbar">
+                        <div className="space-y-3">
+                          {dashboardMetrics.sortedStockByMonth.length === 0 ? (
+                            <p className="text-center py-10 text-slate-400 text-sm italic">Nenhum estoque PV cadastrado.</p>
+                          ) : (
+                            dashboardMetrics.sortedStockByMonth.map(([month, qty]) => (
+                              <div key={month} className="flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100">
+                                <div className="flex items-center gap-3">
+                                  <div className="w-10 h-10 bg-white rounded-xl flex items-center justify-center shadow-sm border border-slate-200">
+                                    <Calendar size={16} className="text-blue-500" />
+                                  </div>
+                                  <div>
+                                    <p className="text-xs font-black text-slate-800 uppercase">{month}</p>
+                                    <p className="text-[10px] text-slate-400 font-bold">Mês de Vencimento</p>
+                                  </div>
                                 </div>
-                                <div>
-                                  <p className="text-xs font-black text-slate-800 uppercase">{month}</p>
-                                  <p className="text-[10px] text-slate-400 font-bold">Mês de Vencimento</p>
+                                <div className="text-right">
+                                  <p className="text-xl font-black text-blue-600">{qty}</p>
+                                  <p className="text-[9px] font-black text-slate-400 uppercase">UNIDADES</p>
                                 </div>
                               </div>
-                              <div className="text-right">
-                                <p className="text-xl font-black text-blue-600">{qty}</p>
-                                <p className="text-[9px] font-black text-slate-400 uppercase">UNIDADES</p>
-                              </div>
-                            </div>
-                          ))
-                        )}
-                      </div>
-                    </div>
-                    <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
-                      <span className="text-xs font-bold text-slate-400 uppercase">Total Geral</span>
-                      <span className="text-xl font-black text-slate-800">{dashboardMetrics.pvInRegistry}</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
-                <h3 className="text-lg font-bold flex items-center gap-3 mb-8 uppercase tracking-tight">
-                  <Trophy className="text-amber-500" /> Ranking de Eficiência por Vendedor
-                </h3>
-                {dashboardMetrics.ranking.length === 0 ? (
-                  <div className="py-12 text-center text-slate-400 bg-slate-50 rounded-2xl border border-dashed text-sm">
-                    Sem dados de classificação para exibir no ranking.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {dashboardMetrics.ranking.map((s, i) => (
-                      <div key={s.name} className="flex items-center gap-4 p-5 bg-slate-50 rounded-2xl border border-slate-100 hover:shadow-md transition-all">
-                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black ${i === 0 ? 'bg-amber-100 text-amber-600 shadow-sm' : 'bg-white text-slate-300 border'}`}>
-                          {i + 1}º
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-bold text-slate-800 uppercase text-xs truncate">{s.name}</p>
-                          <div className="flex flex-wrap gap-2 mt-2">
-                            <span className="text-[8px] font-black text-green-600 bg-green-50 px-1.5 py-0.5 rounded border border-green-100">+{s.positive} PV</span>
-                            <span className="text-[8px] font-black text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-200">{s.neutral} N</span>
-                            <span className="text-[8px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded border border-red-100">-{s.negative} ERR</span>
-                          </div>
-                          <p className="text-[9px] font-bold text-blue-600 mt-2 uppercase tracking-widest">Saldo: {s.score}</p>
+                            ))
+                          )}
                         </div>
                       </div>
-                    ))}
+                      <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
+                        <span className="text-xs font-bold text-slate-400 uppercase">Total Geral</span>
+                        <span className="text-xl font-black text-slate-800">{dashboardMetrics.pvInRegistry}</span>
+                      </div>
+                    </div>
                   </div>
                 )}
+
+                <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
+                  <h3 className="text-lg font-bold flex items-center gap-3 mb-8 uppercase tracking-tight">
+                    <Trophy className="text-amber-500" /> Ranking de Eficiência por Vendedor
+                  </h3>
+                  {dashboardMetrics.ranking.length === 0 ? (
+                    <div className="py-12 text-center text-slate-400 bg-slate-50 rounded-2xl border border-dashed text-sm">
+                      Sem dados de classificação para exibir no ranking.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      {dashboardMetrics.ranking.map((s, i) => (
+                        <div key={s.name} className="flex items-center gap-4 p-5 bg-slate-50 rounded-2xl border border-slate-100 hover:shadow-md transition-all">
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black ${i === 0 ? 'bg-amber-100 text-amber-600 shadow-sm' : 'bg-white text-slate-300 border'}`}>
+                            {i + 1}º
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-bold text-slate-800 uppercase text-xs truncate">{s.name}</p>
+                            <div className="flex flex-wrap gap-2 mt-2">
+                              <span className="text-[8px] font-black text-green-600 bg-green-50 px-1.5 py-0.5 rounded border border-green-100">+{s.positive} PV</span>
+                              <span className="text-[8px] font-black text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-200">{s.neutral} N</span>
+                              <span className="text-[8px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded border border-red-100">-{s.negative} ERR</span>
+                            </div>
+                            <p className="text-[9px] font-bold text-blue-600 mt-2 uppercase tracking-widest">Saldo: {s.score}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-            {sessionInfo?.filial && (
-              <button
-                onClick={handleClearDashboard}
-                disabled={isClearingDashboard}
-                className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-2xl border border-rose-200 bg-white/90 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-rose-600 shadow-lg shadow-rose-200 transition hover:bg-rose-50 active:scale-95 disabled:cursor-wait disabled:opacity-60"
-                title="Limpar os dados acumulados deste dashboard"
-              >
-                <Trash2 size={16} />
-                <span>Limpar dashboard</span>
-              </button>
-            )}
+              {sessionInfo?.filial && (
+                <button
+                  onClick={handleClearDashboard}
+                  disabled={isClearingDashboard}
+                  className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-2xl border border-rose-200 bg-white/90 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-rose-600 shadow-lg shadow-rose-200 transition hover:bg-rose-50 active:scale-95 disabled:cursor-wait disabled:opacity-60"
+                  title="Limpar os dados acumulados deste dashboard"
+                >
+                  <Trash2 size={16} />
+                  <span>Limpar dashboard</span>
+                </button>
+              )}
             </>
           )}
         </div>
