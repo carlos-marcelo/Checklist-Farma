@@ -322,37 +322,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                 </div>
               </div>
 
-              {/* Filters */}
-              <div className="flex flex-col md:flex-row gap-3">
-                <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                  <input
-                    type="text"
-                    placeholder="Filtrar por nome, código ou DCB..."
-                    value={filterText}
-                    onChange={(e) => setFilterText(e.target.value)}
-                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
-                  />
-                </div>
-                <div className="relative w-full md:w-40">
-                  <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                  <input
-                    type="text"
-                    placeholder="Mês (MM/AA)"
-                    maxLength={5}
-                    value={filterMonth}
-                    onChange={(e) => {
-                      let v = e.target.value.replace(/\D/g, '');
-                      if (v.length > 2) v = v.substring(0, 2) + '/' + v.substring(2, 4);
-                      setFilterMonth(v);
-                    }}
-                    className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-200 text-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Legend */}
-              <div className="flex flex-wrap gap-3 text-[10px] font-bold uppercase tracking-wide pt-2 border-t border-slate-100">
+              <div className="flex flex-wrap gap-3 text-[10px] font-bold uppercase tracking-wide pt-2 border-t border-slate-100 mt-4">
                 <span className="flex items-center gap-1.5 text-slate-400"><Info size={12} /> Legenda:</span>
                 <span className="flex items-center gap-1.5 text-blue-600"><span className="w-2 h-2 rounded-full bg-blue-500"></span>No Prazo (&gt;30d)</span>
                 <span className="flex items-center gap-1.5 text-rose-800"><span className="w-2 h-2 rounded-full bg-rose-700"></span>Crítico (≤30d)</span>
@@ -362,12 +332,47 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
 
             <div className="overflow-x-auto">
               <table className="w-full">
-                <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase font-bold tracking-widest">
+                <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase font-bold tracking-widest border-b border-slate-100">
                   <tr>
-                    <th className="px-6 py-4 text-left">Reduzido (C)</th>
-                    <th className="px-6 py-4 text-left">Descrição (D)</th>
-                    <th className="px-6 py-4 text-center">Qtd</th>
-                    <th className="px-6 py-4 text-center border-l border-slate-100">Vencimento</th>
+                    <th className="px-6 py-4 text-left w-24">Reduzido (C)</th>
+                    <th className="px-6 py-4 text-left">
+                      <div className="space-y-2">
+                        <span>Descrição (D)</span>
+                        <div className="relative">
+                          <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
+                          <input
+                            type="text"
+                            placeholder="Filtrar..."
+                            value={filterText}
+                            onChange={(e) => setFilterText(e.target.value)}
+                            className="w-full pl-7 pr-2 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-700 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none font-medium normal-case"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </div>
+                      </div>
+                    </th>
+                    <th className="px-6 py-4 text-center w-20">Qtd</th>
+                    <th className="px-6 py-4 text-center w-32 border-l border-slate-100">
+                      <div className="space-y-2">
+                        <span>Vencimento</span>
+                        <div className="relative">
+                          <Calendar className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
+                          <input
+                            type="text"
+                            placeholder="Mês"
+                            maxLength={5}
+                            value={filterMonth}
+                            onChange={(e) => {
+                              let v = e.target.value.replace(/\D/g, '');
+                              if (v.length > 2) v = v.substring(0, 2) + '/' + v.substring(2, 4);
+                              setFilterMonth(v);
+                            }}
+                            className="w-full pl-7 pr-2 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-700 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none font-medium normal-case"
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                        </div>
+                      </div>
+                    </th>
                     <th className="px-6 py-4 text-left">Status / Cadastro</th>
                     <th className="px-6 py-4 text-right">Ação</th>
                   </tr>
