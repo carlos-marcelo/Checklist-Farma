@@ -3,6 +3,7 @@ import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image
 import { CHECKLISTS as BASE_CHECKLISTS } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem } from './types';
 import PreVencidosManager from './components/preVencidos/PreVencidosManager';
+import { clearLocalPVReports, clearLocalPVSession } from './preVencidos/storage';
 import SignaturePad from './components/SignaturePad';
 import { StockConference } from './components/StockConference';
 import { supabase } from './supabaseClient';
@@ -1810,6 +1811,10 @@ const App: React.FC = () => {
         setCurrentUser(user);
     };
     const handleLogout = () => {
+        if (currentUser?.email) {
+            clearLocalPVSession(currentUser.email);
+            clearLocalPVReports(currentUser.email).catch(() => {});
+        }
         // Clear persisted session on logout
         localStorage.removeItem('APP_CURRENT_EMAIL');
         localStorage.removeItem('APP_CURRENT_VIEW');

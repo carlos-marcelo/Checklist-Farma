@@ -26,7 +26,14 @@ import {
   insertPVSalesHistory,
   DbPVSalesHistory
 } from '../../supabaseService';
-import { loadLocalPVSession, saveLocalPVSession, clearLocalPVSession } from '../../preVencidos/storage';
+import {
+  loadLocalPVSession,
+  saveLocalPVSession,
+  clearLocalPVSession,
+  loadLocalPVReports,
+  saveLocalPVReports,
+  clearLocalPVReports
+} from '../../preVencidos/storage';
 
 interface PreVencidosManagerProps {
   userEmail?: string;
@@ -54,6 +61,19 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
+
+  useEffect(() => {
+    if (!userEmail) return;
+
+    const handleBeforeUnload = () => {
+      clearLocalPVSession(userEmail);
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [userEmail]);
 
   const canSwitchToView = (view: AppView) => view === AppView.SETUP || hasCompletedSetup;
 
@@ -88,8 +108,27 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       setCurrentView(AppView.SETUP);
       setSessionInfo(null);
       clearLocalPVSession(userEmail || '');
+      if (userEmail) clearLocalPVReports(userEmail).catch(() => {});
     }
   };
+
+  useEffect(() => {
+    if (!userEmail) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const storedReports = await loadLocalPVReports(userEmail);
+        if (cancelled || !storedReports) return;
+        if (storedReports.systemProducts?.length) setSystemProducts(storedReports.systemProducts);
+        if (storedReports.dcbProducts?.length) setDcbBaseProducts(storedReports.dcbProducts);
+      } catch (error) {
+        console.error('Erro ao carregar relatórios PV locais:', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [userEmail]);
 
   const applySessionFromData = useCallback((session: DbPVSession) => {
     const data = session.session_data || {};
@@ -244,20 +283,30 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
   // Persist Products to Session Data (Local & Remote)
   useEffect(() => {
-    if (userEmail && (systemProducts.length > 0 || dcbBaseProducts.length > 0)) {
-      const currentLocal = loadLocalPVSession(userEmail);
-      if (currentLocal) {
-        const updatedSession = {
-          ...currentLocal,
-          session_data: {
-            ...currentLocal.session_data,
-            system_products: systemProducts,
-            dcb_products: dcbBaseProducts
-          }
-        };
-        saveLocalPVSession(userEmail, updatedSession);
-      }
+    if (!userEmail) return;
+
+    if (systemProducts.length === 0 && dcbBaseProducts.length === 0) {
+      clearLocalPVReports(userEmail).catch(() => {});
+      return;
     }
+
+    const currentLocal = loadLocalPVSession(userEmail);
+    if (currentLocal) {
+      const updatedSession = {
+        ...currentLocal,
+        session_data: {
+          ...currentLocal.session_data,
+          system_products: systemProducts,
+          dcb_products: dcbBaseProducts
+        }
+      };
+      saveLocalPVSession(userEmail, updatedSession);
+    }
+
+    saveLocalPVReports(userEmail, {
+      systemProducts,
+      dcbProducts: dcbBaseProducts
+    }).catch(error => console.error('Erro ao salvar relatórios PV locais:', error));
   }, [systemProducts, dcbBaseProducts, userEmail]);
 
   const handleRefresh = async () => {
