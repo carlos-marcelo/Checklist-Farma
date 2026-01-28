@@ -159,6 +159,17 @@ export interface DbPVSession {
   updated_at?: string;
 }
 
+export interface DbPVReport {
+  id?: string;
+  user_email: string;
+  company_id?: string | null;
+  branch?: string | null;
+  report_type: 'system' | 'dcb';
+  products: Product[];
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface DbChecklistDefinition {
   id: string;
   definition: ChecklistDefinition;
@@ -847,7 +858,6 @@ export async function fetchPVSalesHistory(companyId: string, branch: string): Pr
       .select('*')
       .eq('company_id', companyId)
       .eq('branch', branch)
-      // Opcional: filtrar por período se necessário, mas melhor trazer tudo para o dashboard acumulado
       .order('finalized_at', { ascending: false });
 
     if (error) throw error;
@@ -855,6 +865,72 @@ export async function fetchPVSalesHistory(companyId: string, branch: string): Pr
   } catch (error) {
     console.error('Error fetching PV sales history:', error);
     return [];
+  }
+}
+
+export async function fetchPVReports(userEmail: string, reportType?: 'system' | 'dcb'): Promise<DbPVReport[]> {
+  try {
+    let query = supabase
+      .from('pv_reports')
+      .select('*')
+      .eq('user_email', userEmail);
+
+    if (reportType) {
+      query = query.eq('report_type', reportType);
+    }
+
+    const { data, error } = await query.order('updated_at', { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching PV reports:', error);
+    return [];
+  }
+}
+
+export async function upsertPVReport(report: DbPVReport): Promise<DbPVReport | null> {
+  try {
+    const payload = {
+      user_email: report.user_email,
+      company_id: report.company_id,
+      branch: report.branch,
+      report_type: report.report_type,
+      products: report.products,
+      updated_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabase
+      .from('pv_reports')
+      .upsert([payload], { onConflict: 'user_email, report_type' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error upserting PV report:', error);
+    return null;
+  }
+}
+
+export async function deletePVReports(userEmail: string, reportType?: 'system' | 'dcb'): Promise<boolean> {
+  try {
+    let query = supabase
+      .from('pv_reports')
+      .delete()
+      .eq('user_email', userEmail);
+
+    if (reportType) {
+      query = query.eq('report_type', reportType);
+    }
+
+    const { error } = await query;
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error deleting PV reports:', error);
+    return false;
   }
 }
 

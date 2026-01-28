@@ -24,7 +24,10 @@ import {
   fetchPVSalesHistory,
   deletePVBranchSalesHistory,
   insertPVSalesHistory,
-  DbPVSalesHistory
+  DbPVSalesHistory,
+  fetchPVReports,
+  upsertPVReport,
+  deletePVReports
 } from '../../supabaseService';
 import {
   loadLocalPVSession,
@@ -58,6 +61,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [isSavingSession, setIsSavingSession] = useState(false);
   const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [isClearingDashboard, setIsClearingDashboard] = useState(false);
+  const [isInitialSyncDone, setIsInitialSyncDone] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
@@ -108,23 +112,59 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       setCurrentView(AppView.SETUP);
       setSessionInfo(null);
       clearLocalPVSession(userEmail || '');
-      if (userEmail) clearLocalPVReports(userEmail).catch(() => {});
+      if (userEmail) clearLocalPVReports(userEmail).catch(() => { });
     }
   };
 
   useEffect(() => {
     if (!userEmail) return;
     let cancelled = false;
-    (async () => {
+
+    const syncReports = async () => {
       try {
+        // 1. Tentar carregar localmente primeiro para velocidade
         const storedReports = await loadLocalPVReports(userEmail);
-        if (cancelled || !storedReports) return;
-        if (storedReports.systemProducts?.length) setSystemProducts(storedReports.systemProducts);
-        if (storedReports.dcbProducts?.length) setDcbBaseProducts(storedReports.dcbProducts);
-      } catch (error) {
-        console.error('Erro ao carregar relatórios PV locais:', error);
+        if (cancelled) return;
+
+        let reportsToUse = storedReports;
+
+        // 2. Se não houver local, ou para garantir sincronia, buscar do Supabase
+        console.log('🔄 [PV Sync] Buscando relatórios do Supabase para:', userEmail);
+        const dbReports = await fetchPVReports(userEmail);
+        if (cancelled) return;
+
+        if (dbReports.length > 0) {
+          const systemReport = dbReports.find(r => r.report_type === 'system');
+          const dcbReport = dbReports.find(r => r.report_type === 'dcb');
+
+          // Lógica de merge: usar o do banco se for mais completo ou se não houver local
+          const finalSystem = systemReport?.products || storedReports?.systemProducts || [];
+          const finalDcb = dcbReport?.products || storedReports?.dcbProducts || [];
+
+          if (finalSystem.length) setSystemProducts(finalSystem);
+          if (finalDcb.length) setDcbBaseProducts(finalDcb);
+
+          console.log(`✅ [PV Sync] Carregados do DB: ${finalSystem.length} sistem, ${finalDcb.length} dcb`);
+
+          // Salvar localmente o que veio do banco para consistência
+          if (dbReports.length > 0) {
+            saveLocalPVReports(userEmail, {
+              systemProducts: finalSystem,
+              dcbProducts: finalDcb
+            });
+          }
+        } else if (storedReports) {
+          // Se só houver local, carregar o local
+          if (storedReports.systemProducts?.length) setSystemProducts(storedReports.systemProducts);
+          if (storedReports.dcbProducts?.length) setDcbBaseProducts(storedReports.dcbProducts);
+        }
+      } finally {
+        if (!cancelled) setIsInitialSyncDone(true);
       }
-    })();
+    };
+
+    syncReports();
+
     return () => {
       cancelled = true;
     };
@@ -283,31 +323,48 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
   // Persist Products to Session Data (Local & Remote)
   useEffect(() => {
-    if (!userEmail) return;
+    if (!userEmail || !isInitialSyncDone) return;
 
     if (systemProducts.length === 0 && dcbBaseProducts.length === 0) {
-      clearLocalPVReports(userEmail).catch(() => {});
+      clearLocalPVReports(userEmail).catch(() => { });
+      deletePVReports(userEmail).catch(() => { });
       return;
     }
 
-    const currentLocal = loadLocalPVSession(userEmail);
-    if (currentLocal) {
-      const updatedSession = {
-        ...currentLocal,
-        session_data: {
-          ...currentLocal.session_data,
-          system_products: systemProducts,
-          dcb_products: dcbBaseProducts
-        }
-      };
-      saveLocalPVSession(userEmail, updatedSession);
-    }
-
+    // Salvar localmente
     saveLocalPVReports(userEmail, {
       systemProducts,
       dcbProducts: dcbBaseProducts
     }).catch(error => console.error('Erro ao salvar relatórios PV locais:', error));
-  }, [systemProducts, dcbBaseProducts, userEmail]);
+
+    // Sincronizar com Supabase
+    const persistToDb = async () => {
+      try {
+        if (systemProducts.length > 0) {
+          await upsertPVReport({
+            user_email: userEmail,
+            company_id: sessionInfo?.companyId,
+            branch: sessionInfo?.filial,
+            report_type: 'system',
+            products: systemProducts
+          });
+        }
+        if (dcbBaseProducts.length > 0) {
+          await upsertPVReport({
+            user_email: userEmail,
+            company_id: sessionInfo?.companyId,
+            branch: sessionInfo?.filial,
+            report_type: 'dcb',
+            products: dcbBaseProducts
+          });
+        }
+      } catch (error) {
+        console.error('Erro ao persistir relatórios no Supabase:', error);
+      }
+    };
+
+    persistToDb();
+  }, [systemProducts, dcbBaseProducts, userEmail, sessionInfo?.companyId, sessionInfo?.filial]);
 
   const handleRefresh = async () => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
