@@ -1813,7 +1813,7 @@ const App: React.FC = () => {
     const handleLogout = () => {
         if (currentUser?.email) {
             clearLocalPVSession(currentUser.email);
-            clearLocalPVReports(currentUser.email).catch(() => {});
+            clearLocalPVReports(currentUser.email).catch(() => { });
         }
         // Clear persisted session on logout
         localStorage.removeItem('APP_CURRENT_EMAIL');

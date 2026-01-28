@@ -111,8 +111,24 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       setHasCompletedSetup(false);
       setCurrentView(AppView.SETUP);
       setSessionInfo(null);
+
+      // Clear all data states
+      setSystemProducts([]);
+      setDcbBaseProducts([]);
+      setMasterProducts([]);
+      setPvRecords([]);
+      setSalesRecords([]);
+      setConfirmedPVSales({});
+      setFinalizedREDSByPeriod({});
+      setSalesPeriod('');
+      setHistoryRecords([]);
+      setPvSessionId(null);
+
       clearLocalPVSession(userEmail || '');
-      if (userEmail) clearLocalPVReports(userEmail).catch(() => { });
+      if (userEmail) {
+        clearLocalPVReports(userEmail).catch(() => { });
+        deletePVReports(userEmail).catch(() => { });
+      }
     }
   };
 
