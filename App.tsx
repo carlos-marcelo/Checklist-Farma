@@ -165,10 +165,10 @@ const mapDbReportToHistoryItem = (r: SupabaseService.DbReport): ReportHistoryIte
         images: r.images || {},
         signatures: r.signatures || {},
         ignoredChecklists: r.ignored_checklists || [],
-        empresa_avaliada: String(gerencial.empresa || fallbackInfo.empresa || r.pharmacy_name || '-'),
-        area: String(gerencial.area || fallbackInfo.area || '-'),
-        filial: String(gerencial.filial || fallbackInfo.filial || '-'),
-        gestor: String(gerencial.gestor || fallbackInfo.gestor || '-')
+        empresa_avaliada: String(gerencial.empresa || fallbackInfo.empresa || 'Sem Empresa'),
+        area: String(gerencial.area || fallbackInfo.area || 'N/A'),
+        filial: String(gerencial.filial || fallbackInfo.filial || r.pharmacy_name || 'Sem Filial'),
+        gestor: String(gerencial.gestor || fallbackInfo.gestor || 'N/A')
     };
 };
 
@@ -4856,15 +4856,21 @@ const App: React.FC = () => {
                                 <div className="grid grid-cols-2 gap-4">
                                     <div>
                                         <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Empresa</p>
-                                        <p className="text-lg font-bold text-gray-800">{getInputValue('empresa', basicInfoSourceChecklist) || '-'}</p>
+                                        <p className="text-lg font-bold text-gray-800">
+                                            {viewHistoryItem?.empresa_avaliada || getInputValue('empresa', basicInfoSourceChecklist) || 'Sem Empresa'}
+                                        </p>
                                     </div>
                                     <div>
                                         <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Área</p>
-                                        <p className="text-lg font-bold text-gray-800">{getInputValue('area', basicInfoSourceChecklist) || '-'}</p>
+                                        <p className="text-lg font-bold text-gray-800">
+                                            {viewHistoryItem?.area || getInputValue('area', basicInfoSourceChecklist) || 'N/A'}
+                                        </p>
                                     </div>
                                     <div>
                                         <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Filial</p>
-                                        <p className="text-lg font-bold text-gray-800">{getInputValue('filial', basicInfoSourceChecklist) || '-'}</p>
+                                        <p className="text-lg font-bold text-gray-800">
+                                            {viewHistoryItem?.filial || getInputValue('filial', basicInfoSourceChecklist) || 'Sem Filial'}
+                                        </p>
                                     </div>
                                     <div>
                                         <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Nome do Coordenador / Aplicador</p>
@@ -4872,7 +4878,9 @@ const App: React.FC = () => {
                                     </div>
                                     <div>
                                         <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Gestor(a)</p>
-                                        <p className="text-lg font-bold text-gray-800">{getInputValue('gestor', basicInfoSourceChecklist) || '-'}</p>
+                                        <p className="text-lg font-bold text-gray-800">
+                                            {viewHistoryItem?.gestor || getInputValue('gestor', basicInfoSourceChecklist) || 'N/A'}
+                                        </p>
                                     </div>
                                     <div>
                                         <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Data de Aplicação</p>
