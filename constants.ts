@@ -1,4 +1,4 @@
-import { ChecklistDefinition, InputType } from './types';
+import { ChecklistDefinition, InputType, ThemeColor, AccessModule, AccessLevelMeta } from './types';
 
 export const DROGARIA_LOGO_URL = "https://i.imgur.com/example-placeholder.png"; // We will build a CSS logo to avoid external dependency issues
 
@@ -222,3 +222,126 @@ export const CHECKLISTS: ChecklistDefinition[] = [
     ]
   }
 ];
+
+// --- UI THEMES ---
+export const THEMES: Record<ThemeColor, {
+  bg: string,
+  bgGradient: string,
+  border: string,
+  text: string,
+  ring: string,
+  lightBg: string,
+  button: string,
+  accent: string
+}> = {
+  red: {
+    bg: 'bg-red-600',
+    bgGradient: 'bg-gradient-to-br from-red-600 to-red-800',
+    border: 'border-red-600',
+    text: 'text-red-700',
+    ring: 'focus:ring-red-500',
+    lightBg: 'bg-red-50',
+    button: 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 shadow-lg shadow-red-200',
+    accent: 'border-red-500'
+  },
+  green: {
+    bg: 'bg-emerald-600',
+    bgGradient: 'bg-gradient-to-br from-emerald-600 to-emerald-800',
+    border: 'border-emerald-600',
+    text: 'text-emerald-700',
+    ring: 'focus:ring-emerald-500',
+    lightBg: 'bg-emerald-50',
+    button: 'bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 shadow-lg shadow-emerald-200',
+    accent: 'border-emerald-500'
+  },
+  blue: {
+    bg: 'bg-blue-600',
+    bgGradient: 'bg-gradient-to-br from-blue-600 to-blue-800',
+    border: 'border-blue-600',
+    text: 'text-blue-700',
+    ring: 'focus:ring-blue-500',
+    lightBg: 'bg-blue-50',
+    button: 'bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 shadow-lg shadow-blue-200',
+    accent: 'border-blue-500'
+  },
+  yellow: {
+    bg: 'bg-amber-500',
+    bgGradient: 'bg-gradient-to-br from-amber-500 to-amber-700',
+    border: 'border-amber-500',
+    text: 'text-amber-700',
+    ring: 'focus:ring-amber-500',
+    lightBg: 'bg-amber-50',
+    button: 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 shadow-lg shadow-amber-200',
+    accent: 'border-amber-500'
+  },
+};
+
+// --- ACCESS CONTROL ---
+export const ACCESS_MODULES: AccessModule[] = [
+  {
+    id: 'userApproval',
+    label: 'Aprovar ou recusar usuários',
+    note: 'Painel de pendências e ações rápidas do master que liberam novos cadastros.'
+  },
+  {
+    id: 'userManagement',
+    label: 'Criar e suspender usuários',
+    note: 'Formulário de criação e lista com bloqueios e destruição de acessos internos.'
+  },
+  {
+    id: 'companyEditing',
+    label: 'Editar empresas e áreas',
+    note: 'Seleciona empresa, atualiza dados e salva áreas/filiais diretamente pelas configurações.'
+  },
+  {
+    id: 'checklistControl',
+    label: 'Preencher, verificar e finalizar checklists',
+    note: 'Botões de Recomeçar, Verificar, Assinaturas e uploads que só o master manipula.'
+  },
+  {
+    id: 'supportTickets',
+    label: 'Responder tickets e alterar status',
+    note: 'Seção de suporte onde o master responde, conclui, arquiva ou reabre chamados.'
+  },
+  {
+    id: 'historyModeration',
+    label: 'Filtrar e excluir relatórios',
+    note: 'Filtros adicionais na visão de histórico e o botão de excluir relatórios.'
+  }
+];
+
+export const ACCESS_LEVELS: AccessLevelMeta[] = [
+  {
+    id: 'MASTER',
+    title: 'Master',
+    description: 'Acesso total ao sistema e controle completo das permissões.',
+    badgeLabel: 'MASTER',
+    badgeClasses: 'bg-gradient-to-r from-amber-500 to-yellow-500 text-black font-bold'
+  },
+  {
+    id: 'ADMINISTRATIVO',
+    title: 'Administrativo',
+    description: 'Gere relatórios, acesse dados estratégicos e execute tarefas gerenciais.',
+    badgeLabel: 'ADMINISTRATIVO',
+    badgeClasses: 'bg-orange-500 text-white font-semibold'
+  },
+  {
+    id: 'USER',
+    title: 'Usuário Comum',
+    description: 'Executa checklists com nível básico conforme o master define.',
+    badgeLabel: 'USUÁRIO',
+    badgeClasses: 'bg-slate-500 text-white font-semibold'
+  }
+];
+
+export const INPUT_TYPE_LABELS: Record<InputType, string> = {
+  [InputType.TEXT]: 'Texto curto',
+  [InputType.TEXTAREA]: 'Texto longo',
+  [InputType.DATE]: 'Data',
+  [InputType.BOOLEAN_PASS_FAIL]: 'Sim / Não',
+  [InputType.RATING_10]: 'Nota 0-10',
+  [InputType.HEADER]: 'Cabeçalho',
+  [InputType.INFO]: 'Informação'
+};
+
+export const generateId = (prefix = 'id') => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;

@@ -484,7 +484,7 @@ export async function fetchReportsSummary(page: number = 0, pageSize: number = 2
 
     const { data, error } = await supabase
       .from('reports')
-      .select('id, user_email, user_name, pharmacy_name, score, created_at')
+      .select('id, user_email, user_name, pharmacy_name, score, created_at, form_data')
       .order('created_at', { ascending: false })
       .range(from, to);
 

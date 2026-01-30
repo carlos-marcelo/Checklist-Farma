@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package } from 'lucide-react';
-import { CHECKLISTS as BASE_CHECKLISTS } from './constants';
-import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem } from './types';
+import { CHECKLISTS as BASE_CHECKLISTS, THEMES, ACCESS_MODULES, ACCESS_LEVELS, INPUT_TYPE_LABELS, generateId } from './constants';
+import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem, ThemeColor, AppConfig, User, ReportHistoryItem, StockConferenceHistoryItem, CompanyArea, AccessLevelId, AccessModule, AccessLevelMeta, UserRole, StockConferenceSummary } from './types';
 import PreVencidosManager from './components/preVencidos/PreVencidosManager';
 import { clearLocalPVReports, clearLocalPVSession } from './preVencidos/storage';
 import SignaturePad from './components/SignaturePad';
@@ -9,224 +9,10 @@ import { StockConference } from './components/StockConference';
 import { supabase } from './supabaseClient';
 import * as SupabaseService from './supabaseService';
 import { updateCompany, saveConfig, fetchTickets, createTicket, updateTicketStatus, createCompany, DbTicket } from './supabaseService';
+import { Sidebar } from './components/Layout/Sidebar';
+import { Header } from './components/Layout/Header';
+import { Logo, MFLogo, LogoPrint } from './components/Layout/Logo';
 
-// --- TYPES & INTERFACES FOR AUTH & CONFIG ---
-
-type ThemeColor = 'red' | 'green' | 'blue' | 'yellow';
-
-interface AppConfig {
-    pharmacyName: string;
-    logo: string | null;
-}
-
-interface User {
-    email: string;
-    password: string;
-    name: string;
-    phone: string;
-    role: 'MASTER' | 'ADMINISTRATIVO' | 'USER';
-    approved: boolean;
-    rejected?: boolean; // New field to handle "Banned/Refused" state
-    photo?: string;
-    preferredTheme?: ThemeColor; // Individual theme preference
-    company_id?: string | null; // Company the user works for
-    area?: string | null; // Area within the company
-    filial?: string | null; // Branch within the company
-}
-
-interface ReportHistoryItem {
-    id: string;
-    userEmail: string;
-    userName: string;
-    date: string; // ISO string
-    pharmacyName: string;
-    score: string;
-    formData: Record<string, ChecklistData>;
-    images: Record<string, ChecklistImages>;
-    signatures: Record<string, Record<string, string>>;
-    ignoredChecklists: string[]; // IDs
-}
-
-type StockConferenceSummary = {
-    total: number;
-    matched: number;
-    divergent: number;
-    pending: number;
-    percent: number;
-    signatures?: {
-        pharmacist?: string | null;
-        manager?: string | null;
-    };
-    duration_ms?: number;
-    durationMs?: number;
-    startedAt?: string;
-    started_at?: string;
-    endedAt?: string;
-    ended_at?: string;
-};
-
-interface StockConferenceHistoryItem {
-    id: string;
-    userEmail: string;
-    userName: string;
-    branch: string;
-    area: string;
-    pharmacist: string;
-    manager: string;
-    total: number;
-    matched: number;
-    divergent: number;
-    pending: number;
-    percent: number;
-    pharmacistSignature?: string | null;
-    managerSignature?: string | null;
-    startTime?: string | null;
-    endTime?: string | null;
-    durationMs?: number | null;
-    createdAt: string;
-}
-
-interface CompanyArea {
-    name: string;
-    branches: string[];
-}
-
-const generateId = (prefix = 'id') => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-const INPUT_TYPE_LABELS: Record<InputType, string> = {
-    [InputType.TEXT]: 'Texto curto',
-    [InputType.TEXTAREA]: 'Texto longo',
-    [InputType.DATE]: 'Data',
-    [InputType.BOOLEAN_PASS_FAIL]: 'Sim / Não',
-    [InputType.RATING_10]: 'Nota 0-10',
-    [InputType.HEADER]: 'Cabeçalho',
-    [InputType.INFO]: 'Informação'
-};
-
-// Enhanced Themes with gradients and shadows
-const THEMES: Record<ThemeColor, {
-    bg: string,
-    bgGradient: string,
-    border: string,
-    text: string,
-    ring: string,
-    lightBg: string,
-    button: string,
-    accent: string
-}> = {
-    red: {
-        bg: 'bg-red-600',
-        bgGradient: 'bg-gradient-to-br from-red-600 to-red-800',
-        border: 'border-red-600',
-        text: 'text-red-700',
-        ring: 'focus:ring-red-500',
-        lightBg: 'bg-red-50',
-        button: 'bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 shadow-lg shadow-red-200',
-        accent: 'border-red-500'
-    },
-    green: {
-        bg: 'bg-emerald-600',
-        bgGradient: 'bg-gradient-to-br from-emerald-600 to-emerald-800',
-        border: 'border-emerald-600',
-        text: 'text-emerald-700',
-        ring: 'focus:ring-emerald-500',
-        lightBg: 'bg-emerald-50',
-        button: 'bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 shadow-lg shadow-emerald-200',
-        accent: 'border-emerald-500'
-    },
-    blue: {
-        bg: 'bg-blue-600',
-        bgGradient: 'bg-gradient-to-br from-blue-600 to-blue-800',
-        border: 'border-blue-600',
-        text: 'text-blue-700',
-        ring: 'focus:ring-blue-500',
-        lightBg: 'bg-blue-50',
-        button: 'bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 shadow-lg shadow-blue-200',
-        accent: 'border-blue-500'
-    },
-    yellow: {
-        bg: 'bg-amber-500',
-        bgGradient: 'bg-gradient-to-br from-amber-500 to-amber-700',
-        border: 'border-amber-500',
-        text: 'text-amber-700',
-        ring: 'focus:ring-amber-500',
-        lightBg: 'bg-amber-50',
-        button: 'bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 shadow-lg shadow-amber-200',
-        accent: 'border-amber-500'
-    },
-};
-
-type AccessLevelId = 'MASTER' | 'ADMINISTRATIVO' | 'USER';
-
-interface AccessModule {
-    id: string;
-    label: string;
-    note?: string;
-}
-
-interface AccessLevelMeta {
-    id: AccessLevelId;
-    title: string;
-    description: string;
-    badgeLabel: string;
-    badgeClasses: string;
-}
-
-const ACCESS_MODULES: AccessModule[] = [
-    {
-        id: 'userApproval',
-        label: 'Aprovar ou recusar usuários',
-        note: 'Painel de pendências e ações rápidas do master que liberam novos cadastros.'
-    },
-    {
-        id: 'userManagement',
-        label: 'Criar e suspender usuários',
-        note: 'Formulário de criação e lista com bloqueios e destruição de acessos internos.'
-    },
-    {
-        id: 'companyEditing',
-        label: 'Editar empresas e áreas',
-        note: 'Seleciona empresa, atualiza dados e salva áreas/filiais diretamente pelas configurações.'
-    },
-    {
-        id: 'checklistControl',
-        label: 'Preencher, verificar e finalizar checklists',
-        note: 'Botões de Recomeçar, Verificar, Assinaturas e uploads que só o master manipula.'
-    },
-    {
-        id: 'supportTickets',
-        label: 'Responder tickets e alterar status',
-        note: 'Seção de suporte onde o master responde, conclui, arquiva ou reabre chamados.'
-    },
-    {
-        id: 'historyModeration',
-        label: 'Filtrar e excluir relatórios',
-        note: 'Filtros adicionais na visão de histórico e o botão de excluir relatórios.'
-    }
-];
-
-const ACCESS_LEVELS: AccessLevelMeta[] = [
-    {
-        id: 'MASTER',
-        title: 'Master',
-        description: 'Acesso total ao sistema e controle completo das permissões.',
-        badgeLabel: 'MASTER',
-        badgeClasses: 'bg-gradient-to-r from-amber-500 to-yellow-500 text-black font-bold'
-    },
-    {
-        id: 'ADMINISTRATIVO',
-        title: 'Administrativo',
-        description: 'Gere relatórios, acesse dados estratégicos e execute tarefas gerenciais.',
-        badgeLabel: 'ADMINISTRATIVO',
-        badgeClasses: 'bg-orange-500 text-white font-semibold'
-    },
-    {
-        id: 'USER',
-        title: 'Usuário Comum',
-        description: 'Executa checklists com nível básico conforme o master define.',
-        badgeLabel: 'USUÁRIO',
-        badgeClasses: 'bg-slate-500 text-white font-semibold'
-    }
-];
 
 const mergeAccessMatrixWithDefaults = (incoming: Partial<Record<AccessLevelId, Record<string, boolean>>>) => {
     const merged: Record<AccessLevelId, Record<string, boolean>> = {} as any;
@@ -263,16 +49,18 @@ const formatBranchFilterLabel = (value: string) => {
 };
 
 const sanitizeReportBranch = (report: ReportHistoryItem) => {
-    const branchCandidate = report.formData['gerencial']?.filial?.trim();
-    if (branchCandidate) return branchCandidate;
-    if (report.formData['gerencial']?.empresa) return report.formData['gerencial']?.empresa;
+    const branchCandidate = report.formData['gerencial']?.filial;
+    if (typeof branchCandidate === 'string' && branchCandidate.trim()) return branchCandidate.trim();
+    const empresaCandidate = report.formData['gerencial']?.empresa;
+    if (typeof empresaCandidate === 'string' && empresaCandidate.trim()) return empresaCandidate.trim();
     if (report.pharmacyName) return report.pharmacyName;
     return 'Filial não informada';
 };
 
 const sanitizeReportArea = (report: ReportHistoryItem) => {
-    const areaCandidate = report.formData['gerencial']?.area?.trim();
-    return areaCandidate || 'Área não informada';
+    const areaCandidate = report.formData['gerencial']?.area;
+    if (typeof areaCandidate === 'string' && areaCandidate.trim()) return areaCandidate.trim();
+    return 'Área não informada';
 };
 
 const parseJsonValue = <T,>(value: any): T | null => {
@@ -341,6 +129,47 @@ const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceRep
             createdAt: rep.created_at || new Date().toISOString()
         };
     });
+};
+
+const mapDbReportToHistoryItem = (r: SupabaseService.DbReport): ReportHistoryItem => {
+    const formData = r.form_data || {};
+    // Extract info from 'gerencial' checklist if possible
+    const gerencial = formData['gerencial'] || {};
+
+    // Also try to find a valid checklist if gerencial is missing/empty
+    let fallbackInfo = { empresa: '', area: '', filial: '', gestor: '' };
+    if (!gerencial.empresa) {
+        // Look in other checklists
+        for (const clId of Object.keys(formData)) {
+            const data = formData[clId];
+            if (data?.empresa) {
+                fallbackInfo = {
+                    empresa: String(data.empresa),
+                    area: String(data.area || ''),
+                    filial: String(data.filial || ''),
+                    gestor: String(data.gestor || '')
+                };
+                break;
+            }
+        }
+    }
+
+    return {
+        id: r.id || Date.now().toString(),
+        userEmail: r.user_email,
+        userName: r.user_name,
+        date: r.created_at || new Date().toISOString(),
+        pharmacyName: r.pharmacy_name,
+        score: r.score,
+        formData: formData,
+        images: r.images || {},
+        signatures: r.signatures || {},
+        ignoredChecklists: r.ignored_checklists || [],
+        empresa_avaliada: String(gerencial.empresa || fallbackInfo.empresa || r.pharmacy_name || '-'),
+        area: String(gerencial.area || fallbackInfo.area || '-'),
+        filial: String(gerencial.filial || fallbackInfo.filial || '-'),
+        gestor: String(gerencial.gestor || fallbackInfo.gestor || '-')
+    };
 };
 
 type StockReportItem = SupabaseService.DbStockConferenceReport['items'][number];
@@ -454,7 +283,7 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
             'Área: ' + (report.area || 'Área não informada'),
             'Farmacêutico(a): ' + (report.pharmacist || '-'),
             'Gestor(a): ' + (report.manager || '-'),
-            'Responsável: ' + (report.userName || report.user_email),
+            'Responsável: ' + (report.user_name || report.user_email),
             'Início: ' + startLabel,
             'Término: ' + endLabel,
             'Duração: ' + durationLabel,
@@ -577,7 +406,7 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
                                 Duração total: {durationLabel}
                             </p>
                             <p className="text-xs text-gray-400">
-                                Registrado em {recordedAtLabel} por {report.userName || report.user_email}
+                                Registrado em {recordedAtLabel} por {report.user_name || report.user_email}
                             </p>
                         </div>
                     </div>
@@ -616,7 +445,7 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
                     </div>
 
                     <div className="flex flex-wrap gap-2 text-[11px] text-gray-500">
-                        <span className="inline-flex items-center px-3 py-1 border border-gray-200 rounded-full bg-gray-50">Responsável: {report.userName || report.user_email}</span>
+                        <span className="inline-flex items-center px-3 py-1 border border-gray-200 rounded-full bg-gray-50">Responsável: {report.user_name || report.user_email}</span>
                         <span className="inline-flex items-center px-3 py-1 border border-gray-200 rounded-full bg-gray-50">Farmacêutico: {report.pharmacist || '-'}</span>
                         <span className="inline-flex items-center px-3 py-1 border border-gray-200 rounded-full bg-gray-50">Gestor: {report.manager || '-'}</span>
                     </div>
@@ -716,94 +545,6 @@ const INITIAL_USERS: User[] = [
 ];
 
 // --- COMPONENTS ---
-
-// Custom MF Shield Logo
-const MFLogo = ({ className = "w-12 h-12" }: { className?: string }) => (
-    // Replace the image file under `public/logos/mf-shield.svg` to swap the logo globally.
-    <img src="/logos/mf-shield.svg" alt="MF Shield" className={className} loading="lazy" />
-);
-
-// Logo Component (Dynamic Dual Display)
-const Logo = ({ config, large = false, companies = [], selectedCompanyId = null }: { config: AppConfig, large?: boolean, companies?: any[], selectedCompanyId?: string | null }) => {
-
-    // Determine which logo/name to show
-    const selectedCompany = companies.find((c: any) => c.id === selectedCompanyId);
-
-    // If no company is selected, we fall back to the system logo and slogan only.
-    // If a company is selected, use its logo/name.
-    const displayLogo = selectedCompany ? (selectedCompany.logo || null) : null;
-    const displayName = selectedCompany ? selectedCompany.name : '';
-    const showSlogan = !selectedCompanyId; // Always show slogan if no company selected (default state)
-
-    // Divider Logic: Show only when we actually have a logo or company name to highlight.
-    const showDivider = !!displayLogo || !!displayName;
-
-    return (
-        <div className="flex items-center gap-3">
-            {/* System Logo (MF) */}
-            <div className={`relative ${large ? 'w-[6.666rem] h-[6.666rem]' : 'w-10 h-10'} flex-shrink-0 filter drop-shadow-md`}>
-                <MFLogo className="w-full h-full" />
-            </div>
-
-            {/* Divider if needed */}
-            {showDivider && (
-                <div className={`h-8 w-px ${large ? 'bg-gray-300' : 'bg-white/30'} mx-1`}></div>
-            )}
-
-            {/* Client/Pharmacy Logo or Name */}
-            <div className="flex items-center gap-3">
-                {displayLogo && (
-                    <div className={`${large ? 'h-20 w-auto' : 'h-10 w-auto'} bg-white rounded-md p-1 shadow-sm`}>
-                        <img src={displayLogo} alt="Company Logo" className="h-full w-auto object-contain" />
-                    </div>
-                )}
-
-                {(!displayLogo || large) && (
-                    <div className={`flex flex-col justify-center ${large ? 'text-gray-800' : 'text-white'}`}>
-                        <span className={`font-black ${large ? 'text-2xl' : 'text-base'} uppercase tracking-tight leading-none`}>
-                            {displayName}
-                        </span>
-                        {showSlogan && (
-                            <span className={`text-[10px] font-bold uppercase tracking-widest opacity-80 ${large ? 'text-gray-500' : 'text-white'}`}>
-                                Gestão & Excelência
-                            </span>
-                        )}
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-};
-
-// Print Logo
-const LogoPrint = ({ config, theme }: { config: AppConfig, theme: any }) => {
-    return (
-        <div className={`flex items-center justify-between mb-8 pb-6 border-b-4 ${theme.border}`}>
-            {/* Left: Client Logo */}
-            <div className="flex items-center gap-4">
-                {config.logo ? (
-                    <img src={config.logo} alt="Logo" className="h-28 w-auto object-contain" />
-                ) : (
-                    <div className="w-24 h-24 bg-gray-100 rounded-xl flex items-center justify-center text-gray-400 font-bold border-2 border-dashed border-gray-300">LOGO</div>
-                )}
-                <div>
-                    <div className={`font-black text-lg leading-tight uppercase tracking-wide ${theme.text}`}>
-                        {config.pharmacyName}
-                    </div>
-                    <div className="text-gray-500 font-bold tracking-wide text-[10px] mt-1">RELATÓRIO DE AVALIAÇÃO</div>
-                </div>
-            </div>
-
-            {/* Right: System Logo */}
-            <div className="flex flex-col items-end opacity-60">
-                <div className="w-12 h-12">
-                    <MFLogo className="w-full h-full" />
-                </div>
-                <div className="text-[10px] font-bold uppercase text-gray-500 mt-1">System by Marcelo Far</div>
-            </div>
-        </div>
-    );
-};
 
 // Custom Date Input 3D
 const DateInput = ({ value, onChange, theme, hasError, disabled }: { value: string, onChange: (val: string) => void, theme: any, hasError?: boolean, disabled?: boolean }) => {
@@ -1406,18 +1147,7 @@ const App: React.FC = () => {
         try {
             console.log('🔁 Recarregando relatórios...');
             const dbReports = await SupabaseService.fetchReportsSummary(0, 50);
-            const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
-                id: r.id,
-                userEmail: r.user_email,
-                userName: r.user_name,
-                date: r.created_at,
-                pharmacyName: r.pharmacy_name,
-                score: r.score,
-                formData: r.form_data || {},
-                images: r.images || {},
-                signatures: r.signatures || {},
-                ignoredChecklists: r.ignored_checklists || []
-            }));
+            const formattedReports = dbReports.map(mapDbReportToHistoryItem);
             setReportHistory(formattedReports);
             const dbStockReportsSummary = await SupabaseService.fetchStockConferenceReportsSummary(0, 50);
             handleStockReportsLoaded(dbStockReportsSummary as SupabaseService.DbStockConferenceReport[]);
@@ -1460,18 +1190,7 @@ const App: React.FC = () => {
                 // 3. Load Reports Summary (Paginated)
                 const dbReportsSummary = await SupabaseService.fetchReportsSummary(0, 30);
                 if (dbReportsSummary.length > 0) {
-                    setReportHistory(dbReportsSummary.map(r => ({
-                        id: r.id || Date.now().toString(),
-                        userEmail: r.user_email!,
-                        userName: r.user_name!,
-                        date: r.created_at || new Date().toISOString(),
-                        pharmacyName: r.pharmacy_name!,
-                        score: r.score!,
-                        formData: r.form_data || {},
-                        images: r.images || {},
-                        signatures: r.signatures || {},
-                        ignoredChecklists: r.ignored_checklists || []
-                    })));
+                    setReportHistory(dbReportsSummary.map(mapDbReportToHistoryItem));
                 }
                 const dbStockReportsSummary = await SupabaseService.fetchStockConferenceReportsSummary(0, 30);
                 handleStockReportsLoaded(dbStockReportsSummary as SupabaseService.DbStockConferenceReport[]);
@@ -2694,18 +2413,7 @@ const App: React.FC = () => {
             // Force refresh reports from Supabase to ensure sync across devices
             console.log('🔄 Recarregando todos os relatórios do Supabase...');
             const dbReports = await SupabaseService.fetchReportsSummary(0, 30);
-            const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
-                id: r.id,
-                userEmail: r.user_email,
-                userName: r.user_name,
-                date: r.created_at,
-                pharmacyName: r.pharmacy_name,
-                score: r.score,
-                formData: r.form_data || {},
-                images: r.images || {},
-                signatures: r.signatures || {},
-                ignoredChecklists: r.ignored_checklists || []
-            }));
+            const formattedReports = dbReports.map(mapDbReportToHistoryItem);
             setReportHistory(formattedReports);
             await refreshStockConferenceReports();
             console.log('✅ Relatórios atualizados:', formattedReports.length, 'itens');
@@ -2737,18 +2445,7 @@ const App: React.FC = () => {
             // Em caso de erro, tentar recarregar relatórios do Supabase
             try {
                 const dbReports = await SupabaseService.fetchReports();
-                const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
-                    id: r.id,
-                    userEmail: r.user_email,
-                    userName: r.user_name,
-                    date: r.created_at,
-                    pharmacyName: r.pharmacy_name,
-                    score: r.score,
-                    formData: r.form_data || {},
-                    images: r.images || {},
-                    signatures: r.signatures || {},
-                    ignoredChecklists: r.ignored_checklists || []
-                }));
+                const formattedReports = dbReports.map(mapDbReportToHistoryItem);
                 setReportHistory(formattedReports);
                 await refreshStockConferenceReports();
                 setCurrentView('history');
@@ -2770,11 +2467,7 @@ const App: React.FC = () => {
             try {
                 const detailedData = await SupabaseService.fetchReportDetails(item.id);
                 if (detailedData) {
-                    fullReport = {
-                        ...item,
-                        images: detailedData.images || {},
-                        signatures: detailedData.signatures || {}
-                    };
+                    fullReport = mapDbReportToHistoryItem(detailedData);
                     // Atualizar o cache local para não buscar novamente
                     setReportHistory(prev => prev.map(r => r.id === item.id ? fullReport : r));
                 }
@@ -3151,256 +2844,43 @@ const App: React.FC = () => {
 
     return (
         <div className="min-h-screen bg-gray-50 flex font-sans text-gray-800">
-            {/* Sidebar - Elevated Design */}
-            <aside
-                className={`fixed inset-y-0 left-0 z-50 w-72 bg-white shadow-2xl transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 lg:static lg:inset-auto no-print flex flex-col border-r border-gray-100`}
-            >
-                <div className={`h-28 flex items-center justify-center p-4 ${currentTheme.bgGradient} relative overflow-hidden shadow-md group`}>
-                    <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
-                    <div className="relative z-10 w-full flex justify-center">
-                        <Logo config={displayConfig} companies={companies} selectedCompanyId={selectedCompanyId} />
-                    </div>
-                    {/* Quick Config Button */}
-                    <button
-                        onClick={() => handleViewChange('settings')}
-                        className="absolute top-2 right-2 p-1.5 text-white/70 hover:text-white hover:bg-white/20 rounded-full transition-all"
-                        title="Configurar Marca"
-                    >
-                        <Settings size={16} />
-                    </button>
-                </div>
-
-                <div className="px-6 py-6 border-b border-gray-100 bg-white relative">
-                    <div className="flex items-center gap-4">
-                        <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg ${currentTheme.bgGradient} shadow-md border-2 border-white overflow-hidden`}>
-                            {currentUser.photo ? (
-                                <img src={currentUser.photo} alt="Profile" className="w-full h-full object-cover" />
-                            ) : (
-                                currentUser.name.charAt(0)
-                            )}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                            <p className="text-sm font-bold text-gray-900 truncate">{currentUser.name}</p>
-                            <p className="text-xs text-gray-500 truncate uppercase tracking-wider font-semibold">{currentUser.role === 'MASTER' ? 'Administrador' : 'Usuário'}</p>
-                            {(currentUser.company_id || currentUser.area || currentUser.filial) && (
-                                <div className="mt-1 flex flex-col gap-0.5 animate-fade-in">
-                                    {currentUser.company_id && (() => {
-                                        const comp = companies.find((c: any) => c.id === currentUser.company_id);
-                                        return comp ? <p className="text-[10px] text-blue-600 font-bold truncate flex items-center gap-1"><Building2 size={10} /> {comp.name}</p> : null;
-                                    })()}
-                                    {currentUser.area && <p className="text-[10px] text-gray-500 truncate flex items-center gap-1"><MapPin size={10} /> {currentUser.area}</p>}
-                                    {currentUser.filial && <p className="text-[10px] text-gray-500 truncate flex items-center gap-1"><Store size={10} /> {currentUser.filial}</p>}
-                                </div>
-                            )}
-                        </div>
-                    </div>
-                </div>
-
-                <nav className="flex-1 overflow-y-auto py-6 px-4 space-y-2 custom-scrollbar pb-32">
-                    <div className="px-3 mb-3 text-xs font-bold text-gray-400 uppercase tracking-widest">Checklists (Rascunho)</div>
-                    {checklists.map(checklist => {
-                        const complete = isChecklistComplete(checklist.id);
-                        const ignored = ignoredChecklists.has(checklist.id);
-                        const isActive = activeChecklistId === checklist.id && currentView === 'checklist';
-                        return (
-                            <button
-                                key={checklist.id}
-                                onClick={() => { setActiveChecklistId(checklist.id); handleViewChange('checklist'); }}
-                                className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 relative overflow-hidden ${isActive
-                                    ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                                    }`}
-                            >
-                                {isActive && <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${currentTheme.bg}`}></div>}
-                                <Clipboard className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${isActive ? '' : 'text-gray-400'}`} />
-                                <div className="flex-1 text-left truncate">
-                                    <span className={ignored ? 'line-through opacity-50' : ''}>{checklist.title}</span>
-                                </div>
-                                {complete && !ignored && <CheckCircle size={18} className="text-green-500 ml-2 drop-shadow-sm" />}
-                            </button>
-                        );
-                    })}
-
-                    <div className="px-3 mt-8 mb-3 text-xs font-bold text-gray-400 uppercase tracking-widest">Gerenciamento</div>
-
-                    {canControlChecklists && (
-                        <button
-                            onClick={() => handleViewChange('summary')}
-                            className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'summary'
-                                ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                                : 'text-gray-600 hover:bg-gray-50'
-                                }`}
-                        >
-                            <LayoutDashboard className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'summary' ? '' : 'text-gray-400'}`} />
-                            Visão Geral / Finalizar
-                        </button>
-                    )}
-
-                    <button
-                        onClick={() => handleViewChange('history')}
-                        className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'history'
-                            ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                            : 'text-gray-600 hover:bg-gray-50'
-                            }`}
-                    >
-                        <History className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'history' ? '' : 'text-gray-400'}`} />
-                        Histórico de Relatórios
-                    </button>
-
-                    <button
-                        onClick={() => handleViewChange('stock')}
-                        className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'stock'
-                            ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                            : 'text-gray-600 hover:bg-gray-50'
-                            }`}
-                    >
-                        <Package className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'stock' ? '' : 'text-gray-400'}`} />
-                        Conferência de Estoque
-                    </button>
-
-                    <button
-                        onClick={() => handleViewChange('pre')}
-                        className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'pre'
-                            ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                            : 'text-gray-600 hover:bg-gray-50'
-                            }`}
-                    >
-                        <ClipboardList className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'pre' ? '' : 'text-gray-400'}`} />
-                        Pré-Vencidos
-                    </button>
-
-                    <button
-                        onClick={() => handleViewChange('settings')}
-                        className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'settings'
-                            ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                            : 'text-gray-600 hover:bg-gray-50'
-                            }`}
-                    >
-                        <Settings className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'settings' ? '' : 'text-gray-400'}`} />
-                        Configurações
-                    </button>
-
-                    {currentUser.role === 'MASTER' && (
-                        <button
-                            onClick={() => handleViewChange('access')}
-                            className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'access'
-                                ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                                : 'text-gray-600 hover:bg-gray-50'
-                                }`}
-                        >
-                            <Lock className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'access' ? '' : 'text-gray-400'}`} />
-                            Níveis de Acesso
-                        </button>
-                    )}
-
-                    <button
-                        onClick={() => handleViewChange('support')}
-                        className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'support'
-                            ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                            : 'text-gray-600 hover:bg-gray-50'
-                            }`}
-                    >
-                        <MessageSquareQuote className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'support' ? '' : 'text-gray-400'}`} />
-                        Suporte e Melhorias
-                    </button>
-                </nav>
-
-                <div className="p-4 border-t border-gray-100 bg-white sticky bottom-0 left-0 right-0 z-10">
-                    <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-sm font-semibold text-red-600 hover:bg-red-50 p-3 rounded-xl transition-colors">
-                        <LogOut size={18} />
-                        Sair do Sistema
-                    </button>
-                </div>
-            </aside>
+            <Sidebar
+                isSidebarOpen={isSidebarOpen}
+                setIsSidebarOpen={setIsSidebarOpen}
+                currentUser={currentUser}
+                currentTheme={currentTheme}
+                displayConfig={displayConfig}
+                companies={companies}
+                handleViewChange={handleViewChange}
+                currentView={currentView}
+                activeChecklistId={activeChecklistId}
+                setActiveChecklistId={setActiveChecklistId}
+                checklists={checklists}
+                isChecklistComplete={isChecklistComplete}
+                ignoredChecklists={ignoredChecklists}
+                canControlChecklists={canControlChecklists}
+                handleLogout={handleLogout}
+            />
 
             {/* Main Content */}
             <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-gray-50/50 relative">
                 {/* Background Mesh Gradient */}
                 <div className="absolute inset-0 z-0 pointer-events-none opacity-40 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-gray-200 via-transparent to-transparent"></div>
 
-                {/* Mobile Header */}
-                <header className={`${currentTheme.bgGradient} shadow-md lg:hidden h-18 flex items-center px-4 justify-between no-print z-20`}>
-                    <Logo config={displayConfig} companies={companies} selectedCompanyId={selectedCompanyId} />
-                    <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} className="text-white p-2 rounded-lg hover:bg-white/10">
-                        {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
-                    </button>
-                </header>
-
-                {/* Mobile Actions Bar: Title + Recomeçar */}
-                <div className="lg:hidden no-print bg-white/90 backdrop-blur-sm border-b border-gray-200 px-4 py-3 flex items-center justify-between sticky top-18 z-20">
-                    <h1 className="text-base font-extrabold text-gray-800 truncate tracking-tight">
-                        {currentView === 'report' || currentView === 'view_history' ? 'Relatório Consolidado' :
-                            currentView === 'summary' ? 'Visão Geral da Avaliação' :
-                                currentView === 'settings' ? 'Configurações do Sistema' :
-                                    currentView === 'access' ? 'Níveis de Acesso' :
-                                        currentView === 'history' ? 'Histórico de Relatórios' :
-                                            currentView === 'pre' ? 'Pré-Vencidos' :
-                                                activeChecklist.title}
-                    </h1>
-                    <div className="flex items-center gap-2">
-                        {currentView === 'checklist' && canControlChecklists && (
-                            <button
-                                onClick={handleResetChecklist}
-                                className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-3 py-2 rounded-lg transition-colors text-xs font-bold"
-                                title="Limpar todos os dados do relatório atual"
-                            >
-                                <RotateCcw size={16} />
-                                <span>Recomeçar</span>
-                            </button>
-                        )}
-                        {currentView === 'checklist' && currentUser?.role === 'MASTER' && (
-                            <button
-                                onClick={() => openChecklistEditor(activeChecklistId)}
-                                className="flex items-center gap-2 text-blue-600 hover:bg-blue-50 px-3 py-2 rounded-lg transition-colors text-xs font-bold"
-                                title="Editar checklist atual"
-                            >
-                                <FileCheck size={16} />
-                                <span>Editar</span>
-                            </button>
-                        )}
-                    </div>
-                </div>
-
-                {/* Desktop Header */}
-                <header className="hidden lg:flex items-center justify-between h-20 bg-white/80 backdrop-blur-md border-b border-gray-200 px-10 shadow-sm no-print sticky top-0 z-30">
-                    <h1 className="text-2xl font-extrabold text-gray-800 truncate tracking-tight">
-                        {currentView === 'report' || currentView === 'view_history' ? 'Relatório Consolidado' :
-                            currentView === 'summary' ? 'Visão Geral da Avaliação' :
-                                currentView === 'settings' ? 'Configurações do Sistema' :
-                                    currentView === 'access' ? 'Níveis de Acesso' :
-                                        currentView === 'history' ? 'Histórico de Relatórios' :
-                                            currentView === 'pre' ? 'Pré-Vencidos' :
-                                                activeChecklist.title}
-                    </h1>
-
-                    <div className="flex items-center gap-4">
-                        <div className="mr-4 opacity-90 hover:opacity-100 transition-opacity scale-90 origin-right hidden xl:block">
-                            <Logo config={displayConfig} companies={companies} selectedCompanyId={currentUser.company_id} />
-                        </div>
-                        <div className="flex items-center gap-3">
-                            {currentView === 'checklist' && canControlChecklists && (
-                                <button
-                                    onClick={handleResetChecklist}
-                                    className="flex items-center gap-2 text-gray-400 hover:text-red-600 hover:bg-red-50 px-4 py-2 rounded-lg transition-colors text-sm font-bold"
-                                    title="Limpar todos os dados do relatório atual"
-                                >
-                                    <RotateCcw size={16} />
-                                    Recomeçar
-                                </button>
-                            )}
-                            {currentView === 'checklist' && currentUser?.role === 'MASTER' && (
-                                <button
-                                    onClick={() => openChecklistEditor(activeChecklistId)}
-                                    className="flex items-center gap-2 text-blue-600 hover:bg-blue-50 px-4 py-2 rounded-lg transition-colors text-sm font-bold"
-                                    title="Editar checklist atual"
-                                >
-                                    <FileCheck size={16} />
-                                    Editar Checklist
-                                </button>
-                            )}
-                        </div>
-                    </div>
-                </header>
+                <Header
+                    isSidebarOpen={isSidebarOpen}
+                    setIsSidebarOpen={setIsSidebarOpen}
+                    currentTheme={currentTheme}
+                    displayConfig={displayConfig}
+                    companies={companies}
+                    currentView={currentView}
+                    activeChecklist={activeChecklist}
+                    canControlChecklists={canControlChecklists}
+                    handleResetChecklist={handleResetChecklist}
+                    currentUser={currentUser}
+                    activeChecklistId={activeChecklistId}
+                    openChecklistEditor={openChecklistEditor}
+                />
 
                 {/* Main Body */}
                 <main className="flex-1 overflow-y-auto p-4 lg:p-10 z-10 scroll-smooth">
@@ -3456,7 +2936,7 @@ const App: React.FC = () => {
                                 userEmail={currentUser?.email || ''}
                                 userName={currentUser?.name || ''}
                                 companies={companies}
-                                onReportSaved={refreshStockConferenceReports}
+                                onReportSaved={async () => { await refreshStockConferenceReports(); }}
                             />
                         </div>
                     )}
@@ -5073,14 +4553,12 @@ const App: React.FC = () => {
                                             <SignaturePad
                                                 label="Assinatura do Gestor"
                                                 onEnd={(data) => handleSignature('gestor', data)}
-                                                existingSignature={signatures[activeChecklistId]?.['gestor']}
                                             />
                                         </div>
                                         <div data-signature="coordenador">
                                             <SignaturePad
                                                 label="Assinatura Coordenador / Aplicador"
                                                 onEnd={(data) => handleSignature('coordenador', data)}
-                                                existingSignature={signatures[activeChecklistId]?.['coordenador']}
                                             />
                                         </div>
                                     </div>
@@ -5614,16 +5092,16 @@ const App: React.FC = () => {
                                                             {new Date(report.date).toLocaleDateString('pt-BR')} <span className="text-gray-400 text-xs ml-1">{new Date(report.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
                                                         </td>
                                                         <td className="px-6 py-4 font-bold text-gray-800">
-                                                            {report.formData['gerencial']?.empresa || 'Sem Empresa'}
+                                                            {report.empresa_avaliada || '-'}
                                                         </td>
                                                         <td className="px-6 py-4 text-gray-700">
-                                                            {report.formData['gerencial']?.area || 'N/A'}
+                                                            {report.area || '-'}
                                                         </td>
                                                         <td className="px-6 py-4 font-bold text-gray-800">
-                                                            {report.formData['gerencial']?.filial || report.pharmacyName || 'Sem Filial'}
+                                                            {report.filial || '-'}
                                                         </td>
                                                         <td className="px-6 py-4 text-gray-700">
-                                                            {report.formData['gerencial']?.gestor || 'N/A'}
+                                                            {report.gestor || '-'}
                                                         </td>
                                                         <td className="px-6 py-4">
                                                             <div>{report.userName}</div>
