@@ -986,6 +986,8 @@ const App: React.FC = () => {
     const [reportHistory, setReportHistory] = useState<ReportHistoryItem[]>([]);
     const [stockConferenceHistory, setStockConferenceHistory] = useState<StockConferenceHistoryItem[]>([]);
     const [viewHistoryItem, setViewHistoryItem] = useState<ReportHistoryItem | null>(null);
+    const [loadingReportId, setLoadingReportId] = useState<string | null>(null);
+    const [loadingStockReportId, setLoadingStockReportId] = useState<string | null>(null);
     const [historyFilterUser, setHistoryFilterUser] = useState<string>('all');
     const [isReloadingReports, setIsReloadingReports] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
@@ -1103,43 +1105,69 @@ const App: React.FC = () => {
     };
 
     const handleViewStockConferenceReport = async (historyId: string) => {
-        let report = stockConferenceReportsRaw.find(r => r.id === historyId);
+        setLoadingStockReportId(historyId);
+        try {
+            let report = stockConferenceReportsRaw.find(r => r.id === historyId);
 
-        // Se o relatório não tiver os itens (que não vêm no summary), buscamos os detalhes
-        if (report && (!report.items || report.items.length === 0)) {
-            const fullReport = await SupabaseService.fetchStockConferenceReportDetails(historyId);
-            if (fullReport) {
-                // Atualizar o cache local
-                setStockConferenceReportsRaw(prev => prev.map(r => r.id === historyId ? fullReport : r));
-                report = fullReport;
+            // Se o relatório não tiver os itens (que não vêm no summary), buscamos os detalhes
+            if (report && (!report.items || report.items.length === 0)) {
+                try {
+                    console.log('🔍 Buscando detalhes da conferência:', historyId);
+                    const fullReport = await SupabaseService.fetchStockConferenceReportDetails(historyId);
+                    if (fullReport) {
+                        // Atualizar o cache local
+                        setStockConferenceReportsRaw(prev => prev.map(r => r.id === historyId ? fullReport : r));
+                        report = fullReport;
+                    }
+                } catch (error) {
+                    console.error('Error fetching stock report details:', error);
+                }
             }
-        }
 
-        if (!report) {
-            alert('Não foi possível localizar o relatório de conferência solicitado.');
-            return;
-        }
-
-        const historyEntry = stockConferenceHistory.find(item => item.id === historyId);
-        const parsedSummary = parseJsonValue<StockConferenceSummary>(report.summary) || report.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
-        const baseSummary: StockConferenceSummary = typeof parsedSummary === 'object' ? parsedSummary : { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
-        const summarySignatures = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>(baseSummary.signatures) || {};
-        const rootSignatures = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>((report as any).signatures) || {};
-        const resolvedPharmacistSignature = historyEntry?.pharmacistSignature || summarySignatures.pharmacist || rootSignatures.pharmacist || null;
-        const resolvedManagerSignature = historyEntry?.managerSignature || summarySignatures.manager || rootSignatures.manager || null;
-        const enrichedSummary = {
-            ...baseSummary,
-            signatures: {
-                pharmacist: resolvedPharmacistSignature,
-                manager: resolvedManagerSignature
+            if (!report) {
+                alert('Não foi possível localizar o relatório de conferência solicitado.');
+                return;
             }
-        };
-        setViewingStockConferenceReport({
-            ...report,
-            summary: enrichedSummary,
-            pharmacistSignature: resolvedPharmacistSignature,
-            managerSignature: resolvedManagerSignature
-        });
+
+            const historyEntry = stockConferenceHistory.find(item => item.id === historyId);
+            const parsedSummary = parseJsonValue<StockConferenceSummary>(report.summary) || report.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
+            const baseSummary: StockConferenceSummary = typeof parsedSummary === 'object' ? parsedSummary : { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
+            const summarySignatures = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>(baseSummary.signatures) || {};
+            const rootSignatures = parseJsonValue<{ pharmacist?: string | null; manager?: string | null }>((report as any).signatures) || {};
+            const resolvedPharmacistSignature = historyEntry?.pharmacistSignature || summarySignatures.pharmacist || rootSignatures.pharmacist || null;
+            const resolvedManagerSignature = historyEntry?.managerSignature || summarySignatures.manager || rootSignatures.manager || null;
+            const enrichedSummary = {
+                ...baseSummary,
+                signatures: {
+                    pharmacist: resolvedPharmacistSignature,
+                    manager: resolvedManagerSignature
+                }
+            };
+            const enrichedReport = {
+                ...report,
+                summary: enrichedSummary,
+                pharmacistSignature: resolvedPharmacistSignature,
+                managerSignature: resolvedManagerSignature
+            };
+
+            setViewingStockConferenceReport(enrichedReport);
+            localStorage.setItem('APP_VIEWING_STOCK_REPORT_ID', historyId);
+        } catch (error) {
+            console.error('Error in handleViewStockConferenceReport:', error);
+        } finally {
+            setLoadingStockReportId(null);
+        }
+    };
+
+    const handleCloseStockReport = () => {
+        setViewingStockConferenceReport(null);
+        localStorage.removeItem('APP_VIEWING_STOCK_REPORT_ID');
+    };
+
+    const handleCloseReport = () => {
+        setViewHistoryItem(null);
+        localStorage.removeItem('APP_VIEWING_REPORT_ID');
+        setCurrentView('history');
     };
 
     const handleReloadReports = async () => {
@@ -1166,9 +1194,28 @@ const App: React.FC = () => {
         const initializeData = async () => {
             try {
                 setIsLoadingData(true);
-                // 1. Load Users
-                const dbUsers = await SupabaseService.fetchUsers();
-                if (dbUsers.length > 0) {
+
+                // 1. Launch all primary fetches in parallel
+                const [
+                    dbUsers,
+                    dbConfig,
+                    dbReportsSummary,
+                    dbStockReportsSummary,
+                    dbCompanies,
+                    dbMatrix,
+                    dbTickets
+                ] = await Promise.all([
+                    SupabaseService.fetchUsers(),
+                    SupabaseService.fetchConfig(),
+                    SupabaseService.fetchReportsSummary(0, 30),
+                    SupabaseService.fetchStockConferenceReportsSummary(0, 30),
+                    SupabaseService.fetchCompanies(),
+                    SupabaseService.fetchAccessMatrix(),
+                    SupabaseService.fetchTickets()
+                ]);
+
+                // 2. Process Users
+                if (dbUsers && dbUsers.length > 0) {
                     const mappedUsers = dbUsers.map(u => ({ ...u, preferredTheme: u.preferred_theme as ThemeColor | undefined }));
                     setUsers(mappedUsers);
                     localStorage.setItem('APP_USERS', JSON.stringify(mappedUsers));
@@ -1177,8 +1224,7 @@ const App: React.FC = () => {
                     if (localUsers) setUsers(JSON.parse(localUsers));
                 }
 
-                // 2. Load Config
-                const dbConfig = await SupabaseService.fetchConfig();
+                // 3. Process Config
                 if (dbConfig) {
                     setConfig({ pharmacyName: dbConfig.pharmacy_name, logo: dbConfig.logo });
                     localStorage.setItem('APP_CONFIG', JSON.stringify({ pharmacyName: dbConfig.pharmacy_name, logo: dbConfig.logo }));
@@ -1187,45 +1233,55 @@ const App: React.FC = () => {
                     if (localConfig) setConfig(JSON.parse(localConfig));
                 }
 
-                // 3. Load Reports Summary (Paginated)
-                const dbReportsSummary = await SupabaseService.fetchReportsSummary(0, 30);
-                if (dbReportsSummary.length > 0) {
+                // 4. Process Reports
+                if (dbReportsSummary && dbReportsSummary.length > 0) {
                     setReportHistory(dbReportsSummary.map(mapDbReportToHistoryItem));
                 }
-                const dbStockReportsSummary = await SupabaseService.fetchStockConferenceReportsSummary(0, 30);
-                handleStockReportsLoaded(dbStockReportsSummary as SupabaseService.DbStockConferenceReport[]);
 
-                // 4. Load Companies
-                const dbCompanies = await SupabaseService.fetchCompanies();
-                if (dbCompanies.length > 0) setCompanies(dbCompanies);
+                if (dbStockReportsSummary) {
+                    handleStockReportsLoaded(dbStockReportsSummary as SupabaseService.DbStockConferenceReport[]);
+                }
 
-                // 5. Load Access Matrix
-                try {
-                    const dbMatrix = await SupabaseService.fetchAccessMatrix();
-                    if (dbMatrix.length > 0) {
-                        const mapped = dbMatrix.reduce((acc, entry) => {
-                            acc[entry.level as AccessLevelId] = entry.modules || {};
-                            return acc;
-                        }, {} as Record<AccessLevelId, Record<string, boolean>>);
-                        setAccessMatrix(mergeAccessMatrixWithDefaults(mapped));
+                // 5. Process Companies
+                if (dbCompanies && dbCompanies.length > 0) {
+                    setCompanies(dbCompanies);
+                }
+
+                // 6. Process Access Matrix
+                if (dbMatrix && dbMatrix.length > 0) {
+                    const mapped = dbMatrix.reduce((acc, entry) => {
+                        acc[entry.level as AccessLevelId] = entry.modules || {};
+                        return acc;
+                    }, {} as Record<AccessLevelId, Record<string, boolean>>);
+                    setAccessMatrix(mergeAccessMatrixWithDefaults(mapped));
+                } else {
+                    setAccessMatrix(prev => mergeAccessMatrixWithDefaults(prev));
+                }
+
+                // 7. Process Tickets
+                if (dbTickets && dbTickets.length > 0) {
+                    setTickets(dbTickets);
+                }
+
+                // 8. Restore Persisted View (Reports)
+                const pendingReportId = localStorage.getItem('APP_VIEWING_REPORT_ID');
+                if (pendingReportId && dbReportsSummary && dbReportsSummary.length > 0) {
+                    const found = dbReportsSummary.find(r => r.id === pendingReportId);
+                    if (found) {
+                        handleViewHistoryItem(mapDbReportToHistoryItem(found as SupabaseService.DbReport));
                     } else {
-                        setAccessMatrix(prev => mergeAccessMatrixWithDefaults(prev));
+                        // Se não estiver no sumário recente, podemos tentar buscar direto (opcional)
                     }
-                } catch (error) {
-                    console.error('Erro ao carregar matriz de acesso:', error);
                 }
 
-                // 5. Restore Session
-                const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
-                if (savedEmail) {
-                    // logic handled in separate effect, but we can init here? 
-                    // Kept consistent with original file structure where separate effect handles it.
+                const pendingStockReportId = localStorage.getItem('APP_VIEWING_STOCK_REPORT_ID');
+                if (pendingStockReportId && dbStockReportsSummary) {
+                    handleViewStockConferenceReport(pendingStockReportId);
                 }
 
-                // 6. Load Tickets (Support)
-                const dbTickets = await SupabaseService.fetchTickets();
-                if (dbTickets.length > 0) setTickets(dbTickets);
-
+                // Cleanup old keys if any
+                localStorage.removeItem('APP_VIEW_HISTORY_ITEM');
+                localStorage.removeItem('APP_VIEW_STOCK_REPORT');
 
             } catch (error) {
                 console.error('Error initializing:', error);
@@ -1551,10 +1607,15 @@ const App: React.FC = () => {
         // Clear persisted session on logout
         localStorage.removeItem('APP_CURRENT_EMAIL');
         localStorage.removeItem('APP_CURRENT_VIEW');
+        localStorage.removeItem('APP_VIEWING_REPORT_ID');
+        localStorage.removeItem('APP_VIEWING_STOCK_REPORT_ID');
+
         setCurrentUser(null);
         setFormData({}); // Clear state from memory, relies on draft re-load
         setImages({});
         setSignatures({});
+        setViewHistoryItem(null);
+        setViewingStockConferenceReport(null);
         setCurrentView('checklist');
     };
 
@@ -1774,8 +1835,7 @@ const App: React.FC = () => {
             setReportHistory(prev => prev.filter(item => item.id !== itemId));
             // If viewing deleted item, go back to list
             if (viewHistoryItem?.id === itemId) {
-                setCurrentView('history');
-                setViewHistoryItem(null);
+                handleCloseReport();
             }
         }
     };
@@ -2456,28 +2516,36 @@ const App: React.FC = () => {
     };
 
     const handleViewHistoryItem = async (item: ReportHistoryItem) => {
-        let fullReport = item;
+        setLoadingReportId(item.id);
+        try {
+            let fullReport = item;
 
-        // Se o relatório não tiver imagens ou assinaturas (que não vêm no summary), buscamos os detalhes
-        // Nota: form_data sempre vem, mas images e signatures podem estar vazios no summary
-        const hasImages = Object.keys(item.images || {}).length > 0;
-        const hasSignatures = Object.keys(item.signatures || {}).length > 0;
+            // Se o relatório não tiver imagens ou assinaturas (que não vêm no summary), buscamos os detalhes
+            const hasImages = Object.keys(item.images || {}).length > 0;
+            const hasSignatures = Object.keys(item.signatures || {}).length > 0;
 
-        if (!hasImages && !hasSignatures) {
-            try {
-                const detailedData = await SupabaseService.fetchReportDetails(item.id);
-                if (detailedData) {
-                    fullReport = mapDbReportToHistoryItem(detailedData);
-                    // Atualizar o cache local para não buscar novamente
-                    setReportHistory(prev => prev.map(r => r.id === item.id ? fullReport : r));
+            if (!hasImages && !hasSignatures) {
+                try {
+                    console.log('🔍 Buscando detalhes do relatório:', item.id);
+                    const detailedData = await SupabaseService.fetchReportDetails(item.id);
+                    if (detailedData) {
+                        fullReport = mapDbReportToHistoryItem(detailedData);
+                        // Atualizar o cache local
+                        setReportHistory(prev => prev.map(r => r.id === item.id ? fullReport : r));
+                    }
+                } catch (error) {
+                    console.error('Error fetching report details:', error);
                 }
-            } catch (error) {
-                console.error('Error fetching report details:', error);
             }
-        }
 
-        setViewHistoryItem(fullReport);
-        setCurrentView('view_history');
+            setViewHistoryItem(fullReport);
+            localStorage.setItem('APP_VIEWING_REPORT_ID', fullReport.id);
+            setCurrentView('view_history');
+        } catch (error) {
+            console.error('Error in handleViewHistoryItem:', error);
+        } finally {
+            setLoadingReportId(null);
+        }
     };
 
     const handleDownloadPDF = () => {
@@ -2723,7 +2791,7 @@ const App: React.FC = () => {
 
     const handleViewChange = (view: typeof currentView) => {
         if (view === 'checklist') {
-            setViewHistoryItem(null); // Clear history view if going back to draft
+            handleCloseReport(); // Clear history view if going back to draft
             setShowErrors(false);
         }
         setCurrentView(view);
@@ -5121,8 +5189,17 @@ const App: React.FC = () => {
                                                             </span>
                                                         </td>
                                                         <td className="px-6 py-4 text-right flex justify-end gap-2">
-                                                            <button onClick={() => handleViewHistoryItem(report)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors" title="Visualizar">
-                                                                <Eye size={18} />
+                                                            <button
+                                                                onClick={() => handleViewHistoryItem(report)}
+                                                                disabled={loadingReportId === report.id}
+                                                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
+                                                                title="Visualizar"
+                                                            >
+                                                                {loadingReportId === report.id ? (
+                                                                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-600 border-t-transparent" />
+                                                                ) : (
+                                                                    <Eye size={18} />
+                                                                )}
                                                             </button>
                                                             {/* ONLY MASTER CAN DELETE */}
                                                             {canModerateHistory && (
@@ -5250,10 +5327,15 @@ const App: React.FC = () => {
                                                             <div className="mt-4 flex justify-end">
                                                                 <button
                                                                     onClick={() => handleViewStockConferenceReport(item.id)}
-                                                                    className="flex items-center gap-2 rounded-2xl px-4 py-2 bg-blue-600 text-white text-sm font-bold shadow-lg hover:bg-blue-700 transition"
+                                                                    disabled={loadingStockReportId === item.id}
+                                                                    className="flex items-center gap-2 rounded-2xl px-4 py-2 bg-blue-600 text-white text-sm font-bold shadow-lg hover:bg-blue-700 transition disabled:opacity-50"
                                                                 >
-                                                                    <FileText size={16} />
-                                                                    Ver Conferência
+                                                                    {loadingStockReportId === item.id ? (
+                                                                        <Loader2 size={16} className="animate-spin" />
+                                                                    ) : (
+                                                                        <FileText size={16} />
+                                                                    )}
+                                                                    {loadingStockReportId === item.id ? 'Carregando...' : 'Ver Conferência'}
                                                                 </button>
                                                             </div>
                                                         </div>
@@ -5270,7 +5352,7 @@ const App: React.FC = () => {
                     {viewingStockConferenceReport && (
                         <StockConferenceReportViewer
                             report={viewingStockConferenceReport}
-                            onClose={() => setViewingStockConferenceReport(null)}
+                            onClose={handleCloseStockReport}
                         />
                     )}
 
