@@ -1361,12 +1361,24 @@ const App: React.FC = () => {
         return dbStockReports;
     };
 
-    const handleViewStockConferenceReport = (historyId: string) => {
-        const report = stockConferenceReportsRaw.find(r => r.id === historyId);
+    const handleViewStockConferenceReport = async (historyId: string) => {
+        let report = stockConferenceReportsRaw.find(r => r.id === historyId);
+
+        // Se o relatório não tiver os itens (que não vêm no summary), buscamos os detalhes
+        if (report && (!report.items || report.items.length === 0)) {
+            const fullReport = await SupabaseService.fetchStockConferenceReportDetails(historyId);
+            if (fullReport) {
+                // Atualizar o cache local
+                setStockConferenceReportsRaw(prev => prev.map(r => r.id === historyId ? fullReport : r));
+                report = fullReport;
+            }
+        }
+
         if (!report) {
             alert('Não foi possível localizar o relatório de conferência solicitado.');
             return;
         }
+
         const historyEntry = stockConferenceHistory.find(item => item.id === historyId);
         const parsedSummary = parseJsonValue<StockConferenceSummary>(report.summary) || report.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
         const baseSummary: StockConferenceSummary = typeof parsedSummary === 'object' ? parsedSummary : { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
@@ -1393,7 +1405,7 @@ const App: React.FC = () => {
         setIsReloadingReports(true);
         try {
             console.log('🔁 Recarregando relatórios...');
-            const dbReports = await SupabaseService.fetchReports();
+            const dbReports = await SupabaseService.fetchReportsSummary(0, 50);
             const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
                 id: r.id,
                 userEmail: r.user_email,
@@ -1407,9 +1419,10 @@ const App: React.FC = () => {
                 ignoredChecklists: r.ignored_checklists || []
             }));
             setReportHistory(formattedReports);
-            const dbStockReports = await refreshStockConferenceReports();
-            console.log('✅ Relatórios recarregados:', formattedReports.length, 'conferências:', dbStockReports.length);
-            alert(`Atualizado! ${formattedReports.length} avaliação(ões) e ${dbStockReports.length} conferência(s) carregada(s).`);
+            const dbStockReportsSummary = await SupabaseService.fetchStockConferenceReportsSummary(0, 50);
+            handleStockReportsLoaded(dbStockReportsSummary as SupabaseService.DbStockConferenceReport[]);
+            console.log('✅ Relatórios recarregados:', formattedReports.length, 'conferências:', dbStockReportsSummary.length);
+            alert(`Atualizado! ${formattedReports.length} avaliação(ões) e ${dbStockReportsSummary.length} conferência(s) carregada(s).`);
         } catch (error) {
             console.error('❌ Erro ao recarregar:', error);
             alert('Erro ao recarregar relatórios.');
@@ -1444,23 +1457,24 @@ const App: React.FC = () => {
                     if (localConfig) setConfig(JSON.parse(localConfig));
                 }
 
-                // 3. Load Reports
-                const dbReports = await SupabaseService.fetchReports();
-                if (dbReports.length > 0) {
-                    setReportHistory(dbReports.map(r => ({
+                // 3. Load Reports Summary (Paginated)
+                const dbReportsSummary = await SupabaseService.fetchReportsSummary(0, 30);
+                if (dbReportsSummary.length > 0) {
+                    setReportHistory(dbReportsSummary.map(r => ({
                         id: r.id || Date.now().toString(),
-                        userEmail: r.user_email,
-                        userName: r.user_name,
+                        userEmail: r.user_email!,
+                        userName: r.user_name!,
                         date: r.created_at || new Date().toISOString(),
-                        pharmacyName: r.pharmacy_name,
-                        score: r.score,
-                        formData: r.form_data,
-                        images: r.images,
-                        signatures: r.signatures,
-                        ignoredChecklists: r.ignored_checklists
+                        pharmacyName: r.pharmacy_name!,
+                        score: r.score!,
+                        formData: r.form_data || {},
+                        images: r.images || {},
+                        signatures: r.signatures || {},
+                        ignoredChecklists: r.ignored_checklists || []
                     })));
                 }
-                await refreshStockConferenceReports();
+                const dbStockReportsSummary = await SupabaseService.fetchStockConferenceReportsSummary(0, 30);
+                handleStockReportsLoaded(dbStockReportsSummary as SupabaseService.DbStockConferenceReport[]);
 
                 // 4. Load Companies
                 const dbCompanies = await SupabaseService.fetchCompanies();
@@ -2679,7 +2693,7 @@ const App: React.FC = () => {
 
             // Force refresh reports from Supabase to ensure sync across devices
             console.log('🔄 Recarregando todos os relatórios do Supabase...');
-            const dbReports = await SupabaseService.fetchReports();
+            const dbReports = await SupabaseService.fetchReportsSummary(0, 30);
             const formattedReports: ReportHistoryItem[] = dbReports.map((r: any) => ({
                 id: r.id,
                 userEmail: r.user_email,
@@ -2744,8 +2758,32 @@ const App: React.FC = () => {
         }
     };
 
-    const handleViewHistoryItem = (item: ReportHistoryItem) => {
-        setViewHistoryItem(item);
+    const handleViewHistoryItem = async (item: ReportHistoryItem) => {
+        let fullReport = item;
+
+        // Se o relatório não tiver imagens ou assinaturas (que não vêm no summary), buscamos os detalhes
+        // Nota: form_data sempre vem, mas images e signatures podem estar vazios no summary
+        const hasImages = Object.keys(item.images || {}).length > 0;
+        const hasSignatures = Object.keys(item.signatures || {}).length > 0;
+
+        if (!hasImages && !hasSignatures) {
+            try {
+                const detailedData = await SupabaseService.fetchReportDetails(item.id);
+                if (detailedData) {
+                    fullReport = {
+                        ...item,
+                        images: detailedData.images || {},
+                        signatures: detailedData.signatures || {}
+                    };
+                    // Atualizar o cache local para não buscar novamente
+                    setReportHistory(prev => prev.map(r => r.id === item.id ? fullReport : r));
+                }
+            } catch (error) {
+                console.error('Error fetching report details:', error);
+            }
+        }
+
+        setViewHistoryItem(fullReport);
         setCurrentView('view_history');
     };
 

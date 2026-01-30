@@ -476,13 +476,52 @@ export async function saveConfig(config: DbConfig): Promise<boolean> {
 
 // ==================== REPORTS ====================
 
-export async function fetchReports(): Promise<DbReport[]> {
+// Retorna apenas metadados para listagem rápida
+export async function fetchReportsSummary(page: number = 0, pageSize: number = 20): Promise<Partial<DbReport>[]> {
+  try {
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+
+    const { data, error } = await supabase
+      .from('reports')
+      .select('id, user_email, user_name, pharmacy_name, score, created_at')
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching reports summary:', error);
+    return [];
+  }
+}
+
+export async function fetchReportDetails(id: string): Promise<DbReport | null> {
   try {
     const { data, error } = await supabase
       .from('reports')
       .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error fetching report details:', error);
+    return null;
+  }
+}
+
+export async function fetchReports(page: number = 0, pageSize: number = 100): Promise<DbReport[]> {
+  try {
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+
+    const { data, error } = await supabase
+      .from('reports')
+      .select('*')
       .order('created_at', { ascending: false })
-      .range(0, 9999);
+      .range(from, to);
 
     if (error) throw error;
     return data || [];
@@ -517,13 +556,52 @@ export async function createReport(report: DbReport): Promise<DbReport | null> {
   }
 }
 
-export async function fetchStockConferenceReports(): Promise<DbStockConferenceReport[]> {
+// Retorna apenas metadados para listagem rápida
+export async function fetchStockConferenceReportsSummary(page: number = 0, pageSize: number = 20): Promise<Partial<DbStockConferenceReport>[]> {
+  try {
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+
+    const { data, error } = await supabase
+      .from('stock_conference_reports')
+      .select('id, user_email, user_name, branch, area, created_at, pharmacist, manager, summary')
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching stock conference reports summary:', error);
+    return [];
+  }
+}
+
+export async function fetchStockConferenceReportDetails(id: string): Promise<DbStockConferenceReport | null> {
   try {
     const { data, error } = await supabase
       .from('stock_conference_reports')
       .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error fetching stock conference report details:', error);
+    return null;
+  }
+}
+
+export async function fetchStockConferenceReports(page: number = 0, pageSize: number = 100): Promise<DbStockConferenceReport[]> {
+  try {
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+
+    const { data, error } = await supabase
+      .from('stock_conference_reports')
+      .select('*')
       .order('created_at', { ascending: false })
-      .range(0, 9999);
+      .range(from, to);
 
     if (error) throw error;
     return data || [];
