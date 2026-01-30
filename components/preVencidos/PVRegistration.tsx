@@ -2,7 +2,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Product, PVRecord, SessionInfo } from '../../preVencidos/types';
 import ScannerInput from './ScannerInput';
-import { Trash2, Calendar, Hash, FileUp, CheckCircle2, User, Building, Search, FlaskConical, ChevronRight, Info } from 'lucide-react';
+import { Trash2, Calendar, Hash, FileUp, CheckCircle2, User, Building, Search, FlaskConical, ChevronRight, Info, X } from 'lucide-react';
 
 interface PVRegistrationProps {
   masterProducts: Product[];
@@ -97,6 +97,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
 
   const [filterText, setFilterText] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
+  const [filterStatus, setFilterStatus] = useState<string>('');
 
   // PDF Export
   const handleExportPDF = () => {
@@ -175,25 +176,36 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   const [sortConfig, setSortConfig] = useState<{ key: keyof PVRecord, direction: 'asc' | 'desc' } | null>(null);
 
   const handleSort = (key: keyof PVRecord) => {
-    let direction: 'asc' | 'desc' = 'asc';
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc';
+    if (sortConfig && sortConfig.key === key) {
+      if (sortConfig.direction === 'asc') {
+        setSortConfig({ key, direction: 'desc' });
+      } else {
+        setSortConfig(null);
+      }
+    } else {
+      setSortConfig({ key, direction: 'asc' });
     }
-    setSortConfig({ key, direction });
   };
 
   const getSortIcon = (key: keyof PVRecord) => {
-    if (!sortConfig || sortConfig.key !== key) return <div className="w-3 h-3 ml-1 opacity-20 filter grayscale"><ChevronRight className="rotate-90" size={12} /></div>;
+    if (!sortConfig || sortConfig.key !== key) return <div className="w-3 h-3 ml-1 text-slate-300"><ChevronRight className="rotate-90" size={12} /></div>;
     return sortConfig.direction === 'asc'
-      ? <div className="w-3 h-3 ml-1 text-blue-600"><ChevronRight className="-rotate-90" size={12} /></div>
-      : <div className="w-3 h-3 ml-1 text-blue-600"><ChevronRight className="rotate-90" size={12} /></div>;
+      ? <div className="w-3 h-3 ml-1 text-amber-500 ring-2 ring-amber-100 rounded-full"><ChevronRight className="-rotate-90" size={12} /></div>
+      : <div className="w-3 h-3 ml-1 text-amber-500 ring-2 ring-amber-100 rounded-full"><ChevronRight className="rotate-90" size={12} /></div>;
   };
 
   const filteredRecords = pvRecords.filter(rec => {
     const search = filterText.toLowerCase();
     const matchText = rec.name.toLowerCase().includes(search) || rec.reducedCode.includes(search) || rec.dcb.toLowerCase().includes(search);
     const matchMonth = filterMonth ? rec.expiryDate.includes(filterMonth) : true;
-    return matchText && matchMonth;
+
+    let matchStatus = true;
+    if (filterStatus) {
+      const status = getExpiryStatus(rec.expiryDate);
+      matchStatus = status.label === filterStatus;
+    }
+
+    return matchText && matchMonth && matchStatus;
   });
 
   // Apply Sorting
@@ -368,11 +380,44 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                 </div>
               </div>
 
-              <div className="flex flex-wrap gap-3 text-[10px] font-bold uppercase tracking-wide pt-2 border-t border-slate-100 mt-4">
-                <span className="flex items-center gap-1.5 text-slate-400"><Info size={12} /> Legenda:</span>
-                <span className="flex items-center gap-1.5 text-blue-600"><span className="w-2 h-2 rounded-full bg-blue-500"></span>No Prazo (&gt;30d)</span>
-                <span className="flex items-center gap-1.5 text-rose-800"><span className="w-2 h-2 rounded-full bg-rose-700"></span>Crítico (≤30d)</span>
-                <span className="flex items-center gap-1.5 text-red-600"><span className="w-2 h-2 rounded-full bg-red-600"></span>Vencido</span>
+              <div className="flex flex-col md:flex-row gap-4 pt-4 border-t border-slate-100 justify-end">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setFilterStatus(filterStatus === 'NO PRAZO' ? '' : 'NO PRAZO')}
+                    className={`px-3 py-2 rounded-xl border text-[10px] font-bold uppercase transition-all flex items-center gap-2 ${filterStatus === 'NO PRAZO' ? 'bg-blue-600 border-blue-600 text-white shadow-md' : 'bg-white border-slate-200 text-slate-500 hover:bg-blue-50 hover:text-blue-600 hover:border-blue-200'}`}
+                  >
+                    <div className={`w-2 h-2 rounded-full ${filterStatus === 'NO PRAZO' ? 'bg-white' : 'bg-blue-500'}`}></div>
+                    No Prazo
+                  </button>
+                  <button
+                    onClick={() => setFilterStatus(filterStatus === 'CRÍTICO' ? '' : 'CRÍTICO')}
+                    className={`px-3 py-2 rounded-xl border text-[10px] font-bold uppercase transition-all flex items-center gap-2 ${filterStatus === 'CRÍTICO' ? 'bg-rose-700 border-rose-700 text-white shadow-md' : 'bg-white border-slate-200 text-slate-500 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200'}`}
+                  >
+                    <div className={`w-2 h-2 rounded-full ${filterStatus === 'CRÍTICO' ? 'bg-white' : 'bg-rose-700'}`}></div>
+                    Crítico
+                  </button>
+                  <button
+                    onClick={() => setFilterStatus(filterStatus === 'VENCIDO' ? '' : 'VENCIDO')}
+                    className={`px-3 py-2 rounded-xl border text-[10px] font-bold uppercase transition-all flex items-center gap-2 ${filterStatus === 'VENCIDO' ? 'bg-red-600 border-red-600 text-white shadow-md' : 'bg-white border-slate-200 text-slate-500 hover:bg-red-50 hover:text-red-600 hover:border-red-200'}`}
+                  >
+                    <div className={`w-2 h-2 rounded-full ${filterStatus === 'VENCIDO' ? 'bg-white' : 'bg-red-600'}`}></div>
+                    Vencido
+                  </button>
+
+                  {(filterText || filterMonth || filterStatus) && (
+                    <button
+                      onClick={() => { setFilterText(''); setFilterMonth(''); setFilterStatus(''); }}
+                      className="ml-2 flex items-center gap-1.5 px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-bold uppercase hover:bg-red-100 hover:text-red-600 transition-all border border-slate-200"
+                    >
+                      <X size={12} /> Limpar Filtros
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 text-[9px] font-bold text-slate-400 uppercase tracking-tight pt-2">
+                <Info size={12} />
+                <span>Legenda: utilize os botões acima para filtrar por status. Você pode combinar a busca com o filtro de mês na tabela.</span>
               </div>
             </div>
 
@@ -386,21 +431,8 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                       </div>
                     </th>
                     <th className="px-6 py-4 text-left cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('name')}>
-                      <div className="space-y-2">
-                        <div className="flex items-center">
-                          Descrição (D) {getSortIcon('name')}
-                        </div>
-                        <div className="relative">
-                          <Search className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
-                          <input
-                            type="text"
-                            placeholder="Filtrar..."
-                            value={filterText}
-                            onChange={(e) => setFilterText(e.target.value)}
-                            className="w-full pl-7 pr-2 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-700 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none font-medium normal-case"
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                        </div>
+                      <div className="flex items-center">
+                        Descrição (D) {getSortIcon('name')}
                       </div>
                     </th>
                     <th className="px-6 py-4 text-center w-20 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('quantity')}>
