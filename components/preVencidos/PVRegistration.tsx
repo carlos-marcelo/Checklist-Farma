@@ -421,9 +421,9 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase font-bold tracking-widest border-b border-slate-100">
+            <div className="overflow-x-auto max-h-[600px] overflow-y-auto custom-scrollbar">
+              <table className="w-full relative border-separate border-spacing-0">
+                <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase font-bold tracking-widest border-b border-slate-100 sticky top-0 z-10">
                   <tr>
                     <th className="px-6 py-4 text-left w-24 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('reducedCode')}>
                       <div className="flex items-center">
