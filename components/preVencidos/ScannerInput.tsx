@@ -12,12 +12,28 @@ const ScannerInput: React.FC<ScannerInputProps> = ({ onScan, placeholder }) => {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Keep focus on the input for scanners
-    const handleGlobalClick = () => {
-      inputRef.current?.focus();
+    // Initial focus without scrolling
+    inputRef.current?.focus({ preventScroll: true });
+
+    // Keep focus on the input for scanners, but be smart about it
+    const handleGlobalClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+
+      // Don't steal focus if clicking on interactive elements
+      const isInteractive =
+        target.closest('button') ||
+        target.closest('input') ||
+        target.closest('select') ||
+        target.closest('textarea') ||
+        target.closest('a') ||
+        target.getAttribute('role') === 'button';
+
+      if (!isInteractive) {
+        inputRef.current?.focus({ preventScroll: true });
+      }
     };
-    window.addEventListener('click', handleGlobalClick);
-    return () => window.removeEventListener('click', handleGlobalClick);
+    window.addEventListener('mousedown', handleGlobalClick);
+    return () => window.removeEventListener('mousedown', handleGlobalClick);
   }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -40,7 +56,6 @@ const ScannerInput: React.FC<ScannerInputProps> = ({ onScan, placeholder }) => {
         onKeyDown={handleKeyDown}
         placeholder={placeholder || "Bipar código de barras ou reduzido..."}
         className="w-full pl-20 pr-6 py-10 bg-white border-2 border-slate-200 rounded-2xl text-2xl font-mono focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all placeholder:text-slate-300"
-        autoFocus
       />
       <div className="mt-4 text-center text-slate-400 text-sm">
         Pressione Enter após digitar se não estiver usando scanner.

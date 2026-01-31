@@ -536,6 +536,62 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
             </div>
           </div>
 
+          {/* Resumo por Validade */}
+          <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
+            <h3 className="font-bold text-slate-800 mb-4 text-sm uppercase tracking-wider">Resumo por Validade</h3>
+            <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
+              {(() => {
+                const grouped = pvRecords.reduce((acc, rec) => {
+                  const key = rec.expiryDate;
+                  if (!acc[key]) acc[key] = { items: 0, skus: new Set<string>() };
+                  acc[key].items += rec.quantity;
+                  acc[key].skus.add(rec.reducedCode);
+                  return acc;
+                }, {} as Record<string, { items: number; skus: Set<string> }>);
+
+                const sortedDates = Object.keys(grouped).sort((a, b) => {
+                  const [m1, y1] = a.split('/').map(Number);
+                  const [m2, y2] = b.split('/').map(Number);
+                  return (y1 * 12 + m1) - (y2 * 12 + m2);
+                });
+
+                return sortedDates.length === 0 ? (
+                  <div className="text-center py-6 text-slate-400 italic text-sm border-2 border-dashed border-slate-100 rounded-xl">
+                    Nenhum item lançado.
+                  </div>
+                ) : (
+                  sortedDates.map(date => {
+                    const data = grouped[date];
+                    const status = getExpiryStatus(date);
+                    return (
+                      <div key={date} className={`p-3 rounded-xl border-2 transition-all ${status.bg} flex justify-between items-center hover:scale-[1.02] duration-200`}>
+                        <div className="space-y-1">
+                          <p className={`text-base font-black ${status.color}`}>{date}</p>
+                          <div className={`px-2 py-0.5 rounded-md text-[8px] font-bold uppercase inline-block ${status.label === 'VENCIDO' ? 'bg-red-100 text-red-700' :
+                              status.label === 'CRÍTICO' ? 'bg-rose-100 text-rose-700' :
+                                'bg-blue-100 text-blue-700'
+                            }`}>
+                            {status.label}
+                          </div>
+                        </div>
+                        <div className="flex gap-4">
+                          <div className="text-right">
+                            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">Itens</p>
+                            <p className="text-xl font-black text-slate-800 leading-none">{data.items}</p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">Variedade</p>
+                            <p className="text-xl font-bold text-slate-700 leading-none">{data.skus.size}</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                );
+              })()}
+            </div>
+          </div>
+
           <div className="bg-slate-900 p-8 rounded-3xl shadow-xl text-white relative overflow-hidden group">
             <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-blue-600/10 rounded-full blur-3xl group-hover:bg-blue-600/20 transition-all duration-700"></div>
             <div className="w-14 h-14 bg-slate-800 rounded-2xl flex items-center justify-center mb-6 border border-slate-700 shadow-lg shadow-black/20">
