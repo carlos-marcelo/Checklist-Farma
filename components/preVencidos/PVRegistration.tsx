@@ -563,13 +563,22 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                   sortedDates.map(date => {
                     const data = grouped[date];
                     const status = getExpiryStatus(date);
+                    const isActive = filterMonth === date;
+
                     return (
-                      <div key={date} className={`p-3 rounded-xl border-2 transition-all ${status.bg} flex justify-between items-center hover:scale-[1.02] duration-200`}>
+                      <div
+                        key={date}
+                        onClick={() => setFilterMonth(isActive ? '' : date)}
+                        className={`p-3 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center hover:scale-[1.02] duration-200 ${isActive
+                            ? 'ring-2 ring-blue-500 ring-offset-2 border-blue-500 shadow-md transform scale-[1.02]'
+                            : `${status.bg} border-transparent hover:border-slate-200`
+                          }`}
+                      >
                         <div className="space-y-1">
-                          <p className={`text-base font-black ${status.color}`}>{date}</p>
+                          <p className={`text-base font-black ${isActive ? 'text-blue-600' : status.color}`}>{date}</p>
                           <div className={`px-2 py-0.5 rounded-md text-[8px] font-bold uppercase inline-block ${status.label === 'VENCIDO' ? 'bg-red-100 text-red-700' :
-                              status.label === 'CRÍTICO' ? 'bg-rose-100 text-rose-700' :
-                                'bg-blue-100 text-blue-700'
+                            status.label === 'CRÍTICO' ? 'bg-rose-100 text-rose-700' :
+                              'bg-blue-100 text-blue-700'
                             }`}>
                             {status.label}
                           </div>
