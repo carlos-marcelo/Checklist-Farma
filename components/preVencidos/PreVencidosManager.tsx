@@ -667,7 +667,19 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const formatUploadTimestamp = (value?: string) => {
     if (!value) return 'momento anterior';
     try {
-      return new Date(value).toLocaleString('pt-BR');
+      const date = new Date(value);
+      const datePart = new Intl.DateTimeFormat('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      }).format(date);
+      const timePart = new Intl.DateTimeFormat('pt-BR', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false
+      }).format(date);
+      return `${datePart}, ${timePart}`;
     } catch {
       return value;
     }
@@ -1188,7 +1200,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                 <span className="text-[10px] font-bold bg-white/20 px-3 py-1 rounded-full uppercase">Excel Linha 5 / Coluna I</span>
                 {localLastUpload && localLastUpload.company_id === sessionInfo?.companyId && localLastUpload.branch === sessionInfo?.filial && (
                   <p className="text-[10px] font-bold uppercase tracking-widest text-white/80">
-                    Último carregamento: {formatUploadTimestamp(localLastUpload.uploaded_at)}{localLastUpload.file_name ? ` · ${localLastUpload.file_name}` : ''}
+                    Último carregamento: {formatUploadTimestamp(localLastUpload.uploaded_at)} · {localLastUpload.file_name || 'arquivo sem nome'}
+                    <span className="ml-2 text-white/60">Período: {localLastUpload.period_label || 'sem período'}</span>
                   </p>
                 )}
               </div>
