@@ -12,7 +12,8 @@ import {
     CheckCircle,
     Building2,
     MapPin,
-    Store
+    Store,
+    Search
 } from 'lucide-react';
 import { User, ChecklistDefinition, AppConfig, AccessLevelId } from '../../types';
 import { Logo } from './Logo';
@@ -170,6 +171,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 >
                     <ClipboardList className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'pre' ? '' : 'text-gray-400'}`} />
                     Pré-Vencidos
+                </button>
+
+                <button
+                    onClick={() => handleViewChange('audit')}
+                    className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'audit'
+                        ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
+                        : 'text-gray-600 hover:bg-gray-50'
+                        }`}
+                >
+                    <Search className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'audit' ? '' : 'text-gray-400'}`} />
+                    Auditoria
                 </button>
 
                 <button

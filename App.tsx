@@ -3,6 +3,7 @@ import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image
 import { CHECKLISTS as BASE_CHECKLISTS, THEMES, ACCESS_MODULES, ACCESS_LEVELS, INPUT_TYPE_LABELS, generateId } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem, ThemeColor, AppConfig, User, ReportHistoryItem, StockConferenceHistoryItem, CompanyArea, AccessLevelId, AccessModule, AccessLevelMeta, UserRole, StockConferenceSummary } from './types';
 import PreVencidosManager from './components/preVencidos/PreVencidosManager';
+import AuditModule from './components/auditoria/AuditModule';
 import { clearLocalPVReports, clearLocalPVSession } from './preVencidos/storage';
 import SignaturePad from './components/SignaturePad';
 import { StockConference } from './components/StockConference';
@@ -969,7 +970,7 @@ const App: React.FC = () => {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [showErrors, setShowErrors] = useState(false);
 
-    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre'>(() => {
+    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit'>(() => {
         const saved = localStorage.getItem('APP_CURRENT_VIEW');
         return (saved as any) || 'checklist';
     });
@@ -3012,6 +3013,16 @@ const App: React.FC = () => {
                     {currentView === 'pre' && (
                         <div className="h-full animate-fade-in relative pb-24">
                             <PreVencidosManager
+                                userEmail={currentUser?.email || ''}
+                                userName={currentUser?.name || ''}
+                                companies={companies}
+                            />
+                        </div>
+                    )}
+
+                    {currentView === 'audit' && (
+                        <div className="h-full animate-fade-in relative pb-24">
+                            <AuditModule
                                 userEmail={currentUser?.email || ''}
                                 userName={currentUser?.name || ''}
                                 companies={companies}
