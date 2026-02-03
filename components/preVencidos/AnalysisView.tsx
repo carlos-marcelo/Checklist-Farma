@@ -3,6 +3,23 @@ import React, { useState, useMemo } from 'react';
 import { PVRecord, SalesRecord, PVSaleClassification } from '../../preVencidos/types';
 import { FileSearch, Users, ShoppingCart, TrendingUp, AlertCircle, CheckCircle, FlaskConical, Repeat, Search, Package, Trophy, CheckSquare, XCircle, Save, MinusCircle, HelpCircle, Lock } from 'lucide-react';
 
+const MONTH_NAMES_PT_BR = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
+
+const getExpiryMonthLabel = (expiryDate?: string) => {
+  if (!expiryDate) return 'MÊS NÃO INFORMADO';
+
+  const [monthPart, yearPart] = expiryDate.split('/');
+  if (!monthPart || !yearPart) return 'MÊS NÃO INFORMADO';
+
+  const monthIndex = Number(monthPart);
+  if (Number.isNaN(monthIndex) || monthIndex < 1 || monthIndex > 12) return 'MÊS NÃO INFORMADO';
+
+  const normalizedYear = yearPart.length === 2 ? `20${yearPart}` : yearPart;
+  const monthLabel = MONTH_NAMES_PT_BR[monthIndex - 1];
+
+  return `${monthLabel}/${normalizedYear}`;
+};
+
 interface AnalysisViewProps {
   pvRecords: PVRecord[];
   salesRecords: SalesRecord[];
@@ -63,7 +80,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         similarSoldQty,
         similarSalesDetails,
         status,
-        isFinalized
+        isFinalized,
+        expiryMonthLabel: getExpiryMonthLabel(pv.expiryDate)
       };
     });
   }, [pvRecords, salesRecords, finalizedREDSByPeriod, currentSalesPeriod]);
@@ -168,7 +186,10 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                     <div className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 flex items-center gap-1">
                       <FlaskConical size={12} /> {res.dcb}
                     </div>
-                    <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">PV EM ESTOQUE: {res.quantity}</div>
+                    <div className="space-y-1">
+                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">PV EM ESTOQUE: {res.quantity}</div>
+                      <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">VENCIMENTO: {res.expiryMonthLabel}</div>
+                    </div>
                   </div>
                 </div>
 
