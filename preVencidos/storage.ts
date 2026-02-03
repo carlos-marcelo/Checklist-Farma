@@ -1,14 +1,16 @@
 import type { DbPVSession } from '../supabaseService';
-import type { Product } from './types';
+import type { Product, SalesUploadRecord } from './types';
 
 const LOCAL_PV_SESSION_PREFIX = 'PV_SESSION_';
 const REPORTS_KEY_PREFIX = 'PV_REPORTS_';
 const REPORTS_DB_NAME = 'PVReportsDB';
 const REPORTS_STORE_NAME = 'reports';
 const REPORTS_DB_VERSION = 1;
+const LAST_UPLOAD_KEY_PREFIX = 'PV_LAST_UPLOAD_';
 
 const buildLocalSessionKey = (email: string) => `${LOCAL_PV_SESSION_PREFIX}${email.trim().toLowerCase()}`;
 const buildReportsKey = (email: string) => `${REPORTS_KEY_PREFIX}${email.trim().toLowerCase()}`;
+const buildLastUploadKey = (email: string) => `${LAST_UPLOAD_KEY_PREFIX}${email.trim().toLowerCase()}`;
 
 const isIndexedDBAvailable = () => typeof window !== 'undefined' && 'indexedDB' in window;
 
@@ -180,6 +182,36 @@ export const clearLocalPVSession = (email: string) => {
     window.localStorage.removeItem(buildLocalSessionKey(email));
   } catch (error) {
     console.error('Erro ao limpar sessao PV local:', error);
+  }
+};
+
+export const loadLastSalesUpload = (email: string): SalesUploadRecord | null => {
+  if (typeof window === 'undefined' || !email) return null;
+  try {
+    const raw = window.localStorage.getItem(buildLastUploadKey(email));
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch (error) {
+    console.error('Erro ao carregar último carregamento de vendas local:', error);
+    return null;
+  }
+};
+
+export const saveLastSalesUpload = (email: string, upload: SalesUploadRecord) => {
+  if (typeof window === 'undefined' || !email) return;
+  try {
+    window.localStorage.setItem(buildLastUploadKey(email), JSON.stringify(upload));
+  } catch (error) {
+    console.error('Erro ao salvar último carregamento de vendas local:', error);
+  }
+};
+
+export const clearLastSalesUpload = (email: string) => {
+  if (typeof window === 'undefined' || !email) return;
+  try {
+    window.localStorage.removeItem(buildLastUploadKey(email));
+  } catch (error) {
+    console.error('Erro ao limpar o último carregamento de vendas local:', error);
   }
 };
 

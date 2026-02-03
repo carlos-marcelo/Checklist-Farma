@@ -1,6 +1,6 @@
 import { supabase } from './supabaseClient';
 import { ChecklistDefinition } from './types';
-import { Product, PVRecord, PVSaleClassification } from './preVencidos/types';
+import { Product, PVRecord, PVSaleClassification, SalesUploadRecord } from './preVencidos/types';
 
 // ==================== TYPES ====================
 
@@ -133,6 +133,8 @@ export interface DbPVSalesHistory {
   qty_neutral: number;
   finalized_at?: string;
 }
+
+export type DbPVSalesUpload = SalesUploadRecord;
 
 export interface DbPVSessionData {
   master_products?: Product[];
@@ -943,6 +945,50 @@ export async function fetchPVSalesHistory(companyId: string, branch: string): Pr
   } catch (error) {
     console.error('Error fetching PV sales history:', error);
     return [];
+  }
+}
+
+export async function fetchPVSalesUploads(companyId: string, branch: string): Promise<DbPVSalesUpload[]> {
+  try {
+    const { data, error } = await supabase
+      .from('pv_sales_uploads')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('branch', branch)
+      .order('uploaded_at', { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching PV sales uploads:', error);
+    return [];
+  }
+}
+
+export async function insertPVSalesUpload(upload: DbPVSalesUpload): Promise<DbPVSalesUpload | null> {
+  try {
+    const payload = {
+      user_email: upload.user_email,
+      company_id: upload.company_id,
+      branch: upload.branch,
+      period_label: upload.period_label,
+      period_start: upload.period_start,
+      period_end: upload.period_end,
+      file_name: upload.file_name,
+      uploaded_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabase
+      .from('pv_sales_uploads')
+      .insert([payload])
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error inserting PV sales upload:', error);
+    return null;
   }
 }
 

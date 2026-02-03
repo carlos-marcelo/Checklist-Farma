@@ -27,6 +27,18 @@ export interface SalesRecord {
   dcb: string;
 }
 
+export interface SalesUploadRecord {
+  id?: string;
+  user_email: string;
+  company_id: string;
+  branch: string;
+  period_label: string;
+  period_start?: string | null;
+  period_end?: string | null;
+  file_name?: string | null;
+  uploaded_at?: string;
+}
+
 export interface DCBReportRecord {
   reducedCode: string;
   productName: string;

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Product, PVRecord, SalesRecord, AppView, SessionInfo, PVSaleClassification } from '../../preVencidos/types';
+import { Product, PVRecord, SalesRecord, AppView, SessionInfo, PVSaleClassification, SalesUploadRecord } from '../../preVencidos/types';
 import {
   parseSystemProductsXLSX,
   parseDCBProductsXLSX,
@@ -15,6 +15,7 @@ import { Package, AlertTriangle, LogOut, Settings, Trophy, TrendingUp, MinusCirc
 import {
   DbCompany,
   DbPVSession,
+  DbPVSalesUpload,
   fetchPVSession,
   upsertPVSession,
   insertPVBranchRecord,
@@ -24,6 +25,8 @@ import {
   fetchPVSalesHistory,
   deletePVBranchSalesHistory,
   insertPVSalesHistory,
+  fetchPVSalesUploads,
+  insertPVSalesUpload,
   DbPVSalesHistory,
   fetchPVReports,
   upsertPVReport,
@@ -35,7 +38,10 @@ import {
   clearLocalPVSession,
   loadLocalPVReports,
   saveLocalPVReports,
-  clearLocalPVReports
+  clearLocalPVReports,
+  loadLastSalesUpload,
+  saveLastSalesUpload,
+  clearLastSalesUpload
 } from '../../preVencidos/storage';
 
 interface PreVencidosManagerProps {
@@ -63,6 +69,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [isClearingDashboard, setIsClearingDashboard] = useState(false);
   const [isInitialSyncDone, setIsInitialSyncDone] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
+  const [salesUploads, setSalesUploads] = useState<DbPVSalesUpload[]>([]);
+  const [localLastUpload, setLocalLastUpload] = useState<SalesUploadRecord | null>(null);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
 
@@ -77,6 +85,15 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
+  }, [userEmail]);
+
+  useEffect(() => {
+    if (!userEmail) {
+      setLocalLastUpload(null);
+      return;
+    }
+    const saved = loadLastSalesUpload(userEmail);
+    setLocalLastUpload(saved);
   }, [userEmail]);
 
   const canSwitchToView = (view: AppView) => view === AppView.SETUP || hasCompletedSetup;
@@ -122,13 +139,16 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       setFinalizedREDSByPeriod({});
       setSalesPeriod('');
       setHistoryRecords([]);
-      setPvSessionId(null);
+    setPvSessionId(null);
+      setSalesUploads([]);
 
       clearLocalPVSession(userEmail || '');
       if (userEmail) {
         clearLocalPVReports(userEmail).catch(() => { });
         deletePVReports(userEmail).catch(() => { });
+        clearLastSalesUpload(userEmail);
       }
+      setLocalLastUpload(null);
     }
   };
 
@@ -462,6 +482,31 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         })
         .catch(err => console.error('Erro carregando histórico de vendas:', err));
     }
+    }, [sessionInfo?.companyId, sessionInfo?.filial]);
+
+  useEffect(() => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) {
+      setSalesUploads([]);
+      return;
+    }
+
+    let cancelled = false;
+    fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial)
+      .then(reports => {
+        if (cancelled) return;
+        setSalesUploads(reports);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error('Erro carregando histórico de relatórios de vendas:', err);
+      })
+      .finally(() => {
+        if (cancelled) return;
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [sessionInfo?.companyId, sessionInfo?.filial]);
 
   const handleUpdatePVSale = (saleId: string, classification: PVSaleClassification) => {
@@ -556,28 +601,185 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     });
   };
 
-  const handleSalesUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      try {
-        let salesData: { sales: SalesRecord[], period: string };
-        const fileName = file.name.toLowerCase();
-        if (fileName.endsWith('.csv') || fileName.endsWith('.txt')) {
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            const text = event.target?.result as string;
-            const sales = parseSalesCSV(text);
-            processAndSetSales(sales, "CSV-Upload-" + new Date().toLocaleDateString());
-          };
-          reader.readAsText(file);
-        } else {
-          salesData = await parseSalesXLSX(file);
-          processAndSetSales(salesData.sales, salesData.period);
-        }
-      } catch (error) {
-        alert('Erro ao processar arquivo de vendas.');
+  type PeriodRange = {
+    start: Date | null;
+    end: Date | null;
+  };
+
+  const parsePeriodRange = (label?: string): PeriodRange => {
+    if (!label) return { start: null, end: null };
+    const regex = /(\d{1,2})\/(\d{1,2})\/(\d{2,4})/g;
+    const matches = Array.from(label.matchAll(regex));
+    const toDate = (match: RegExpMatchArray) => {
+      const day = Number(match[1]);
+      const month = Number(match[2]) - 1;
+      let year = Number(match[3]);
+      if (match[3].length <= 2) {
+        year += 2000;
       }
+      return new Date(year, month, day);
+    };
+    const start = matches.length > 0 ? toDate(matches[0]) : null;
+    const end = matches.length > 1 ? toDate(matches[1]) : start;
+    return { start, end };
+  };
+
+  const rangesOverlap = (a: PeriodRange, b: PeriodRange) => {
+    if (!a.start || !a.end || !b.start || !b.end) return false;
+    return a.start <= b.end && b.start <= a.end;
+  };
+
+  const buildRecordRange = (record?: SalesUploadRecord): PeriodRange => ({
+    start: record?.period_start ? new Date(record.period_start) : null,
+    end: record?.period_end ? new Date(record.period_end) : null
+  });
+
+  const matchesContext = (record?: SalesUploadRecord) => {
+    if (!record || !sessionInfo?.companyId || !sessionInfo?.filial) return false;
+    return record.company_id === sessionInfo.companyId && record.branch === sessionInfo.filial;
+  };
+
+  const evaluateConflict = (record?: SalesUploadRecord, label?: string, currentRange?: PeriodRange) => {
+    if (!record || !label) return undefined;
+    if (!matchesContext(record)) return undefined;
+    if (record.period_label === label) return record;
+    const existingRange = buildRecordRange(record);
+    if (currentRange && currentRange.start && currentRange.end && existingRange.start && existingRange.end && rangesOverlap(currentRange, existingRange)) {
+      return record;
     }
+    return undefined;
+  };
+
+  const findConflictingUpload = (range: PeriodRange, label: string) => {
+    for (const report of salesUploads) {
+      const conflict = evaluateConflict(report, label, range);
+      if (conflict) return conflict;
+    }
+
+    if (localLastUpload) {
+      const conflict = evaluateConflict(localLastUpload, label, range);
+      if (conflict) return conflict;
+    }
+
+    return undefined;
+  };
+
+  const formatUploadTimestamp = (value?: string) => {
+    if (!value) return 'momento anterior';
+    try {
+      return new Date(value).toLocaleString('pt-BR');
+    } catch {
+      return value;
+    }
+  };
+
+  const persistSalesUploadRecord = async (label: string, range: PeriodRange, fileName: string) => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
+    const timestamp = new Date().toISOString();
+    const baseRecord: SalesUploadRecord = {
+      user_email: userEmail || '',
+      company_id: sessionInfo.companyId,
+      branch: sessionInfo.filial,
+      period_label: label,
+      period_start: range.start ? range.start.toISOString() : null,
+      period_end: range.end ? range.end.toISOString() : null,
+      file_name: fileName || null,
+      uploaded_at: timestamp
+    };
+
+    const addUploadRecord = (record: SalesUploadRecord) => {
+      setSalesUploads(prev => {
+        const filtered = prev.filter(r => r.period_label !== record.period_label);
+        return [record, ...filtered];
+      });
+    };
+
+    addUploadRecord(baseRecord);
+    if (userEmail) {
+      saveLastSalesUpload(userEmail, baseRecord);
+    }
+    setLocalLastUpload(baseRecord);
+
+    try {
+      const saved = await insertPVSalesUpload(baseRecord);
+      if (saved) {
+        addUploadRecord(saved);
+        if (userEmail) {
+          saveLastSalesUpload(userEmail, saved);
+        }
+        setLocalLastUpload(saved);
+      }
+    } catch (error) {
+      console.error('Erro registrando relatório de vendas carregado:', error);
+    }
+  };
+
+  const processAndSetSales = (sales: SalesRecord[], period: string) => {
+    const cleanedPeriod = (period || '').trim() || 'Período não identificado';
+    const enrichedSales = sales.map(s => {
+      const product = masterProducts.find(p => p.reducedCode === s.reducedCode);
+      return {
+        ...s,
+        date: cleanedPeriod,
+        dcb: product ? product.dcb : s.dcb,
+        productName: product ? product.name : s.productName
+      };
+    });
+    setSalesRecords(enrichedSales);
+    setSalesPeriod(cleanedPeriod);
+    setCurrentView(AppView.ANALYSIS);
+  };
+
+  const handleParsedSales = async (sales: SalesRecord[], rawPeriodLabel: string | undefined, fileName: string) => {
+    const normalizedLabel = (rawPeriodLabel || '').trim() || 'Período não identificado';
+    const parsedRange = parsePeriodRange(normalizedLabel);
+    const conflict = findConflictingUpload(parsedRange, normalizedLabel);
+    if (conflict) {
+      const friendlyTimestamp = formatUploadTimestamp(conflict.uploaded_at);
+      const fileHint = conflict.file_name ? `Arquivo: ${conflict.file_name}. ` : '';
+      const message = `O período "${normalizedLabel}" já foi carregado anteriormente (${fileHint}registrado em ${friendlyTimestamp}). Deseja continuar mesmo assim?`;
+      if (!confirm(message)) return;
+    }
+
+    processAndSetSales(sales, normalizedLabel);
+    await persistSalesUploadRecord(normalizedLabel, parsedRange, fileName);
+  };
+
+  const handleSalesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const fileName = file.name;
+    const fileNameLower = fileName.toLowerCase();
+
+    const notifyError = () => alert('Erro ao processar arquivo de vendas.');
+
+    if (fileNameLower.endsWith('.csv') || fileNameLower.endsWith('.txt')) {
+      const reader = new FileReader();
+      reader.onload = async (event) => {
+        try {
+          const text = event.target?.result as string;
+          const sales = parseSalesCSV(text);
+          await handleParsedSales(sales, `CSV-Upload-${new Date().toLocaleDateString()}`, fileName);
+        } catch (err) {
+          console.error('Erro ao ler CSV de vendas:', err);
+          notifyError();
+        }
+      };
+      reader.onerror = () => notifyError();
+      reader.readAsText(file);
+    } else {
+      (async () => {
+        try {
+          const salesData = await parseSalesXLSX(file);
+          await handleParsedSales(salesData.sales, salesData.period, fileName);
+        } catch (error) {
+          console.error('Erro ao ler XLSX de vendas:', error);
+          notifyError();
+        }
+      })();
+    }
+
+    e.target.value = '';
   };
 
   const generateClosingReportPDF = (records: DbPVSalesHistory[]) => {
@@ -672,21 +874,6 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     } finally {
       setIsClearingDashboard(false);
     }
-  };
-
-  const processAndSetSales = (sales: SalesRecord[], period: string) => {
-    const enrichedSales = sales.map(s => {
-      const product = masterProducts.find(p => p.reducedCode === s.reducedCode);
-      return {
-        ...s,
-        date: period,
-        dcb: product ? product.dcb : s.dcb,
-        productName: product ? product.name : s.productName
-      };
-    });
-    setSalesRecords(enrichedSales);
-    setSalesPeriod(period);
-    setCurrentView(AppView.ANALYSIS);
   };
 
   const persistPVSession = useCallback(async () => {
@@ -991,15 +1178,22 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           )}
           {currentView === AppView.ANALYSIS && (
             <div className="space-y-4">
-              {salesPeriod && (
-                <div className="bg-blue-600 text-white p-4 rounded-2xl shadow-lg flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Calendar size={20} />
-                    <span className="text-sm font-black uppercase tracking-widest">Período de Vendas Reconhecido: {salesPeriod}</span>
-                  </div>
-                  <span className="text-[10px] font-bold bg-white/20 px-3 py-1 rounded-full uppercase">Excel Linha 5 / Coluna I</span>
-                </div>
-              )}
+          {salesPeriod && (
+            <div className="bg-blue-600 text-white p-4 rounded-2xl shadow-lg flex flex-col gap-3">
+              <div className="flex items-center gap-3">
+                <Calendar size={20} />
+                <span className="text-sm font-black uppercase tracking-widest">Período de Vendas Reconhecido: {salesPeriod}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold bg-white/20 px-3 py-1 rounded-full uppercase">Excel Linha 5 / Coluna I</span>
+                {localLastUpload && localLastUpload.company_id === sessionInfo?.companyId && localLastUpload.branch === sessionInfo?.filial && (
+                  <p className="text-[10px] font-bold uppercase tracking-widest text-white/80">
+                    Último carregamento: {formatUploadTimestamp(localLastUpload.uploaded_at)}{localLastUpload.file_name ? ` · ${localLastUpload.file_name}` : ''}
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
               <AnalysisView
                 pvRecords={pvRecords} salesRecords={salesRecords} confirmedPVSales={confirmedPVSales}
                 finalizedREDSByPeriod={finalizedREDSByPeriod}
