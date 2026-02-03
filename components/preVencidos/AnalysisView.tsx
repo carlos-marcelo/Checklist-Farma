@@ -41,11 +41,16 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [expanded, setExpanded] = useState<{ id: string, type: 'sku' | 'similar' } | null>(null);
+  const [activeFilter, setActiveFilter] = useState<'all' | 'pending' | 'finalized' | 'similar'>('all');
+
+  const handleFilterClick = (filter: 'pending' | 'finalized' | 'similar') => {
+    setActiveFilter(prev => (prev === filter ? 'all' : filter));
+  };
 
   const results = useMemo(() => {
     const periodFinalizedList = finalizedREDSByPeriod[currentSalesPeriod] || [];
 
-    return pvRecords.map(pv => {
+    const enriched = pvRecords.map(pv => {
       const isFinalized = periodFinalizedList.includes(pv.reducedCode);
       const directSales = salesRecords.filter(s => s.reducedCode === pv.reducedCode);
       const directSoldQty = directSales.reduce((acc, s) => acc + s.quantity, 0);
@@ -84,6 +89,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         expiryMonthLabel: getExpiryMonthLabel(pv.expiryDate)
       };
     });
+    // Hide "Sem Movimento" items from the analysis list.
+    return enriched.filter(item => item.status !== 'lost');
   }, [pvRecords, salesRecords, finalizedREDSByPeriod, currentSalesPeriod]);
 
   const toggleExpand = (id: string, type: 'sku' | 'similar') => {
@@ -91,9 +98,14 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     else setExpanded({ id, type });
   };
 
-  const filteredResults = results.filter(r =>
-    r.name.toLowerCase().includes(searchTerm.toLowerCase()) || r.reducedCode.includes(searchTerm)
-  );
+  const filteredResults = results.filter(r => {
+    const matchesSearch = r.name.toLowerCase().includes(searchTerm.toLowerCase()) || r.reducedCode.includes(searchTerm);
+    if (!matchesSearch) return false;
+    if (activeFilter === 'all') return true;
+    if (activeFilter === 'finalized') return r.isFinalized;
+    if (activeFilter === 'similar') return !r.isFinalized && r.status === 'replaced';
+    return !r.isFinalized && r.status === 'sold';
+  });
 
   const handleClassificationChange = (saleId: string, field: keyof PVSaleClassification, val: number, maxSale: number, reducedCode: string, sellerName: string) => {
     const periodFinalizedList = finalizedREDSByPeriod[currentSalesPeriod] || [];
@@ -145,9 +157,31 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
               <FileSearch size={18} className="text-blue-500" /> Análise de Vendas
             </h3>
             <div className="h-4 w-[1px] bg-slate-200"></div>
-            <div className="flex items-center gap-4 text-[9px] font-bold text-slate-400 uppercase tracking-tighter">
-              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-blue-500"></div> Falta Lançar no Período</div>
-              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-green-500"></div> Lançamento Finalizado</div>
+            <div className="flex items-center gap-3 text-[9px] font-bold uppercase tracking-tighter">
+              <button
+                type="button"
+                onClick={() => handleFilterClick('pending')}
+                aria-pressed={activeFilter === 'pending'}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded-full border transition ${activeFilter === 'pending' ? 'text-slate-700 border-slate-300 bg-white shadow-sm' : 'text-slate-300 border-slate-100 bg-slate-50 opacity-70'}`}
+              >
+                <div className="w-2 h-2 rounded-full bg-blue-500"></div> Falta Lançar no Período
+              </button>
+              <button
+                type="button"
+                onClick={() => handleFilterClick('finalized')}
+                aria-pressed={activeFilter === 'finalized'}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded-full border transition ${activeFilter === 'finalized' ? 'text-slate-700 border-slate-300 bg-white shadow-sm' : 'text-slate-300 border-slate-100 bg-slate-50 opacity-70'}`}
+              >
+                <div className="w-2 h-2 rounded-full bg-green-500"></div> Lançamento Finalizado
+              </button>
+              <button
+                type="button"
+                onClick={() => handleFilterClick('similar')}
+                aria-pressed={activeFilter === 'similar'}
+                className={`flex items-center gap-1.5 px-2 py-1 rounded-full border transition ${activeFilter === 'similar' ? 'text-slate-700 border-slate-300 bg-white shadow-sm' : 'text-slate-300 border-slate-100 bg-slate-50 opacity-70'}`}
+              >
+                <div className="w-2 h-2 rounded-full bg-amber-500"></div> Similar Vendido
+              </button>
             </div>
           </div>
           <div className="relative w-64">
