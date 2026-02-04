@@ -72,6 +72,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const [salesUploads, setSalesUploads] = useState<DbPVSalesUpload[]>([]);
   const [localLastUpload, setLocalLastUpload] = useState<SalesUploadRecord | null>(null);
+  const [historyDetail, setHistoryDetail] = useState<{ type: 'seller' | 'recovered' | 'ignored'; seller?: string } | null>(null);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
 
@@ -588,7 +589,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             product_name: product?.name || 'Produto Finalizado',
             qty_sold_pv: item.qtyPV,
             qty_ignored: item.qtyIgnoredPV,
-            qty_neutral: item.qtyNeutral
+            qty_neutral: item.qtyNeutral,
+            finalized_at: new Date().toISOString()
           });
         }
       }
@@ -1078,6 +1080,32 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     return { ranking, totalRecovered, totalIgnored, efficiency, pvInRegistry, sortedStockByMonth };
   }, [pvRecords, confirmedPVSales, historyRecords, finalizedREDSByPeriod]);
 
+  const historyDetailItems = useMemo(() => {
+    if (!historyDetail) return [];
+    let filtered = [...historyRecords];
+    if (historyDetail.type === 'seller') {
+      const target = historyDetail.seller || '';
+      filtered = filtered.filter(r => (r.seller_name || 'Desconhecido') === target);
+    } else if (historyDetail.type === 'recovered') {
+      filtered = filtered.filter(r => Number(r.qty_sold_pv || 0) > 0);
+    } else if (historyDetail.type === 'ignored') {
+      filtered = filtered.filter(r => Number(r.qty_ignored || 0) > 0);
+    }
+    filtered.sort((a, b) => {
+      const da = a.finalized_at ? new Date(a.finalized_at).getTime() : 0;
+      const db = b.finalized_at ? new Date(b.finalized_at).getTime() : 0;
+      return db - da;
+    });
+    return filtered;
+  }, [historyDetail, historyRecords]);
+
+  const formatHistoryDate = (val?: string) => {
+    if (!val) return '-';
+    const date = new Date(val);
+    if (Number.isNaN(date.getTime())) return '-';
+    return `${date.toLocaleDateString('pt-BR')} ${date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+  };
+
   const logout = () => {
     if (confirm('Encerrar sessão?')) {
       if (userEmail) clearLocalPVSession(userEmail);
@@ -1260,16 +1288,22 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             <>
               <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500">
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+                  <button
+                    onClick={() => setHistoryDetail({ type: 'recovered' })}
+                    className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95"
+                  >
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recuperado PV (Filial)</p>
                     <p className="text-4xl font-black text-green-600 mt-2">{dashboardMetrics.totalRecovered}</p>
                     <p className="text-[9px] font-bold text-green-500 mt-2 uppercase flex items-center gap-1"><CheckCircle size={10} /> Positivo</p>
-                  </div>
-                  <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200">
+                  </button>
+                  <button
+                    onClick={() => setHistoryDetail({ type: 'ignored' })}
+                    className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95"
+                  >
                     <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Ignorou PV (Filial)</p>
                     <p className="text-4xl font-black text-red-500 mt-2">{dashboardMetrics.totalIgnored}</p>
                     <p className="text-[9px] font-bold text-red-400 mt-2 uppercase flex items-center gap-1"><MinusCircle size={10} /> Negativo</p>
-                  </div>
+                  </button>
                   <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white">
                     <p className="text-[9px] font-black text-blue-400 uppercase tracking-widest">Eficiência Geral Acumulada</p>
                     <p className="text-4xl font-black mt-2">{dashboardMetrics.efficiency.toFixed(1)}%</p>
@@ -1333,6 +1367,73 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                   </div>
                 )}
 
+                {historyDetail && (
+                  <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                    <div className="bg-white w-full max-w-3xl rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+                      <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                        <h3 className="font-bold text-slate-800 flex items-center gap-2 uppercase text-xs tracking-widest">
+                          <TrendingUp size={18} className="text-blue-500" />
+                          {historyDetail.type === 'seller'
+                            ? `Detalhes do Vendedor: ${historyDetail.seller}`
+                            : historyDetail.type === 'recovered'
+                              ? 'Itens Recuperados (PV)'
+                              : 'Itens Ignorados (PV)'}
+                        </h3>
+                        <button onClick={() => setHistoryDetail(null)} className="text-slate-400 hover:text-red-500 transition-colors">
+                          <X size={20} />
+                        </button>
+                      </div>
+                      <div className="p-6 max-h-[65vh] overflow-y-auto custom-scrollbar">
+                        {historyDetailItems.length === 0 ? (
+                          <p className="text-center py-10 text-slate-400 text-sm italic">Nenhum registro encontrado.</p>
+                        ) : (
+                          <div className="overflow-x-auto">
+                            <table className="w-full text-xs">
+                              <thead className="text-slate-400 uppercase tracking-widest">
+                                <tr className="text-left border-b border-slate-100">
+                                  {historyDetail.type !== 'seller' && <th className="py-2 pr-4">Vendedor</th>}
+                                  <th className="py-2 pr-4">Produto</th>
+                                  <th className="py-2 pr-4 text-center">Vendido</th>
+                                  <th className="py-2 pr-4 text-center">Ignorado</th>
+                                  <th className="py-2 pr-4">Quando</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {historyDetailItems.map((rec, idx) => (
+                                  <tr key={`${rec.reduced_code}-${rec.seller_name}-${idx}`} className="text-slate-700">
+                                    {historyDetail.type !== 'seller' && (
+                                      <td className="py-3 pr-4 font-bold uppercase text-[10px]">{rec.seller_name || '-'}</td>
+                                    )}
+                                    <td className="py-3 pr-4">
+                                      <div className="font-semibold">{rec.product_name || '-'}</div>
+                                      <div className="text-[10px] text-slate-400 font-mono">RED: {rec.reduced_code}</div>
+                                    </td>
+                                    <td className="py-3 pr-4 text-center">
+                                      <span className="inline-flex min-w-[32px] justify-center bg-green-50 text-green-700 px-2 py-0.5 rounded-md font-black text-[10px]">
+                                        {Number(rec.qty_sold_pv || 0)}
+                                      </span>
+                                    </td>
+                                    <td className="py-3 pr-4 text-center">
+                                      <span className="inline-flex min-w-[32px] justify-center bg-red-50 text-red-700 px-2 py-0.5 rounded-md font-black text-[10px]">
+                                        {Number(rec.qty_ignored || 0)}
+                                      </span>
+                                    </td>
+                                    <td className="py-3 pr-4 text-[11px] text-slate-500">{formatHistoryDate(rec.finalized_at)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                      <div className="p-4 bg-slate-50 border-t border-slate-100 flex justify-between items-center text-xs font-bold uppercase text-slate-400">
+                        <span>Registros</span>
+                        <span className="text-slate-700">{historyDetailItems.length}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-200">
                   <h3 className="text-lg font-bold flex items-center gap-3 mb-8 uppercase tracking-tight">
                     <Trophy className="text-amber-500" /> Ranking de Eficiência por Vendedor
@@ -1344,7 +1445,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                       {dashboardMetrics.ranking.map((s, i) => (
-                        <div key={s.name} className="flex items-center gap-4 p-5 bg-slate-50 rounded-2xl border border-slate-100 hover:shadow-md transition-all">
+                        <button
+                          key={s.name}
+                          onClick={() => setHistoryDetail({ type: 'seller', seller: s.name })}
+                          className="flex items-center gap-4 p-5 bg-slate-50 rounded-2xl border border-slate-100 hover:shadow-md transition-all text-left active:scale-[0.99]"
+                        >
                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black ${i === 0 ? 'bg-amber-100 text-amber-600 shadow-sm' : 'bg-white text-slate-300 border'}`}>
                             {i + 1}º
                           </div>
@@ -1357,7 +1462,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                             </div>
                             <p className="text-[9px] font-bold text-blue-600 mt-2 uppercase tracking-widest">Saldo: {s.score}</p>
                           </div>
-                        </div>
+                        </button>
                       ))}
                     </div>
                   )}
