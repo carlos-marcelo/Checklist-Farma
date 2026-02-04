@@ -27,6 +27,7 @@ import {
   insertPVSalesHistory,
   fetchPVSalesUploads,
   insertPVSalesUpload,
+  updatePVBranchRecordDetails,
   DbPVSalesHistory,
   fetchPVReports,
   upsertPVReport,
@@ -296,10 +297,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
               const newRecords = records
                 .filter(rec => !existingIds.has(rec.id || ''))
                 .map(rec => ({
-                  id: rec.id || `db-${rec.reduced_code}-${Date.now()}`,
+                  id: String(rec.id || `db-${rec.reduced_code}-${Date.now()}`),
                   reducedCode: rec.reduced_code,
                   name: rec.product_name,
                   quantity: rec.quantity,
+                  originBranch: rec.origin_branch || '',
+                  sectorResponsible: rec.sector_responsible || '',
                   expiryDate: rec.expiry_date,
                   entryDate: rec.entry_date,
                   dcb: rec.dcb,
@@ -416,16 +419,18 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             const newRecords = dbRecords
               .filter(rec => !existingIds.has(rec.id || ''))
               .map(rec => ({
-                id: rec.id || `db-${rec.reduced_code}-${Date.now()}`,
-                reducedCode: rec.reduced_code,
-                name: rec.product_name,
-                quantity: rec.quantity,
-                expiryDate: rec.expiry_date,
-                entryDate: rec.entry_date,
-                dcb: rec.dcb,
-                userEmail: rec.user_email,
-                userName: ''
-              }));
+                id: String(rec.id || `db-${rec.reduced_code}-${Date.now()}`),
+                  reducedCode: rec.reduced_code,
+                  name: rec.product_name,
+                  quantity: rec.quantity,
+                  originBranch: rec.origin_branch || '',
+                  sectorResponsible: rec.sector_responsible || '',
+                  expiryDate: rec.expiry_date,
+                  entryDate: rec.entry_date,
+                  dcb: rec.dcb,
+                  userEmail: rec.user_email,
+                  userName: ''
+                }));
             // Replace entirely on refresh to ensure sync, or merge? 
             // Better to merge carefully or just set if we trust DB is source of truth.
             // For persistence debugging, let's prioritize DB records + current session additions that might not be there yet?
@@ -456,10 +461,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
               const newRecords = dbRecords
                 .filter(rec => !existingIds.has(rec.id || ''))
                 .map(rec => ({
-                  id: rec.id || `db-${rec.reduced_code}-${Date.now()}`,
+                  id: String(rec.id || `db-${rec.reduced_code}-${Date.now()}`),
                   reducedCode: rec.reduced_code,
                   name: rec.product_name,
                   quantity: rec.quantity,
+                  originBranch: rec.origin_branch || '',
+                  sectorResponsible: rec.sector_responsible || '',
                   expiryDate: rec.expiry_date,
                   entryDate: rec.entry_date,
                   dcb: rec.dcb,
@@ -509,8 +516,38 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     };
   }, [sessionInfo?.companyId, sessionInfo?.filial]);
 
+  const originBranches = useMemo(() => {
+    const byId = companies.find(c => c.id === sessionInfo?.companyId);
+    const fallback = byId ? null : companies.find(c => (c.name || '').toLowerCase().includes('drogaria cidade'));
+    const company = byId || fallback;
+    const branches = (company?.areas || []).flatMap(area => Array.isArray(area.branches) ? area.branches : []);
+    const uniqueBranches = Array.from(new Set(branches.filter(Boolean)));
+    if (uniqueBranches.length) return uniqueBranches;
+    return sessionInfo?.filial ? [sessionInfo.filial] : [];
+  }, [companies, sessionInfo?.companyId, sessionInfo?.filial]);
+
   const handleUpdatePVSale = (saleId: string, classification: PVSaleClassification) => {
     setConfirmedPVSales(prev => ({ ...prev, [saleId]: classification }));
+  };
+
+  const handleUpdatePVRecord = async (id: string, updates: Partial<PVRecord>) => {
+    if (!id) return;
+
+    setPvRecords(prev => prev.map(rec => (rec.id === id ? { ...rec, ...updates } : rec)));
+
+    if (id.startsWith('db-')) return;
+
+    const payload: { quantity?: number; origin_branch?: string | null; sector_responsible?: string | null } = {};
+    if (updates.quantity !== undefined) payload.quantity = updates.quantity;
+    if (updates.originBranch !== undefined) payload.origin_branch = updates.originBranch ? updates.originBranch : null;
+    if (updates.sectorResponsible !== undefined) payload.sector_responsible = updates.sectorResponsible ? updates.sectorResponsible : null;
+
+    if (Object.keys(payload).length === 0) return;
+
+    const ok = await updatePVBranchRecordDetails(id, payload);
+    if (!ok) {
+      console.error('Falha ao atualizar PV no banco:', { id, payload });
+    }
   };
 
   const handleFinalizeSale = async (reducedCode: string, period: string) => {
@@ -1147,7 +1184,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           {currentView === AppView.REGISTRATION && (
             <PVRegistration
               masterProducts={masterProducts} pvRecords={pvRecords} sessionInfo={sessionInfo}
+              originBranches={originBranches}
               onRefresh={handleRefresh}
+              onUpdatePV={handleUpdatePVRecord}
               onAddPV={async (rec) => {
                 // Save to Supabase (pv_branch_records)
                 if (sessionInfo && sessionInfo.companyId) {
@@ -1159,12 +1198,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                       product_name: rec.name,
                       dcb: rec.dcb,
                       quantity: rec.quantity,
+                      origin_branch: rec.originBranch || null,
+                      sector_responsible: rec.sectorResponsible || null,
                       expiry_date: rec.expiryDate,
                       entry_date: rec.entryDate,
                       user_email: userEmail || ''
                     });
                     if (saved && saved.id) {
-                      rec.id = saved.id;
+                      rec.id = String(saved.id);
                     } else {
                       alert("Aviso: O registro foi adicionado à lista mas NÃO foi confirmado no banco de dados. Ao sair, ele pode ser perdido. Tente novamente.");
                     }

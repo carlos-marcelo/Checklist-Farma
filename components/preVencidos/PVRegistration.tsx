@@ -8,6 +8,8 @@ interface PVRegistrationProps {
   masterProducts: Product[];
   pvRecords: PVRecord[];
   sessionInfo: SessionInfo | null;
+  originBranches?: string[];
+  onUpdatePV?: (id: string, updates: Partial<PVRecord>) => void;
   onAddPV: (record: PVRecord) => void;
   onRemovePV: (id: string) => void;
   onRefresh?: () => void;
@@ -17,6 +19,8 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   masterProducts,
   pvRecords,
   sessionInfo,
+  originBranches = [],
+  onUpdatePV,
   onAddPV,
   onRemovePV,
   onRefresh
@@ -24,9 +28,15 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   const [scanningProduct, setScanningProduct] = useState<Product | null>(null);
   const [searchMethod, setSearchMethod] = useState<'C' | 'K' | null>(null);
   const [quantity, setQuantity] = useState<number>(1);
+  const [originBranch, setOriginBranch] = useState<string>('');
+  const [sectorResponsible, setSectorResponsible] = useState<string>('');
   const [expiryDate, setExpiryDate] = useState<string>('');
+  const [drafts, setDrafts] = useState<Record<string, { quantity?: string; sectorResponsible?: string }>>({});
+  const updateTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const qtyInputRef = useRef<HTMLInputElement>(null);
+  const originInputRef = useRef<HTMLSelectElement>(null);
+  const sectorInputRef = useRef<HTMLInputElement>(null);
   const expiryInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -35,6 +45,32 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       qtyInputRef.current?.select();
     }
   }, [scanningProduct]);
+
+  useEffect(() => {
+    return () => {
+      Object.values(updateTimers.current).forEach(timer => clearTimeout(timer));
+    };
+  }, []);
+
+  useEffect(() => {
+    setDrafts(prev => {
+      const ids = new Set(pvRecords.map(r => r.id));
+      const next: Record<string, { quantity?: string; sectorResponsible?: string }> = {};
+      Object.entries(prev).forEach(([id, data]) => {
+        if (ids.has(id)) next[id] = data;
+      });
+      return next;
+    });
+  }, [pvRecords]);
+
+  useEffect(() => {
+    if (!scanningProduct || originBranch) return;
+    if (sessionInfo?.filial) {
+      setOriginBranch(sessionInfo.filial);
+    } else if (originBranches.length > 0) {
+      setOriginBranch(originBranches[0]);
+    }
+  }, [scanningProduct, originBranch, sessionInfo?.filial, originBranches]);
 
   const handleScan = (code: string) => {
     const foundByBarcode = masterProducts.find(p => p.barcode === code);
@@ -61,7 +97,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   };
 
   const handleConfirm = () => {
-    if (scanningProduct && quantity > 0 && expiryDate.length === 5) {
+    if (scanningProduct && quantity > 0 && expiryDate.length === 5 && originBranch && sectorResponsible.trim()) {
       const [m, a] = expiryDate.split('/');
       const month = parseInt(m);
       if (month < 1 || month > 12) {
@@ -74,6 +110,8 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
         reducedCode: scanningProduct.reducedCode,
         name: scanningProduct.name,
         quantity,
+        originBranch,
+        sectorResponsible: sectorResponsible.trim(),
         expiryDate,
         entryDate: new Date().toISOString(),
         dcb: scanningProduct.dcb
@@ -82,8 +120,9 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       setSearchMethod(null);
       setExpiryDate('');
       setQuantity(1);
+      setSectorResponsible('');
     } else if (scanningProduct) {
-      alert('Preencha a quantidade e o vencimento (MM/AA).');
+      alert('Preencha a quantidade, origem, responsável e vencimento (MM/AA).');
     }
   };
 
@@ -94,6 +133,77 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   const similarProducts = scanningProduct
     ? masterProducts.filter(p => p.dcb === scanningProduct.dcb && p.reducedCode !== scanningProduct.reducedCode).slice(0, 10)
     : [];
+
+  const originOptions = Array.from(new Set(
+    (originBranches.length > 0 ? originBranches : (sessionInfo?.filial ? [sessionInfo.filial] : []))
+      .filter(Boolean)
+  ));
+
+  const setDraftField = (id: string, field: 'quantity' | 'sectorResponsible', value: string) => {
+    setDrafts(prev => ({
+      ...prev,
+      [id]: { ...prev[id], [field]: value }
+    }));
+  };
+
+  const clearDraftField = (id: string, field: 'quantity' | 'sectorResponsible') => {
+    setDrafts(prev => {
+      const current = { ...(prev[id] || {}) };
+      delete current[field];
+      if (Object.keys(current).length === 0) {
+        const { [id]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [id]: current };
+    });
+  };
+
+  const clearUpdateTimer = (key: string) => {
+    const timer = updateTimers.current[key];
+    if (timer) {
+      clearTimeout(timer);
+      delete updateTimers.current[key];
+    }
+  };
+
+  const scheduleUpdate = (key: string, fn: () => void) => {
+    clearUpdateTimer(key);
+    updateTimers.current[key] = setTimeout(() => {
+      fn();
+      clearUpdateTimer(key);
+    }, 400);
+  };
+
+  const commitQuantity = (id: string, raw: string, currentValue: number) => {
+    if (!onUpdatePV) return;
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      clearDraftField(id, 'quantity');
+      return;
+    }
+    const parsed = Number.parseInt(trimmed, 10);
+    if (Number.isNaN(parsed) || parsed <= 0) {
+      clearDraftField(id, 'quantity');
+      return;
+    }
+    if (parsed === currentValue) {
+      clearDraftField(id, 'quantity');
+      return;
+    }
+    onUpdatePV(id, { quantity: parsed });
+    clearDraftField(id, 'quantity');
+  };
+
+  const commitSector = (id: string, raw: string, currentValue?: string) => {
+    if (!onUpdatePV) return;
+    const next = raw.trim();
+    if ((currentValue || '') === next) {
+      clearDraftField(id, 'sectorResponsible');
+      return;
+    }
+    onUpdatePV(id, { sectorResponsible: next });
+    clearDraftField(id, 'sectorResponsible');
+  };
 
   const [filterText, setFilterText] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
@@ -119,7 +229,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     doc.text('Legenda: Vermelho = Vencido, Vinho = < 30 dias', 14, 35);
     doc.setTextColor(0, 0, 0);
 
-    const tableColumn = ['Reduzido', 'Descrição', 'Qtd', 'Vencimento', 'Status', 'Dias', 'Resp.', 'Cadastro'];
+    const tableColumn = ['Reduzido', 'Descrição', 'Origem', 'Resp. Setor', 'Qtd', 'Vencimento', 'Status', 'Dias', 'Resp.', 'Cadastro'];
     const tableRows: any[] = [];
 
     filteredRecords.forEach(rec => {
@@ -127,6 +237,8 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       tableRows.push([
         rec.reducedCode,
         rec.name,
+        rec.originBranch || '-',
+        rec.sectorResponsible || '-',
         rec.quantity,
         rec.expiryDate,
         status.label,
@@ -143,7 +255,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       theme: 'grid',
       styles: { fontSize: 8 },
       didParseCell: (data: any) => {
-        if (data.section === 'body' && data.column.index === 4) {
+        if (data.section === 'body' && data.column.index === 6) {
           const statusLabel = data.cell.raw;
           if (statusLabel === 'VENCIDO') data.cell.styles.textColor = [220, 38, 38]; // Red
           if (statusLabel === 'CRÍTICO') data.cell.styles.textColor = [159, 18, 57]; // Rose/Wine
@@ -196,7 +308,11 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
 
   const filteredRecords = pvRecords.filter(rec => {
     const search = filterText.toLowerCase();
-    const matchText = rec.name.toLowerCase().includes(search) || rec.reducedCode.includes(search) || rec.dcb.toLowerCase().includes(search);
+    const matchText = rec.name.toLowerCase().includes(search)
+      || rec.reducedCode.includes(search)
+      || rec.dcb.toLowerCase().includes(search)
+      || (rec.originBranch || '').toLowerCase().includes(search)
+      || (rec.sectorResponsible || '').toLowerCase().includes(search);
     const matchMonth = filterMonth ? rec.expiryDate.includes(filterMonth) : true;
 
     let matchStatus = true;
@@ -223,15 +339,15 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       const v1 = a[sortConfig.key];
       const v2 = b[sortConfig.key];
 
-      if (typeof v1 === 'string' && typeof v2 === 'string') {
-        return sortConfig.direction === 'asc'
-          ? v1.localeCompare(v2)
-          : v2.localeCompare(v1);
-      }
-
       if (typeof v1 === 'number' && typeof v2 === 'number') {
         return sortConfig.direction === 'asc' ? v1 - v2 : v2 - v1;
       }
+
+      const s1 = String(v1 ?? '');
+      const s2 = String(v2 ?? '');
+      return sortConfig.direction === 'asc'
+        ? s1.localeCompare(s2)
+        : s2.localeCompare(s1);
       return 0;
     });
   }
@@ -311,7 +427,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                   <div className="space-y-2">
                     <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Quantidade</label>
                     <div className="relative">
@@ -322,8 +438,57 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                         value={quantity}
                         min="1"
                         onChange={(e) => setQuantity(Number(e.target.value))}
-                        onKeyDown={(e) => e.key === 'Enter' && expiryInputRef.current?.focus()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            originInputRef.current?.focus();
+                          }
+                        }}
                         className="w-full pl-12 pr-4 py-4 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 outline-none text-xl font-bold text-slate-700 transition-all bg-slate-50 focus:bg-white"
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Origem do Vencido</label>
+                    <div className="relative">
+                      <Building className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-500" size={20} />
+                      <select
+                        ref={originInputRef}
+                        value={originBranch}
+                        onChange={(e) => setOriginBranch(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            sectorInputRef.current?.focus();
+                          }
+                        }}
+                        disabled={originOptions.length === 0}
+                        className="w-full pl-12 pr-4 py-4 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 outline-none text-sm font-bold text-slate-700 transition-all bg-slate-50 focus:bg-white custom-select"
+                      >
+                        <option value="">{originOptions.length === 0 ? 'Sem filiais cadastradas' : 'Selecione a filial...'}</option>
+                        {originOptions.map(branch => (
+                          <option key={branch} value={branch}>{branch}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Responsável Setor</label>
+                    <div className="relative">
+                      <User className="absolute left-4 top-1/2 -translate-y-1/2 text-blue-500" size={20} />
+                      <input
+                        ref={sectorInputRef}
+                        type="text"
+                        value={sectorResponsible}
+                        onChange={(e) => setSectorResponsible(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            expiryInputRef.current?.focus();
+                          }
+                        }}
+                        placeholder="Digite o responsável..."
+                        className="w-full pl-12 pr-4 py-4 rounded-2xl border-2 border-slate-100 focus:border-blue-500 focus:ring-0 outline-none text-sm font-bold text-slate-700 transition-all bg-slate-50 focus:bg-white"
                       />
                     </div>
                   </div>
@@ -435,6 +600,16 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                         Descrição (D) {getSortIcon('name')}
                       </div>
                     </th>
+                    <th className="px-6 py-4 text-left w-40 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('originBranch')}>
+                      <div className="flex items-center">
+                        Origem {getSortIcon('originBranch')}
+                      </div>
+                    </th>
+                    <th className="px-6 py-4 text-left w-40 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('sectorResponsible')}>
+                      <div className="flex items-center">
+                        Responsável {getSortIcon('sectorResponsible')}
+                      </div>
+                    </th>
                     <th className="px-6 py-4 text-center w-20 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('quantity')}>
                       <div className="flex items-center justify-center">
                         Qtd {getSortIcon('quantity')}
@@ -470,7 +645,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                 <tbody className="divide-y divide-slate-100">
                   {filteredRecords.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-6 py-20 text-center text-slate-400 italic">
+                      <td colSpan={8} className="px-6 py-20 text-center text-slate-400 italic">
                         <div className="flex flex-col items-center gap-3">
                           <Search size={40} className="text-slate-200" />
                           <p className="text-sm">Nenhum item encontrado.</p>
@@ -490,8 +665,62 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                               <FlaskConical size={10} className="shrink-0 text-blue-400" /> <span className="truncate max-w-[200px]">{rec.dcb}</span>
                             </div>
                           </td>
+                          <td className="px-6 py-4">
+                            <select
+                              value={rec.originBranch || ''}
+                              onChange={(e) => onUpdatePV?.(rec.id, { originBranch: e.target.value })}
+                              className="w-full min-w-[140px] bg-white/80 text-slate-700 px-2 py-1.5 rounded-lg font-bold text-xs border border-slate-200 shadow-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none custom-select"
+                            >
+                              <option value="">-</option>
+                              {(rec.originBranch && !originOptions.includes(rec.originBranch) ? [rec.originBranch, ...originOptions] : originOptions).map(branch => (
+                                <option key={branch} value={branch}>{branch}</option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className="px-6 py-4">
+                            <input
+                              type="text"
+                              value={drafts[rec.id]?.sectorResponsible ?? (rec.sectorResponsible || '')}
+                              onChange={(e) => setDraftField(rec.id, 'sectorResponsible', e.target.value)}
+                              onBlur={(e) => {
+                                clearUpdateTimer(`${rec.id}-sector`);
+                                commitSector(rec.id, e.target.value, rec.sectorResponsible);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  (e.currentTarget as HTMLInputElement).blur();
+                                }
+                              }}
+                              onInput={(e) => {
+                                const value = (e.currentTarget as HTMLInputElement).value;
+                                scheduleUpdate(`${rec.id}-sector`, () => commitSector(rec.id, value, rec.sectorResponsible));
+                              }}
+                              placeholder="-"
+                              className="w-full min-w-[140px] bg-white/80 text-slate-700 px-2 py-1.5 rounded-lg font-bold text-xs border border-slate-200 shadow-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
+                            />
+                          </td>
                           <td className="px-6 py-4 text-center">
-                            <span className="bg-white/80 text-slate-800 px-3 py-1 rounded-lg font-bold text-sm border border-slate-200 shadow-sm">{rec.quantity}</span>
+                            <input
+                              type="number"
+                              min="1"
+                              step="1"
+                              value={drafts[rec.id]?.quantity ?? String(rec.quantity)}
+                              onChange={(e) => setDraftField(rec.id, 'quantity', e.target.value)}
+                              onBlur={(e) => {
+                                clearUpdateTimer(`${rec.id}-qty`);
+                                commitQuantity(rec.id, e.target.value, rec.quantity);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  (e.currentTarget as HTMLInputElement).blur();
+                                }
+                              }}
+                              onInput={(e) => {
+                                const value = (e.currentTarget as HTMLInputElement).value;
+                                scheduleUpdate(`${rec.id}-qty`, () => commitQuantity(rec.id, value, rec.quantity));
+                              }}
+                              className="w-16 text-center bg-white/80 text-slate-800 px-2 py-1 rounded-lg font-bold text-sm border border-slate-200 shadow-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
+                            />
                           </td>
                           <td className="px-6 py-4 text-center border-l border-slate-100/50">
                             <div className="text-sm font-black text-slate-700">{rec.expiryDate}</div>

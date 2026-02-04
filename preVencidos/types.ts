@@ -11,6 +11,8 @@ export interface PVRecord {
   reducedCode: string;
   name: string;
   quantity: number;
+  originBranch?: string;
+  sectorResponsible?: string;
   expiryDate: string;
   entryDate: string;
   dcb: string;

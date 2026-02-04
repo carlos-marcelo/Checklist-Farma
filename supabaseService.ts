@@ -830,6 +830,8 @@ export interface DbPVBranchRecord {
   product_name: string;
   dcb: string;
   quantity: number;
+  origin_branch?: string | null;
+  sector_responsible?: string | null;
   expiry_date: string;
   entry_date: string;
   user_email: string;
@@ -871,6 +873,8 @@ export async function insertPVBranchRecord(record: DbPVBranchRecord): Promise<Db
         product_name: record.product_name,
         dcb: record.dcb,
         quantity: record.quantity,
+        origin_branch: record.origin_branch ?? null,
+        sector_responsible: record.sector_responsible ?? null,
         expiry_date: record.expiry_date,
         entry_date: record.entry_date,
         user_email: record.user_email
@@ -945,6 +949,35 @@ export async function fetchPVSalesHistory(companyId: string, branch: string): Pr
   } catch (error) {
     console.error('Error fetching PV sales history:', error);
     return [];
+  }
+}
+
+export async function updatePVBranchRecordDetails(
+  id: string,
+  updates: {
+    quantity?: number;
+    origin_branch?: string | null;
+    sector_responsible?: string | null;
+  }
+): Promise<boolean> {
+  try {
+    const payload: Record<string, any> = {};
+    if (typeof updates.quantity === 'number') payload.quantity = updates.quantity;
+    if (updates.origin_branch !== undefined) payload.origin_branch = updates.origin_branch;
+    if (updates.sector_responsible !== undefined) payload.sector_responsible = updates.sector_responsible;
+
+    if (Object.keys(payload).length === 0) return true;
+
+    const { error } = await supabase
+      .from('pv_branch_records')
+      .update(payload)
+      .eq('id', id);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error updating PV branch record details:', error);
+    return false;
   }
 }
 
