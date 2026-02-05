@@ -11,7 +11,8 @@ import PVRegistration from './PVRegistration';
 import AnalysisView from './AnalysisView';
 import SetupView from './SetupView';
 import { NAV_ITEMS } from '../../preVencidos/constants';
-import { Package, AlertTriangle, LogOut, Settings, Trophy, TrendingUp, MinusCircle, CheckCircle, Calendar, Info, Trash2, X } from 'lucide-react';
+import { Package, AlertTriangle, LogOut, Settings, Trophy, TrendingUp, MinusCircle, CheckCircle, Calendar, Info, Trash2, X, Clock } from 'lucide-react';
+import SalesHistoryModal from './SalesHistoryModal';
 import {
   DbCompany,
   DbPVSession,
@@ -31,7 +32,9 @@ import {
   DbPVSalesHistory,
   fetchPVReports,
   upsertPVReport,
-  deletePVReports
+  deletePVReports,
+  fetchActiveSalesReport,
+  upsertActiveSalesReport
 } from '../../supabaseService';
 import {
   loadLocalPVSession,
@@ -75,6 +78,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [historyDetail, setHistoryDetail] = useState<{ type: 'seller' | 'recovered' | 'ignored'; seller?: string } | null>(null);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
+  const [showHistoryModal, setShowHistoryModal] = useState(false);
 
   useEffect(() => {
     if (!userEmail) return;
@@ -97,6 +101,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const saved = loadLastSalesUpload(userEmail);
     setLocalLastUpload(saved);
   }, [userEmail]);
+
+  useEffect(() => {
+    if (sessionInfo?.companyId && sessionInfo?.filial) {
+      fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial)
+        .then(uploads => setSalesUploads(uploads))
+        .catch(err => console.error('Erro carregando histórico de uploads de vendas:', err));
+    }
+  }, [sessionInfo?.companyId, sessionInfo?.filial]);
 
   const canSwitchToView = (view: AppView) => view === AppView.SETUP || hasCompletedSetup;
 
@@ -141,7 +153,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       setFinalizedREDSByPeriod({});
       setSalesPeriod('');
       setHistoryRecords([]);
-    setPvSessionId(null);
+      setPvSessionId(null);
       setSalesUploads([]);
 
       clearLocalPVSession(userEmail || '');
@@ -421,17 +433,17 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
               .filter(rec => !existingIds.has(rec.id || ''))
               .map(rec => ({
                 id: String(rec.id || `db-${rec.reduced_code}-${Date.now()}`),
-                  reducedCode: rec.reduced_code,
-                  name: rec.product_name,
-                  quantity: rec.quantity,
-                  originBranch: rec.origin_branch || '',
-                  sectorResponsible: rec.sector_responsible || '',
-                  expiryDate: rec.expiry_date,
-                  entryDate: rec.entry_date,
-                  dcb: rec.dcb,
-                  userEmail: rec.user_email,
-                  userName: ''
-                }));
+                reducedCode: rec.reduced_code,
+                name: rec.product_name,
+                quantity: rec.quantity,
+                originBranch: rec.origin_branch || '',
+                sectorResponsible: rec.sector_responsible || '',
+                expiryDate: rec.expiry_date,
+                entryDate: rec.entry_date,
+                dcb: rec.dcb,
+                userEmail: rec.user_email,
+                userName: ''
+              }));
             // Replace entirely on refresh to ensure sync, or merge? 
             // Better to merge carefully or just set if we trust DB is source of truth.
             // For persistence debugging, let's prioritize DB records + current session additions that might not be there yet?
@@ -489,8 +501,35 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           if (history) setHistoryRecords(history);
         })
         .catch(err => console.error('Erro carregando histórico de vendas:', err));
+
+      // 3. Fetch Active Sales Report (Persistence)
+      fetchActiveSalesReport(sessionInfo.companyId, sessionInfo.filial)
+        .then(report => {
+          if (report && report.sales_records && report.sales_records.length > 0) {
+            console.log('✅ [PV Persistence] Relatório ativo restaurado:', report.sales_period);
+            setSalesRecords(report.sales_records);
+            setSalesPeriod(report.sales_period || '');
+            if (report.confirmed_sales) {
+              setConfirmedPVSales(report.confirmed_sales);
+            }
+            // Restore upload metadata for display
+            if (report.sales_period || report.uploaded_at) {
+              setLocalLastUpload({
+                period_label: report.sales_period,
+                file_name: report.file_name || 'Relatório Ativo',
+                uploaded_at: report.uploaded_at || new Date().toISOString(),
+                user_email: report.user_email || '',
+                company_id: report.company_id,
+                branch: report.branch,
+                period_start: null,
+                period_end: null
+              });
+            }
+          }
+        })
+        .catch(err => console.error('Erro carregando relatório de vendas ativo:', err));
     }
-    }, [sessionInfo?.companyId, sessionInfo?.filial]);
+  }, [sessionInfo?.companyId, sessionInfo?.filial]);
 
   useEffect(() => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) {
@@ -528,7 +567,23 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   }, [companies, sessionInfo?.companyId, sessionInfo?.filial]);
 
   const handleUpdatePVSale = (saleId: string, classification: PVSaleClassification) => {
-    setConfirmedPVSales(prev => ({ ...prev, [saleId]: classification }));
+    setConfirmedPVSales(prev => {
+      const newState = { ...prev, [saleId]: classification };
+
+      // Persist immediate change
+      if (sessionInfo?.companyId && sessionInfo?.filial) {
+        upsertActiveSalesReport({
+          company_id: sessionInfo.companyId,
+          branch: sessionInfo.filial,
+          sales_records: salesRecords,
+          sales_period: salesPeriod,
+          confirmed_sales: newState,
+          user_email: userEmail
+        }).catch(err => console.error('Erro ao salvar classificação:', err));
+      }
+
+      return newState;
+    });
   };
 
   const handleUpdatePVRecord = async (id: string, updates: Partial<PVRecord>) => {
@@ -626,6 +681,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       const success = await insertPVSalesHistory(historyEntries);
       if (success) {
         setHistoryRecords(prev => [...prev, ...historyEntries]);
+
+        // Ensure active report is refreshed with any state changes if needed? 
+        // Actually, finalized state is stored in finalizedREDSByPeriod? 
+        // If we need that persisted, we should add it to the table too.
+        // For now, let's assume classification (dots) is the main "launched" visual.
       } else {
         alert("Atenção: Houve um erro ao salvar o histórico de vendas no banco. O dashboard pode não atualizar corretamente.");
       }
@@ -656,7 +716,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       if (match[3].length <= 2) {
         year += 2000;
       }
-      return new Date(year, month, day);
+      // Set to NOON (12:00:00) to avoid Timezone/Midnight issues
+      return new Date(year, month, day, 12, 0, 0);
     };
     const start = matches.length > 0 ? toDate(matches[0]) : null;
     const end = matches.length > 1 ? toDate(matches[1]) : start;
@@ -665,12 +726,23 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
   const rangesOverlap = (a: PeriodRange, b: PeriodRange) => {
     if (!a.start || !a.end || !b.start || !b.end) return false;
-    return a.start <= b.end && b.start <= a.end;
+    // Compare times
+    return a.start.getTime() <= b.end.getTime() && b.start.getTime() <= a.end.getTime();
+  };
+
+  const parseDBDate = (dateStr?: string | null) => {
+    if (!dateStr) return null;
+    // Accessing YYYY-MM-DD safely
+    // If it's a full ISO string (with T), split by T first
+    const cleanDate = dateStr.split('T')[0];
+    const [y, m, d] = cleanDate.split('-').map(Number);
+    // Set to NOON (12:00:00) to match parsePeriodRange
+    return new Date(y, m - 1, d, 12, 0, 0);
   };
 
   const buildRecordRange = (record?: SalesUploadRecord): PeriodRange => ({
-    start: record?.period_start ? new Date(record.period_start) : null,
-    end: record?.period_end ? new Date(record.period_end) : null
+    start: parseDBDate(record?.period_start),
+    end: parseDBDate(record?.period_end)
   });
 
   const matchesContext = (record?: SalesUploadRecord) => {
@@ -681,20 +753,28 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const evaluateConflict = (record?: SalesUploadRecord, label?: string, currentRange?: PeriodRange) => {
     if (!record || !label) return undefined;
     if (!matchesContext(record)) return undefined;
+
+    // 1. Exact Label Match
     if (record.period_label === label) return record;
+
+    // 2. Date Range Overlap
     const existingRange = buildRecordRange(record);
-    if (currentRange && currentRange.start && currentRange.end && existingRange.start && existingRange.end && rangesOverlap(currentRange, existingRange)) {
-      return record;
+    if (currentRange && currentRange.start && currentRange.end && existingRange.start && existingRange.end) {
+      if (rangesOverlap(currentRange, existingRange)) {
+        return record;
+      }
     }
     return undefined;
   };
 
   const findConflictingUpload = (range: PeriodRange, label: string) => {
+    // Check history (DB)
     for (const report of salesUploads) {
       const conflict = evaluateConflict(report, label, range);
       if (conflict) return conflict;
     }
 
+    // Check active local report (if not in history list yet)
     if (localLastUpload) {
       const conflict = evaluateConflict(localLastUpload, label, range);
       if (conflict) return conflict;
@@ -765,7 +845,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     }
   };
 
-  const processAndSetSales = (sales: SalesRecord[], period: string) => {
+  const processAndSetSales = (sales: SalesRecord[], period: string, fileName?: string) => {
     const cleanedPeriod = (period || '').trim() || 'Período não identificado';
     const enrichedSales = sales.map(s => {
       const product = masterProducts.find(p => p.reducedCode === s.reducedCode);
@@ -779,20 +859,66 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     setSalesRecords(enrichedSales);
     setSalesPeriod(cleanedPeriod);
     setCurrentView(AppView.ANALYSIS);
+
+    // Update localLastUpload immediately for UI feedback
+    if (sessionInfo?.companyId && sessionInfo?.filial) {
+      setLocalLastUpload({
+        period_label: cleanedPeriod,
+        file_name: fileName || 'Upload Manual',
+        uploaded_at: new Date().toISOString(),
+        user_email: userEmail || '',
+        company_id: sessionInfo.companyId,
+        branch: sessionInfo.filial,
+        period_start: null,
+        period_end: null
+      });
+    }
+
+    // Persist to DB
+    if (sessionInfo?.companyId && sessionInfo?.filial) {
+      upsertActiveSalesReport({
+        company_id: sessionInfo.companyId,
+        branch: sessionInfo.filial,
+        sales_records: enrichedSales,
+        sales_period: cleanedPeriod,
+        confirmed_sales: {}, // Reset confirmed sales on new report? Or keep? Usually new report = new analysis.
+        user_email: userEmail,
+        file_name: fileName
+      }).then(ok => {
+        if (ok) console.log('✅ [PV Persistence] Relatório de vendas salvo no banco.');
+      });
+    }
   };
 
   const handleParsedSales = async (sales: SalesRecord[], rawPeriodLabel: string | undefined, fileName: string) => {
     const normalizedLabel = (rawPeriodLabel || '').trim() || 'Período não identificado';
     const parsedRange = parsePeriodRange(normalizedLabel);
     const conflict = findConflictingUpload(parsedRange, normalizedLabel);
-    if (conflict) {
-      const friendlyTimestamp = formatUploadTimestamp(conflict.uploaded_at);
-      const fileHint = conflict.file_name ? `Arquivo: ${conflict.file_name}. ` : '';
-      const message = `O período "${normalizedLabel}" já foi carregado anteriormente (${fileHint}registrado em ${friendlyTimestamp}). Deseja continuar mesmo assim?`;
-      if (!confirm(message)) return;
+
+    // Check against currently loaded/active report (Already handled by findConflictingUpload if localLastUpload is checked there, but keeping strict label check for clarity)
+    if (localLastUpload && localLastUpload.period_label === normalizedLabel) {
+      alert(`Já existe um relatório ativo para este período: "${normalizedLabel}".\n\nArquivo atual: ${fileName}\nArquivo ativo: ${localLastUpload.file_name}\n\nNão é permitido carregar novamente o mesmo período de venda.`);
+      return;
     }
 
-    processAndSetSales(sales, normalizedLabel);
+    if (conflict) {
+      const friendlyTimestamp = formatUploadTimestamp(conflict.uploaded_at);
+      const fileHint = conflict.file_name ? `Arquivo original: ${conflict.file_name}` : 'Arquivo anterior';
+      const type = conflict.period_label === normalizedLabel ? 'PERÍODO DUPLICADO' : 'CHOQUE DE DATAS';
+
+      alert(
+        `⛔ BLOQUEADO: ${type}\n\n` +
+        `O período que você está tentando carregar (${normalizedLabel}) entra em conflito com um relatório já processado.\n\n` +
+        `Detalhes do conflito:\n` +
+        `Relatório Existente: ${conflict.period_label}\n` +
+        `${fileHint}\n` +
+        `Carregado em: ${friendlyTimestamp}\n\n` +
+        `Para manter a integridade do histórico, não é permitido carregar períodos sobrepostos.`
+      );
+      return;
+    }
+
+    processAndSetSales(sales, normalizedLabel, fileName);
     await persistSalesUploadRecord(normalizedLabel, parsedRange, fileName);
   };
 
@@ -1158,6 +1284,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             </div>
             <input type="file" className="hidden" accept=".xlsx,.xls,.csv,.txt" onChange={handleSalesUpload} />
           </label>
+
+          <button
+            onClick={() => setShowHistoryModal(true)}
+            className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-800 text-slate-400 transition-colors text-left"
+          >
+            <Clock size={20} />
+            <span className="text-sm font-medium">Histórico de Uploads</span>
+          </button>
         </div>
       </aside>
 
@@ -1207,6 +1341,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
               systemLoaded={systemProducts.length > 0}
               dcbLoaded={dcbBaseProducts.length > 0}
               companies={companies}
+              uploadHistory={salesUploads}
             />
           )}
           {currentView === AppView.REGISTRATION && (
@@ -1259,23 +1394,23 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           )}
           {currentView === AppView.ANALYSIS && (
             <div className="space-y-4">
-          {salesPeriod && (
-            <div className="bg-blue-600 text-white p-4 rounded-2xl shadow-lg flex flex-col gap-3">
-              <div className="flex items-center gap-3">
-                <Calendar size={20} />
-                <span className="text-sm font-black uppercase tracking-widest">Período de Vendas Reconhecido: {salesPeriod}</span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold bg-white/20 px-3 py-1 rounded-full uppercase">Excel Linha 5 / Coluna I</span>
-                {localLastUpload && localLastUpload.company_id === sessionInfo?.companyId && localLastUpload.branch === sessionInfo?.filial && (
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-white/80">
-                    Último carregamento: {formatUploadTimestamp(localLastUpload.uploaded_at)} · {localLastUpload.file_name || 'arquivo sem nome'}
-                    <span className="ml-2 text-white/60">Período: {localLastUpload.period_label || 'sem período'}</span>
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
+              {salesPeriod && (
+                <div className="bg-blue-600 text-white p-4 rounded-2xl shadow-lg flex flex-col gap-3">
+                  <div className="flex items-center gap-3">
+                    <Calendar size={20} />
+                    <span className="text-sm font-black uppercase tracking-widest">Período de Vendas Reconhecido: {salesPeriod}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-bold bg-white/20 px-3 py-1 rounded-full uppercase">Excel Linha 5 / Coluna I</span>
+                    {localLastUpload && localLastUpload.company_id === sessionInfo?.companyId && localLastUpload.branch === sessionInfo?.filial && (
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-white/80">
+                        Último carregamento: {formatUploadTimestamp(localLastUpload.uploaded_at)} · {localLastUpload.file_name || 'arquivo sem nome'}
+                        <span className="ml-2 text-white/60">Período: {localLastUpload.period_label || 'sem período'}</span>
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
               <AnalysisView
                 pvRecords={pvRecords} salesRecords={salesRecords} confirmedPVSales={confirmedPVSales}
                 finalizedREDSByPeriod={finalizedREDSByPeriod}
@@ -1483,6 +1618,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           )}
         </div>
       </main>
+
+      <SalesHistoryModal
+        isOpen={showHistoryModal}
+        onClose={() => setShowHistoryModal(false)}
+        history={salesUploads}
+      />
     </div>
   );
 };

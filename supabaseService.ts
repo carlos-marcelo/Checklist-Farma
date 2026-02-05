@@ -790,6 +790,62 @@ export async function fetchPVSession(userEmail: string): Promise<DbPVSession | n
   }
 }
 
+export interface DbActiveSalesReport {
+  id?: string;
+  company_id: string;
+  branch: string;
+  sales_records: SalesRecord[];
+  sales_period: string;
+  confirmed_sales?: Record<string, PVSaleClassification>;
+  uploaded_at?: string;
+  updated_at?: string;
+  user_email?: string;
+  file_name?: string;
+}
+
+export async function fetchActiveSalesReport(companyId: string, branch: string): Promise<DbActiveSalesReport | null> {
+  try {
+    const { data, error } = await supabase
+      .from('pv_active_sales_reports')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('branch', branch)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return null; // Not found
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    console.error('Error fetching active sales report:', error);
+    return null;
+  }
+}
+
+export async function upsertActiveSalesReport(report: DbActiveSalesReport): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('pv_active_sales_reports')
+      .upsert({
+        company_id: report.company_id,
+        branch: report.branch,
+        sales_records: report.sales_records,
+        sales_period: report.sales_period,
+        confirmed_sales: report.confirmed_sales,
+        user_email: report.user_email,
+        file_name: report.file_name,
+        updated_at: new Date().toISOString()
+      }, { onConflict: 'company_id,branch' });
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error upserting active sales report:', error);
+    return false;
+  }
+}
+
 export async function upsertPVSession(session: DbPVSession): Promise<DbPVSession | null> {
   try {
     const payload: any = {

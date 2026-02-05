@@ -63,7 +63,10 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         id: `${currentSalesPeriod}-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
       }));
 
-      const similarSales = salesRecords.filter(s => s.dcb === pv.dcb && s.reducedCode !== pv.reducedCode);
+      const isValidDCB = (dcb?: string) => dcb && dcb.trim() !== '' && dcb.toUpperCase() !== 'N/A';
+      const similarSales = isValidDCB(pv.dcb)
+        ? salesRecords.filter(s => s.dcb === pv.dcb && s.reducedCode !== pv.reducedCode)
+        : [];
       const similarSoldQty = similarSales.reduce((acc, s) => acc + s.quantity, 0);
 
       const similarSalesDetails = similarSales.map((s, idx) => ({

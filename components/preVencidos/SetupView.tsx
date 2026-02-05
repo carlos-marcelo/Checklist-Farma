@@ -2,6 +2,7 @@
 import { User, Shield, FileText, Check, FlaskConical, FileCode, ArrowRight, Settings, Info } from 'lucide-react';
 import React, { useMemo, useState } from 'react';
 import { SessionInfo } from '../../preVencidos/types';
+import { DbPVSalesUpload } from '../../supabaseService';
 
 interface SetupViewProps {
   onComplete: (info: SessionInfo) => void;
@@ -15,6 +16,7 @@ interface SetupViewProps {
     name: string;
     areas?: { name: string; branches: string[] }[];
   }[];
+  uploadHistory?: DbPVSalesUpload[];
 }
 
 const SetupView: React.FC<SetupViewProps> = ({
@@ -24,7 +26,8 @@ const SetupView: React.FC<SetupViewProps> = ({
   productsLoaded,
   systemLoaded,
   dcbLoaded,
-  companies
+  companies,
+  uploadHistory
 }) => {
   const [info, setInfo] = useState<SessionInfo>({
     company: '',
@@ -95,7 +98,7 @@ const SetupView: React.FC<SetupViewProps> = ({
             <RequirementItem label="Produtos Identificados" met={productsLoaded} />
           </div>
         </div>
-        
+
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
           <div className="space-y-6">
             <div className="space-y-2">
@@ -150,7 +153,7 @@ const SetupView: React.FC<SetupViewProps> = ({
           <h3 className="font-bold text-slate-800">1. Cadastro do Sistema</h3>
           <p className="text-xs text-slate-400 mt-2 mb-6">Arquivo XML ou Excel (Colunas C/D/K) com os produtos cadastrados.</p>
           <label className="px-6 py-3 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-600 hover:bg-slate-50 cursor-pointer transition-all shadow-sm">
-            {systemLoaded ? <span className="text-green-600 flex items-center gap-2"><Check size={16}/> Carregado</span> : 'Selecionar Cadastro'}
+            {systemLoaded ? <span className="text-green-600 flex items-center gap-2"><Check size={16} /> Carregado</span> : 'Selecionar Cadastro'}
             <input type="file" className="hidden" accept=".xml,.xlsx,.xls" onChange={(e) => e.target.files?.[0] && onSystemProductsUpload(e.target.files[0])} />
           </label>
         </div>
@@ -162,7 +165,7 @@ const SetupView: React.FC<SetupViewProps> = ({
           <h3 className="font-bold text-slate-800">2. Relatório DCB</h3>
           <p className="text-xs text-slate-400 mt-2 mb-6">Arquivo Excel agrupado por DCB (necessário para identificar similares).</p>
           <label className="px-6 py-3 bg-white border border-slate-200 rounded-xl text-sm font-bold text-slate-600 hover:bg-slate-50 cursor-pointer transition-all shadow-sm">
-            {dcbLoaded ? <span className="text-blue-600 flex items-center gap-2"><Check size={16}/> Carregado</span> : 'Selecionar DCB'}
+            {dcbLoaded ? <span className="text-blue-600 flex items-center gap-2"><Check size={16} /> Carregado</span> : 'Selecionar DCB'}
             <input type="file" className="hidden" accept=".xlsx,.xls" onChange={(e) => e.target.files?.[0] && onDCBBaseUpload(e.target.files[0])} />
           </label>
         </div>
@@ -170,10 +173,10 @@ const SetupView: React.FC<SetupViewProps> = ({
 
       {!systemLoaded || !dcbLoaded ? (
         <div className="bg-amber-50 p-6 rounded-2xl border border-amber-100 text-amber-700 flex flex-col items-center gap-2">
-           <div className="flex items-center gap-2 font-black uppercase text-xs tracking-widest">
-             <Info size={16} /> Requisito Pendente
-           </div>
-           <p className="text-sm">Carregue ambos os arquivos (Cadastro + DCB) para que o botão seja liberado.</p>
+          <div className="flex items-center gap-2 font-black uppercase text-xs tracking-widest">
+            <Info size={16} /> Requisito Pendente
+          </div>
+          <p className="text-sm">Carregue ambos os arquivos (Cadastro + DCB) para que o botão seja liberado.</p>
         </div>
       ) : (
         <div className="bg-green-600 p-4 rounded-2xl text-white text-center animate-in zoom-in duration-300">
@@ -187,13 +190,50 @@ const SetupView: React.FC<SetupViewProps> = ({
         <button
           disabled={!isFormValid}
           onClick={() => onComplete(info)}
-          className={`px-16 py-5 rounded-2xl font-bold text-xl shadow-xl transition-all ${
-            isFormValid ? 'bg-blue-600 text-white hover:bg-blue-700 hover:-translate-y-1' : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
-          }`}
+          className={`px-16 py-5 rounded-2xl font-bold text-xl shadow-xl transition-all ${isFormValid ? 'bg-blue-600 text-white hover:bg-blue-700 hover:-translate-y-1' : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+            }`}
         >
           INICIAR CONFERÊNCIA <ArrowRight className="inline-block ml-2" />
         </button>
       </div>
+
+      {uploadHistory && uploadHistory.length > 0 && (
+        <div className="mt-12 pt-8 border-t border-slate-200">
+          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-6 flex items-center gap-2">
+            <FileText size={16} /> Histórico de Uploads de Vendas (Filial)
+          </h3>
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs">
+                <tr>
+                  <th className="px-6 py-4">Data Upload</th>
+                  <th className="px-6 py-4">Período Venda</th>
+                  <th className="px-6 py-4">Arquivo</th>
+                  <th className="px-6 py-4">Responsável</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {uploadHistory.map((upload) => (
+                  <tr key={upload.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4 text-slate-600">
+                      {new Date(upload.uploaded_at || '').toLocaleString('pt-BR')}
+                    </td>
+                    <td className="px-6 py-4 font-medium text-slate-800">
+                      {upload.period_label}
+                    </td>
+                    <td className="px-6 py-4 text-slate-500 text-xs font-mono">
+                      {upload.file_name || '-'}
+                    </td>
+                    <td className="px-6 py-4 text-slate-500">
+                      {upload.user_email?.split('@')[0]}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
