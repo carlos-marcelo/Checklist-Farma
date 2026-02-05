@@ -46,7 +46,7 @@ const ScannerInput: React.FC<ScannerInputProps> = ({ onScan, placeholder }) => {
   return (
     <div className="relative w-full">
       <div className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400">
-        <ScanLine size={32} />
+        <ScanLine size={24} />
       </div>
       <input
         ref={inputRef}
@@ -55,9 +55,9 @@ const ScannerInput: React.FC<ScannerInputProps> = ({ onScan, placeholder }) => {
         onChange={(e) => setInputValue(e.target.value)}
         onKeyDown={handleKeyDown}
         placeholder={placeholder || "Bipar código de barras ou reduzido..."}
-        className="w-full pl-20 pr-6 py-10 bg-white border-2 border-slate-200 rounded-2xl text-2xl font-mono focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all placeholder:text-slate-300"
+        className="w-full pl-16 pr-6 py-6 bg-white border-2 border-slate-200 rounded-2xl text-xl font-mono focus:border-blue-500 focus:ring-4 focus:ring-blue-100 outline-none transition-all placeholder:text-slate-300"
       />
-      <div className="mt-4 text-center text-slate-400 text-sm">
+      <div className="mt-2 text-center text-slate-400 text-xs">
         Pressione Enter após digitar se não estiver usando scanner.
       </div>
     </div>
