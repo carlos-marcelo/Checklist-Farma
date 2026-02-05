@@ -18,12 +18,38 @@ const GROUP_CONFIG_DEFAULTS: Record<string, string> = {
   "10000": "Conveniência"
 };
 
+type TermScopeType = 'group' | 'department' | 'category';
+
+interface TermScope {
+  type: TermScopeType;
+  groupId: string;
+  deptId?: string;
+  catId?: string;
+}
+
+interface TermCollaborator {
+  name: string;
+  cpf: string;
+  signature: string;
+}
+
+interface TermForm {
+  inventoryNumber: string;
+  date: string;
+  managerName: string;
+  managerCpf: string;
+  collaborators: TermCollaborator[];
+}
+
 const App: React.FC = () => {
   const [data, setData] = useState<AuditData | null>(null);
   const [view, setView] = useState<ViewState>({ level: 'groups' });
   const [isProcessing, setIsProcessing] = useState(false);
   const [sessionStartTime, setSessionStartTime] = useState<number>(Date.now());
   const [initialDoneUnits, setInitialDoneUnits] = useState<number>(0);
+  const [termModal, setTermModal] = useState<TermScope | null>(null);
+  const [termForm, setTermForm] = useState<TermForm | null>(null);
+  const [termDrafts, setTermDrafts] = useState<Record<string, TermForm>>({});
   
   const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
   const [selectedFilial, setSelectedFilial] = useState("");
@@ -281,6 +307,190 @@ const App: React.FC = () => {
     };
   };
 
+  const buildTermKey = (scope: TermScope) => {
+    return [scope.type, scope.groupId, scope.deptId || '', scope.catId || ''].join('|');
+  };
+
+  const createDefaultTermForm = (): TermForm => ({
+    inventoryNumber: '',
+    date: new Date().toLocaleDateString('pt-BR'),
+    managerName: '',
+    managerCpf: '',
+    collaborators: Array.from({ length: 10 }, () => ({ name: '', cpf: '', signature: '' }))
+  });
+
+  const openTermModal = (scope: TermScope) => {
+    const key = buildTermKey(scope);
+    setTermModal(scope);
+    setTermForm(termDrafts[key] || createDefaultTermForm());
+  };
+
+  const updateTermForm = (updater: (prev: TermForm) => TermForm) => {
+    setTermForm(prev => {
+      if (!prev) return prev;
+      const next = updater(prev);
+      if (termModal) {
+        const key = buildTermKey(termModal);
+        setTermDrafts(current => ({ ...current, [key]: next }));
+      }
+      return next;
+    });
+  };
+
+  const buildTermScopeInfo = (scope: TermScope) => {
+    if (!data) return null;
+    const group = data.groups.find(g => g.id === scope.groupId);
+    if (!group) return null;
+
+    let dept: Department | undefined;
+    let cat: Category | undefined;
+    let departments: Department[] = [];
+    let categories: Category[] = [];
+    const products: { groupName: string; deptName: string; catName: string; code: string; name: string; quantity: number }[] = [];
+
+    if (scope.type === 'group') {
+      departments = group.departments;
+      categories = group.departments.flatMap(d => d.categories);
+      group.departments.forEach(d => {
+        d.categories.forEach(c => {
+          c.products.forEach(p => {
+            products.push({ groupName: group.name, deptName: d.name, catName: c.name, code: p.code, name: p.name, quantity: p.quantity });
+          });
+        });
+      });
+    } else if (scope.type === 'department') {
+      dept = group.departments.find(d => d.id === scope.deptId);
+      if (dept) {
+        departments = [dept];
+        categories = dept.categories;
+        dept.categories.forEach(c => {
+          c.products.forEach(p => {
+            products.push({ groupName: group.name, deptName: dept!.name, catName: c.name, code: p.code, name: p.name, quantity: p.quantity });
+          });
+        });
+      }
+    } else {
+      dept = group.departments.find(d => d.id === scope.deptId);
+      cat = dept?.categories.find(c => c.id === scope.catId);
+      if (dept && cat) {
+        departments = [dept];
+        categories = [cat];
+        cat.products.forEach(p => {
+          products.push({ groupName: group.name, deptName: dept!.name, catName: cat!.name, code: p.code, name: p.name, quantity: p.quantity });
+        });
+      }
+    }
+
+    return { group, dept, cat, departments, categories, products };
+  };
+
+  const formatTermDate = (val?: string) => {
+    if (!val) return new Date().toLocaleDateString('pt-BR');
+    return val;
+  };
+
+  const handlePrintTerm = () => {
+    if (!data || !termModal || !termForm) return;
+    const scopeInfo = buildTermScopeInfo(termModal);
+    if (!scopeInfo) return;
+    // @ts-ignore
+    const { jsPDF } = window.jspdf || {};
+    if (!jsPDF) {
+      alert('Biblioteca de PDF não carregada.');
+      return;
+    }
+
+    const doc = new jsPDF('p', 'mm', 'a4');
+    let y = 18;
+
+    doc.setFontSize(16);
+    doc.setTextColor(15, 23, 42);
+    doc.text('TERMO DE AUDITORIA', 14, y);
+    y += 8;
+
+    doc.setFontSize(10);
+    doc.setTextColor(60);
+    const inventoryLine = `Nº INVENTÁRIO: ${termForm.inventoryNumber || '__________'} - ${formatTermDate(termForm.date)}`;
+    doc.text(inventoryLine, 14, y);
+    y += 6;
+    doc.text(`Filial Auditada: Filial ${data.filial}`, 14, y);
+    y += 6;
+    doc.text(`Grupo: ${scopeInfo.group.name}`, 14, y);
+    y += 6;
+
+    const deptList = scopeInfo.departments.map(d => d.name).join(', ') || '-';
+    const catList = scopeInfo.categories.map(c => c.name).join(', ') || '-';
+
+    const deptLines = doc.splitTextToSize(`Departamentos: ${deptList}`, 180);
+    doc.text(deptLines, 14, y);
+    y += deptLines.length * 5;
+    const catLines = doc.splitTextToSize(`Categorias: ${catList}`, 180);
+    doc.text(catLines, 14, y);
+    y += catLines.length * 5 + 2;
+
+    const bodyText = [
+      'Declaro que fui orientado e treinado sobre as melhores práticas de auditoria e procedimentos internos com relação ao estoque físico da empresa.',
+      'Declaro também que participei ativamente do levantamento e contagem do estoque físico total desta filial conforme relatório de conferência anexo validado por mim.',
+      'Portanto, estou ciente de que as informações apontadas nos relatórios em anexo são verdadeiras, assim como sou responsável pela contagem do estoque mensal e pela conservação do patrimônio da empresa.',
+      'A inobservância dos procedimentos internos da empresa ou o apontamento de informações inverídicas no referido relatório ou termo, acarretará na aplicação das penalidades dispostas no Artigo 482, incisos, da Consolidação das Leis do Trabalho (CLT), ressalvadas, as demais sanções legais concomitantes.',
+      'Os horários e datas constantes nos relatórios em anexo, são informações de uso exclusivo do setor de auditoria.'
+    ].join(' ');
+
+    const bodyLines = doc.splitTextToSize(bodyText, 180);
+    doc.setTextColor(30);
+    doc.text(bodyLines, 14, y);
+    y += bodyLines.length * 5 + 2;
+
+    const signatureRows = [
+      [
+        termForm.managerName ? `Gestor: ${termForm.managerName}` : 'Gestor',
+        termForm.managerCpf || '',
+        '________________________'
+      ],
+      ...(termForm.collaborators.length ? termForm.collaborators : Array.from({ length: 10 }, () => ({ name: '', cpf: '', signature: '' }))).map(c => [
+        c.name || 'Colaborador',
+        c.cpf || '',
+        c.signature || '________________________'
+      ])
+    ];
+
+    // @ts-ignore
+    doc.autoTable({
+      startY: y,
+      head: [['Responsável', 'CPF', 'Ass.']],
+      body: signatureRows,
+      theme: 'grid',
+      styles: { fontSize: 9, cellPadding: 2 },
+      headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255] }
+    });
+
+    // @ts-ignore
+    const afterSignY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 6 : y + 20;
+
+    const productRows = scopeInfo.products.map(p => [
+      p.groupName,
+      p.deptName,
+      p.catName,
+      p.code,
+      p.name,
+      Math.round(p.quantity).toLocaleString()
+    ]);
+
+    // @ts-ignore
+    doc.autoTable({
+      startY: afterSignY,
+      head: [['Grupo', 'Departamento', 'Categoria', 'Código', 'Produto', 'Qtd']],
+      body: productRows,
+      theme: 'striped',
+      styles: { fontSize: 7, cellPadding: 1.5 },
+      headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] }
+    });
+
+    const safeName = scopeInfo.group.name.replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 30);
+    const fileName = `Termo_Auditoria_F${data.filial}_${termModal.type}_${safeName}.pdf`;
+    doc.save(fileName);
+  };
+
   const toggleScopeStatus = (groupId?: string, deptId?: string, catId?: string) => {
     if (!data) return;
     setData(prev => {
@@ -381,6 +591,7 @@ const App: React.FC = () => {
   const selectedGroup = useMemo(() => data?.groups.find(g => g.id === view.selectedGroupId), [data, view.selectedGroupId]);
   const selectedDept = useMemo(() => selectedGroup?.departments.find(d => d.id === view.selectedDeptId), [selectedGroup, view.selectedDeptId]);
   const selectedCat = useMemo(() => selectedDept?.categories.find(c => c.id === view.selectedCatId), [selectedDept, view.selectedCatId]);
+  const termScopeInfo = useMemo(() => (termModal ? buildTermScopeInfo(termModal) : null), [termModal, data]);
 
   if (!data) {
     return (
@@ -502,6 +713,9 @@ const App: React.FC = () => {
         <div className={`grid gap-6 ${view.level === 'groups' ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}>
           {view.level === 'groups' && data.groups.map(group => {
             const m = calcScopeMetrics(group);
+            const totalSkus = Number(m.skus);
+            const doneSkus = Number(m.doneSkus);
+            const isComplete = totalSkus > 0 && doneSkus >= totalSkus;
             return (
               <div key={group.id} className="bg-white rounded-[2.5rem] p-8 border border-slate-200 shadow-sm hover:shadow-xl transition-all group flex flex-col relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-full -mr-16 -mt-16 group-hover:bg-indigo-100 transition-colors z-0"></div>
@@ -509,6 +723,19 @@ const App: React.FC = () => {
                     <div className="flex justify-between items-start mb-6">
                         <span className="text-xl font-black text-indigo-600 bg-indigo-50 px-5 py-2.5 rounded-2xl border border-indigo-100 shadow-sm">ID {group.id}</span>
                         <div className="flex gap-2">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); if (isComplete) openTermModal({ type: 'group', groupId: group.id }); }}
+                              disabled={!isComplete}
+                              className={`px-3 h-10 rounded-xl border flex items-center justify-center gap-1 transition-all shadow-sm text-[10px] font-black uppercase ${
+                                isComplete
+                                  ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-600 hover:text-white'
+                                  : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                              }`}
+                              title={isComplete ? 'Assinar e imprimir termo' : 'Conclua 100% para liberar'}
+                            >
+                              <i className="fa-solid fa-file-signature text-[11px]"></i>
+                              Termo
+                            </button>
                             <button onClick={(e) => { e.stopPropagation(); toggleScopeStatus(group.id); }} className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center hover:bg-emerald-600 hover:text-white transition-all shadow-sm"><i className="fa-solid fa-check-double text-sm"></i></button>
                             <button onClick={() => setView({ level: 'departments', selectedGroupId: group.id })} className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center hover:bg-indigo-600 transition-all shadow-md"><i className="fa-solid fa-chevron-right text-sm"></i></button>
                         </div>
@@ -538,6 +765,9 @@ const App: React.FC = () => {
 
           {view.level === 'departments' && selectedGroup?.departments.map(dept => {
             const m = calcScopeMetrics(dept);
+            const totalSkus = Number(m.skus);
+            const doneSkus = Number(m.doneSkus);
+            const isComplete = totalSkus > 0 && doneSkus >= totalSkus;
             return (
               <div key={dept.id} className="bg-white rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-all p-8 flex items-center gap-10 group">
                 <div className="flex flex-col items-center justify-center bg-slate-50 rounded-[2rem] p-6 min-w-[160px] border border-slate-100 shadow-inner">
@@ -548,6 +778,18 @@ const App: React.FC = () => {
                     <div className="flex justify-between items-start mb-6">
                         <h2 onClick={() => setView(prev => ({ ...prev, level: 'categories', selectedDeptId: dept.id }))} className="text-3xl font-black text-slate-900 uppercase italic leading-none group-hover:text-indigo-600 cursor-pointer tracking-tighter">{dept.name}</h2>
                         <div className="flex gap-2">
+                             <button
+                               onClick={() => { if (isComplete) openTermModal({ type: 'department', groupId: selectedGroup!.id, deptId: dept.id }); }}
+                               disabled={!isComplete}
+                               className={`px-4 py-2 min-w-[76px] rounded-xl text-[10px] font-black uppercase transition-all shadow-sm ${
+                                 isComplete
+                                   ? 'bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white'
+                                   : 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed'
+                               }`}
+                               title={isComplete ? 'Assinar e imprimir termo' : 'Conclua 100% para liberar'}
+                             >
+                               Termo
+                             </button>
                              <button onClick={() => toggleScopeStatus(selectedGroup?.id, dept.id)} className="px-4 py-2 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 text-[10px] font-black uppercase hover:bg-emerald-600 hover:text-white transition-all shadow-sm">Alternar Tudo</button>
                              <button onClick={() => setView(prev => ({ ...prev, level: 'categories', selectedDeptId: dept.id }))} className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center hover:bg-indigo-600 transition-all shadow-lg"><i className="fa-solid fa-chevron-right text-sm"></i></button>
                         </div>
@@ -581,6 +823,17 @@ const App: React.FC = () => {
                     </div>
                 </div>
                 <div className="flex gap-4">
+                    <button
+                      onClick={() => { if (cat.status === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id }); }}
+                      disabled={cat.status !== AuditStatus.DONE}
+                      className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${
+                        cat.status === AuditStatus.DONE
+                          ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:text-white hover:bg-indigo-600'
+                          : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                      }`}
+                    >
+                      Termo
+                    </button>
                     <button onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className="px-6 py-4 rounded-xl bg-slate-50 text-slate-400 text-[10px] font-black uppercase hover:text-indigo-600 hover:bg-white transition-all border border-transparent hover:border-indigo-100 shadow-sm">Detalhar</button>
                     <button onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, cat.id)} className={`px-10 py-4 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-md active:scale-95 ${cat.status === AuditStatus.DONE ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}>{cat.status === AuditStatus.DONE ? 'CONCLUÍDO' : 'FINALIZAR'}</button>
                 </div>
@@ -609,6 +862,17 @@ const App: React.FC = () => {
                         <p className="text-[10px] font-black text-slate-500 uppercase italic mb-1">Resumo de Carga</p>
                         <p className="text-2xl font-black leading-none">{selectedCat.itemsCount} SKUs <span className="text-indigo-400 mx-2">|</span> {selectedCat.totalQuantity.toLocaleString()} Unid.</p>
                     </div>
+                    <button
+                      onClick={() => { if (selectedCat.status === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: selectedCat.id }); }}
+                      disabled={selectedCat.status !== AuditStatus.DONE}
+                      className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${
+                        selectedCat.status === AuditStatus.DONE
+                          ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-600 hover:text-white'
+                          : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                      }`}
+                    >
+                      Imprimir Termo
+                    </button>
                     <button onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, selectedCat.id)} className={`px-10 py-5 rounded-2xl font-black text-[12px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95 border-b-4 ${selectedCat.status === AuditStatus.DONE ? 'bg-emerald-600 border-emerald-800' : 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500'}`}>
                     {selectedCat.status === AuditStatus.DONE ? 'REABRIR CATEGORIA' : 'CONCLUIR AUDITORIA'}
                     </button>
@@ -629,6 +893,150 @@ const App: React.FC = () => {
         <button onClick={() => setView(prev => ({ ...prev, level: prev.level === 'products' ? 'categories' : prev.level === 'categories' ? 'departments' : 'groups' }))} className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-16 py-6 rounded-full shadow-[0_25px_60px_rgba(0,0,0,0.4)] font-black text-[14px] uppercase tracking-[0.3em] hover:bg-indigo-600 hover:scale-110 active:scale-95 transition-all z-[2002] border-8 border-[#f1f5f9] flex items-center gap-6 group">
           <i className="fa-solid fa-arrow-left-long transition-transform group-hover:-translate-x-3"></i> Retornar Nível
         </button>
+      )}
+
+      {termModal && termForm && termScopeInfo && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[2005] flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest flex items-center gap-2">
+                <i className="fa-solid fa-file-signature text-indigo-500"></i>
+                Termo de Auditoria - {termModal.type === 'group' ? 'Grupo' : termModal.type === 'department' ? 'Departamento' : 'Categoria'}
+              </h3>
+              <button onClick={() => { setTermModal(null); setTermForm(null); }} className="text-slate-400 hover:text-red-500 transition-colors">
+                <i className="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+            <div className="p-6 max-h-[70vh] overflow-y-auto custom-scrollbar space-y-6">
+              <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 text-xs text-slate-600">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Filial</p>
+                    <p className="font-bold">Filial {data?.filial}</p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Grupo</p>
+                    <p className="font-bold">{termScopeInfo.group.name}</p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Nível</p>
+                    <p className="font-bold capitalize">{termModal.type}</p>
+                  </div>
+                </div>
+                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Departamentos</p>
+                    <p className="font-semibold">{termScopeInfo.departments.map(d => d.name).join(', ') || '-'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Categorias</p>
+                    <p className="font-semibold">{termScopeInfo.categories.map(c => c.name).join(', ') || '-'}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div className="md:col-span-2 space-y-1">
+                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Nº Inventário</label>
+                  <input
+                    type="text"
+                    value={termForm.inventoryNumber}
+                    onChange={(e) => updateTermForm(prev => ({ ...prev, inventoryNumber: e.target.value }))}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                  />
+                </div>
+                <div className="md:col-span-2 space-y-1">
+                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Data</label>
+                  <input
+                    type="text"
+                    value={termForm.date}
+                    onChange={(e) => updateTermForm(prev => ({ ...prev, date: e.target.value }))}
+                    placeholder="DD/MM/AAAA"
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                  />
+                </div>
+                <div className="md:col-span-2 space-y-1">
+                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Gestor</label>
+                  <input
+                    type="text"
+                    value={termForm.managerName}
+                    onChange={(e) => updateTermForm(prev => ({ ...prev, managerName: e.target.value }))}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                  />
+                </div>
+                <div className="md:col-span-2 space-y-1">
+                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">CPF Gestor</label>
+                  <input
+                    type="text"
+                    value={termForm.managerCpf}
+                    onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf: e.target.value }))}
+                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Colaboradores</h4>
+                  <button
+                    onClick={() => updateTermForm(prev => ({ ...prev, collaborators: [...prev.collaborators, { name: '', cpf: '', signature: '' }] }))}
+                    className="text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"
+                  >
+                    + Adicionar
+                  </button>
+                </div>
+                <div className="grid grid-cols-1 gap-3">
+                  {termForm.collaborators.map((collab, idx) => (
+                    <div key={idx} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <input
+                        type="text"
+                        value={collab.name}
+                        onChange={(e) => updateTermForm(prev => ({
+                          ...prev,
+                          collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, name: e.target.value } : c)
+                        }))}
+                        placeholder="Colaborador"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
+                      />
+                      <input
+                        type="text"
+                        value={collab.cpf}
+                        onChange={(e) => updateTermForm(prev => ({
+                          ...prev,
+                          collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, cpf: e.target.value } : c)
+                        }))}
+                        placeholder="CPF"
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
+                      />
+                      <input
+                        type="text"
+                        value={collab.signature}
+                        onChange={(e) => updateTermForm(prev => ({
+                          ...prev,
+                          collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: e.target.value } : c)
+                        }))}
+                        placeholder="Ass."
+                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
+                      />
+                    </div>
+                  ))}
+                </div>
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Todos colaboradores da Filial devem assinar.</p>
+              </div>
+            </div>
+            <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
+              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                Produtos no termo: {termScopeInfo.products.length}
+              </span>
+              <button
+                onClick={handlePrintTerm}
+                className="px-6 py-3 rounded-xl bg-slate-900 text-white font-black text-[11px] uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-md"
+              >
+                Imprimir Termo
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       <style>{`
