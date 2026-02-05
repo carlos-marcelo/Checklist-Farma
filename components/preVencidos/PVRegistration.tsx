@@ -354,22 +354,22 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
 
   return (
     <div className="space-y-6">
-      <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <h2 className="text-xl font-bold text-slate-800">Lançamento de Pré-Vencidos</h2>
-          <div className="flex items-center gap-4 mt-2">
-            <div className="flex items-center gap-1.5 text-xs text-slate-500 bg-slate-50 px-3 py-1 rounded-full border border-slate-100">
-              <Building size={14} className="text-blue-500" />
-              <span className="font-semibold uppercase">{sessionInfo?.company || 'Não Informado'}</span>
+          <h2 className="text-lg font-bold text-slate-800 tracking-tight">Lançamento de Pré-Vencidos</h2>
+          <div className="flex items-center gap-3 mt-1.5">
+            <div className="flex items-center gap-1.5 text-[10px] text-slate-500 bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
+              <Building size={12} className="text-blue-500" />
+              <span className="font-bold uppercase">{sessionInfo?.company || 'Não Informado'}</span>
             </div>
-            <div className="flex items-center gap-1.5 text-xs text-slate-500 bg-slate-50 px-3 py-1 rounded-full border border-slate-100">
-              <User size={14} className="text-blue-500" />
-              <span className="font-semibold uppercase">{sessionInfo?.pharmacist || 'Não Informado'}</span>
+            <div className="flex items-center gap-1.5 text-[10px] text-slate-500 bg-slate-50 px-2.5 py-0.5 rounded-full border border-slate-100">
+              <User size={12} className="text-blue-500" />
+              <span className="font-bold uppercase">{sessionInfo?.pharmacist || 'Não Informado'}</span>
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <div className="w-48 h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200 shadow-inner">
+        <div className="flex items-center gap-3">
+          <div className="w-40 h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200 shadow-inner">
             <div
               className="h-full bg-blue-500 transition-all duration-500 shadow-lg shadow-blue-200"
               style={{ width: `${Math.min((pvRecords.length / 50) * 100, 100)}%` }}
@@ -381,31 +381,31 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          <div className="bg-white p-10 rounded-3xl shadow-md border border-slate-100 min-h-[350px] flex flex-col justify-center transition-all">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        <div className="lg:col-span-3 space-y-6">
+          <div className="bg-white p-6 md:p-8 rounded-3xl shadow-md border border-slate-100 min-h-[250px] flex flex-col justify-center transition-all">
             {!scanningProduct ? (
               <ScannerInput onScan={handleScan} />
             ) : (
               <div className="animate-in zoom-in-95 fade-in duration-300">
-                <div className="flex justify-between items-start mb-6 bg-slate-50 p-6 rounded-2xl border border-slate-100">
+                <div className="flex justify-between items-start mb-4 bg-slate-50 p-4 rounded-xl border border-slate-100">
                   <div className="space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className={`text-[10px] font-black px-2 py-0.5 rounded uppercase tracking-tighter ${searchMethod === 'K' ? 'bg-green-600 text-white' : 'bg-blue-600 text-white'}`}>
+                      <span className={`text-[9px] font-black px-1.5 py-0.5 rounded uppercase tracking-tighter ${searchMethod === 'K' ? 'bg-green-600 text-white' : 'bg-blue-600 text-white'}`}>
                         {searchMethod === 'K' ? 'BIPADO (K)' : 'DIGITADO (C)'}
                       </span>
-                      <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">Produto Identificado</span>
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Produto Identificado</span>
                     </div>
-                    <h3 className="text-3xl font-bold text-slate-900 leading-tight">{scanningProduct.name}</h3>
-                    <div className="flex items-center gap-3 mt-2 flex-wrap">
-                      <span className="bg-white border border-slate-200 px-3 py-1 rounded-lg text-sm font-bold text-slate-600">Red: {scanningProduct.reducedCode}</span>
-                      <span className="bg-blue-50 text-blue-700 px-3 py-1 rounded-lg text-sm font-bold border border-blue-100 flex items-center gap-1.5 min-w-0 max-w-full">
-                        <FlaskConical size={14} className="shrink-0" /> <span className="truncate">DCB: {scanningProduct.dcb}</span>
+                    <h3 className="text-xl md:text-2xl font-bold text-slate-900 leading-tight tracking-tight">{scanningProduct.name}</h3>
+                    <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                      <span className="bg-white border border-slate-200 px-2 py-0.5 rounded-lg text-xs font-bold text-slate-600">Red: {scanningProduct.reducedCode}</span>
+                      <span className="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-lg text-xs font-bold border border-blue-100 flex items-center gap-1 min-w-0 max-w-full">
+                        <FlaskConical size={12} className="shrink-0" /> <span className="truncate">DCB: {scanningProduct.dcb}</span>
                       </span>
                     </div>
                   </div>
-                  <button onClick={() => setScanningProduct(null)} className="p-2 bg-white rounded-full text-slate-300 hover:text-red-500 hover:shadow-md transition-all shrink-0">
-                    <Trash2 size={24} />
+                  <button onClick={() => setScanningProduct(null)} className="p-1.5 bg-white rounded-full text-slate-300 hover:text-red-500 hover:shadow-md transition-all shrink-0">
+                    <Trash2 size={20} />
                   </button>
                 </div>
 
@@ -512,9 +512,9 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
 
                 <button
                   onClick={handleConfirm}
-                  className="w-full bg-blue-600 text-white py-5 rounded-2xl font-bold text-xl hover:bg-blue-700 transition-all flex items-center justify-center gap-3 shadow-xl shadow-blue-200 active:scale-95"
+                  className="w-full bg-blue-600 text-white py-4 rounded-2xl font-bold text-lg hover:bg-blue-700 transition-all flex items-center justify-center gap-2.5 shadow-xl shadow-blue-200 active:scale-95"
                 >
-                  <CheckCircle2 size={28} /> CONFIRMAR LANÇAMENTO (ENTER)
+                  <CheckCircle2 size={24} /> CONFIRMAR LANÇAMENTO (ENTER)
                 </button>
               </div>
             )}
@@ -590,38 +590,37 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
               <table className="w-full relative border-separate border-spacing-0">
                 <thead className="bg-slate-50 text-slate-400 text-[10px] uppercase font-bold tracking-widest border-b border-slate-100 sticky top-0 z-10">
                   <tr>
-                    <th className="px-6 py-4 text-left w-24 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('reducedCode')}>
+                    <th className="px-4 py-3 text-left w-24 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('reducedCode')}>
                       <div className="flex items-center">
                         Reduzido (C) {getSortIcon('reducedCode')}
                       </div>
                     </th>
-                    <th className="px-6 py-4 text-left cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('name')}>
+                    <th className="px-4 py-3 text-left cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('name')}>
                       <div className="flex items-center">
                         Descrição (D) {getSortIcon('name')}
                       </div>
                     </th>
-                    <th className="px-6 py-4 text-left w-40 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('originBranch')}>
+                    <th className="px-4 py-3 text-left w-32 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('originBranch')}>
                       <div className="flex items-center">
                         Origem {getSortIcon('originBranch')}
                       </div>
                     </th>
-                    <th className="px-6 py-4 text-left w-40 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('sectorResponsible')}>
+                    <th className="px-4 py-3 text-left w-32 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('sectorResponsible')}>
                       <div className="flex items-center">
-                        Responsável {getSortIcon('sectorResponsible')}
+                        Resp. Setor {getSortIcon('sectorResponsible')}
                       </div>
                     </th>
-                    <th className="px-6 py-4 text-center w-20 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('quantity')}>
+                    <th className="px-2 py-3 text-center w-16 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('quantity')}>
                       <div className="flex items-center justify-center">
                         Qtd {getSortIcon('quantity')}
                       </div>
                     </th>
-                    <th className="px-6 py-4 text-center w-32 border-l border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('expiryDate')}>
-                      <div className="space-y-2">
+                    <th className="px-4 py-3 text-center w-28 border-l border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('expiryDate')}>
+                      <div className="space-y-1">
                         <div className="flex items-center justify-center">
-                          Vencimento {getSortIcon('expiryDate')}
+                          Venc. {getSortIcon('expiryDate')}
                         </div>
                         <div className="relative">
-                          <Calendar className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" size={12} />
                           <input
                             type="text"
                             placeholder="Mês"
@@ -632,14 +631,14 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                               if (v.length > 2) v = v.substring(0, 2) + '/' + v.substring(2, 4);
                               setFilterMonth(v);
                             }}
-                            className="w-full pl-7 pr-2 py-1.5 rounded-lg border border-slate-200 text-xs text-slate-700 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none font-medium normal-case"
+                            className="w-full px-2 py-1 rounded-lg border border-slate-200 text-[10px] text-slate-700 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none font-medium normal-case"
                             onClick={(e) => e.stopPropagation()}
                           />
                         </div>
                       </div>
                     </th>
-                    <th className="px-6 py-4 text-left">Status / Cadastro</th>
-                    <th className="px-6 py-4 text-right">Ação</th>
+                    <th className="px-4 py-3 text-left w-32">Status / Cad.</th>
+                    <th className="px-4 py-3 text-right">Ação</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
@@ -658,18 +657,18 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                       const status = getExpiryStatus(rec.expiryDate);
                       return (
                         <tr key={rec.id} className={`hover:brightness-95 transition-all group ${status.bg}`}>
-                          <td className="px-6 py-4 font-mono text-sm text-slate-500 font-bold">{rec.reducedCode}</td>
-                          <td className="px-6 py-4">
-                            <div className="font-semibold text-slate-800">{rec.name}</div>
-                            <div className="flex items-center gap-1.5 text-[9px] text-slate-500 font-bold uppercase mt-1">
-                              <FlaskConical size={10} className="shrink-0 text-blue-400" /> <span className="truncate max-w-[200px]">{rec.dcb}</span>
+                          <td className="px-4 py-2 font-mono text-xs text-slate-500 font-bold">{rec.reducedCode}</td>
+                          <td className="px-4 py-2">
+                            <div className="font-bold text-slate-800 text-sm leading-tight">{rec.name}</div>
+                            <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-bold uppercase mt-0.5">
+                              <FlaskConical size={8} className="shrink-0 text-blue-400" /> <span className="truncate max-w-[180px]">{rec.dcb}</span>
                             </div>
                           </td>
-                          <td className="px-6 py-4">
+                          <td className="px-4 py-2">
                             <select
                               value={rec.originBranch || ''}
                               onChange={(e) => onUpdatePV?.(rec.id, { originBranch: e.target.value })}
-                              className="w-full min-w-[140px] bg-white/80 text-slate-700 px-2 py-1.5 rounded-lg font-bold text-xs border border-slate-200 shadow-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none custom-select"
+                              className="w-full min-w-[120px] bg-white/80 text-slate-700 px-2 py-1 rounded-lg font-bold text-[10px] border border-slate-200 shadow-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none custom-select"
                             >
                               <option value="">-</option>
                               {(rec.originBranch && !originOptions.includes(rec.originBranch) ? [rec.originBranch, ...originOptions] : originOptions).map(branch => (
@@ -677,7 +676,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                               ))}
                             </select>
                           </td>
-                          <td className="px-6 py-4">
+                          <td className="px-4 py-2">
                             <input
                               type="text"
                               value={drafts[rec.id]?.sectorResponsible ?? (rec.sectorResponsible || '')}
@@ -696,10 +695,10 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                                 scheduleUpdate(`${rec.id}-sector`, () => commitSector(rec.id, value, rec.sectorResponsible));
                               }}
                               placeholder="-"
-                              className="w-full min-w-[140px] bg-white/80 text-slate-700 px-2 py-1.5 rounded-lg font-bold text-xs border border-slate-200 shadow-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
+                              className="w-full min-w-[120px] bg-white/80 text-slate-700 px-2 py-1 rounded-lg font-bold text-[10px] border border-slate-200 shadow-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
                             />
                           </td>
-                          <td className="px-6 py-4 text-center">
+                          <td className="px-2 py-2 text-center">
                             <input
                               type="number"
                               min="1"
@@ -719,25 +718,25 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                                 const value = (e.currentTarget as HTMLInputElement).value;
                                 scheduleUpdate(`${rec.id}-qty`, () => commitQuantity(rec.id, value, rec.quantity));
                               }}
-                              className="w-16 text-center bg-white/80 text-slate-800 px-2 py-1 rounded-lg font-bold text-sm border border-slate-200 shadow-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
+                              className="w-12 text-center bg-white/80 text-slate-800 px-1 py-0.5 rounded-lg font-bold text-xs border border-slate-200 shadow-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
                             />
                           </td>
-                          <td className="px-6 py-4 text-center border-l border-slate-100/50">
+                          <td className="px-4 py-2 text-center border-l border-slate-100/50">
                             <div className="text-sm font-black text-slate-700">{rec.expiryDate}</div>
-                            <div className={`text-[10px] font-bold ${status.color} mt-0.5`}>{status.days} dias</div>
+                            <div className={`text-[9px] font-bold ${status.color} mt-0.5`}>{status.days} dias</div>
                           </td>
-                          <td className="px-6 py-4">
-                            <div className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-[10px] font-bold uppercase mb-1 ${status.label === 'VENCIDO' ? 'bg-red-200 text-red-800' : status.label === 'CRÍTICO' ? 'bg-rose-200 text-rose-900' : 'bg-blue-200 text-blue-800'}`}>
+                          <td className="px-4 py-2">
+                            <div className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase mb-0.5 ${status.label === 'VENCIDO' ? 'bg-red-200 text-red-800' : status.label === 'CRÍTICO' ? 'bg-rose-200 text-rose-900' : 'bg-blue-200 text-blue-800'}`}>
                               {status.label}
                             </div>
-                            <div className="text-[10px] text-slate-500 flex flex-col">
+                            <div className="text-[9px] text-slate-500 flex flex-col leading-tight">
                               <span className="font-bold text-slate-600">{rec.userName?.split(' ')[0] || rec.userEmail?.split('@')[0] || 'Unknown'}</span>
                               <span className="opacity-75">{new Date(rec.entryDate).toLocaleDateString('pt-BR')} {new Date(rec.entryDate).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
                             </div>
                           </td>
-                          <td className="px-6 py-4 text-right">
-                            <button onClick={() => onRemovePV(rec.id)} className="text-slate-400 hover:text-red-600 transition-colors p-2 rounded-lg hover:bg-white hover:shadow-sm">
-                              <Trash2 size={18} />
+                          <td className="px-4 py-2 text-right">
+                            <button onClick={() => onRemovePV(rec.id)} className="text-slate-400 hover:text-red-600 transition-colors p-1.5 rounded-lg hover:bg-white hover:shadow-sm">
+                              <Trash2 size={16} />
                             </button>
                           </td>
                         </tr>
@@ -753,14 +752,14 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
         <div className="space-y-6">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
             <h3 className="font-bold text-slate-800 mb-4">Métricas da Sessão</h3>
-            <div className="space-y-4">
-              <div className="p-4 bg-blue-50/50 rounded-xl border border-blue-100 shadow-sm">
+            <div className="grid grid-cols-1 gap-3">
+              <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 shadow-sm">
                 <p className="text-blue-600 text-[10px] font-bold uppercase tracking-widest">Itens Totais</p>
-                <p className="text-4xl font-black text-blue-800 mt-1">{pvRecords.reduce((acc, r) => acc + r.quantity, 0)}</p>
+                <p className="text-2xl font-black text-blue-800 mt-0.5">{pvRecords.reduce((acc, r) => acc + r.quantity, 0)}</p>
               </div>
-              <div className="p-4 bg-slate-50/50 rounded-xl border border-slate-100">
-                <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">Variedade (SKUs)</p>
-                <p className="text-4xl font-bold text-slate-800 mt-1">{new Set(pvRecords.map(r => r.reducedCode)).size}</p>
+              <div className="p-3 bg-slate-50/50 rounded-xl border border-slate-100">
+                <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">SKUs Únicos</p>
+                <p className="text-2xl font-bold text-slate-800 mt-0.5">{new Set(pvRecords.map(r => r.reducedCode)).size}</p>
               </div>
             </div>
           </div>
@@ -798,28 +797,28 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                       <div
                         key={date}
                         onClick={() => setFilterMonth(isActive ? '' : date)}
-                        className={`p-3 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center hover:scale-[1.02] duration-200 ${isActive
-                            ? 'ring-2 ring-blue-500 ring-offset-2 border-blue-500 shadow-md transform scale-[1.02]'
-                            : `${status.bg} border-transparent hover:border-slate-200`
+                        className={`p-2 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center hover:bg-slate-50 ${isActive
+                          ? 'border-blue-500 bg-blue-50/50 shadow-sm ring-1 ring-blue-100'
+                          : `${status.bg} border-transparent`
                           }`}
                       >
-                        <div className="space-y-1">
-                          <p className={`text-base font-black ${isActive ? 'text-blue-600' : status.color}`}>{date}</p>
-                          <div className={`px-2 py-0.5 rounded-md text-[8px] font-bold uppercase inline-block ${status.label === 'VENCIDO' ? 'bg-red-100 text-red-700' :
+                        <div className="leading-tight">
+                          <p className={`text-sm font-black ${isActive ? 'text-blue-700' : status.color}`}>{date}</p>
+                          <div className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase inline-block mt-0.5 ${status.label === 'VENCIDO' ? 'bg-red-100 text-red-700' :
                             status.label === 'CRÍTICO' ? 'bg-rose-100 text-rose-700' :
                               'bg-blue-100 text-blue-700'
                             }`}>
                             {status.label}
                           </div>
                         </div>
-                        <div className="flex gap-4">
+                        <div className="flex gap-3">
                           <div className="text-right">
-                            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">Itens</p>
-                            <p className="text-xl font-black text-slate-800 leading-none">{data.items}</p>
+                            <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">Itens</p>
+                            <p className="text-base font-black text-slate-800 leading-none">{data.items}</p>
                           </div>
                           <div className="text-right">
-                            <p className="text-[9px] text-slate-400 font-bold uppercase tracking-tighter">Variedade</p>
-                            <p className="text-xl font-bold text-slate-700 leading-none">{data.skus.size}</p>
+                            <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">SKUs</p>
+                            <p className="text-base font-bold text-slate-700 leading-none">{data.skus.size}</p>
                           </div>
                         </div>
                       </div>
@@ -830,21 +829,21 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
             </div>
           </div>
 
-          <div className="bg-slate-900 p-8 rounded-3xl shadow-xl text-white relative overflow-hidden group">
+          <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white relative overflow-hidden group">
             <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-blue-600/10 rounded-full blur-3xl group-hover:bg-blue-600/20 transition-all duration-700"></div>
-            <div className="w-14 h-14 bg-slate-800 rounded-2xl flex items-center justify-center mb-6 border border-slate-700 shadow-lg shadow-black/20">
-              <FlaskConical className="text-blue-400" size={28} />
+            <div className="w-12 h-12 bg-slate-800 rounded-2xl flex items-center justify-center mb-4 border border-slate-700 shadow-lg shadow-black/20">
+              <FlaskConical className="text-blue-400" size={24} />
             </div>
-            <h4 className="font-bold text-xl mb-3">Grupo DCB Ativo</h4>
-            <p className="text-slate-400 text-sm leading-relaxed mb-6">Ao bipar um produto, o sistema identifica automaticamente seu Princípio Ativo e sugere similares.</p>
-            <div className="space-y-3">
-              <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50 text-[10px] font-mono text-slate-400 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+            <h4 className="font-bold text-lg mb-2">Grupo DCB Ativo</h4>
+            <p className="text-slate-400 text-[11px] leading-snug mb-4">O sistema identifica automaticamente o Princípio Ativo e sugere similares ao bipar.</p>
+            <div className="space-y-2">
+              <div className="p-2.5 bg-slate-800/50 rounded-xl border border-slate-700/50 text-[10px] font-mono text-slate-400 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
                 FILIAL: {sessionInfo?.filial || 'PADRÃO'}
               </div>
-              <div className="p-3 bg-slate-800/50 rounded-xl border border-slate-700/50 text-[10px] font-mono text-slate-400 flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-green-500"></span>
-                PRODUTOS BASE: {masterProducts.length}
+              <div className="p-2.5 bg-slate-800/50 rounded-xl border border-slate-700/50 text-[10px] font-mono text-slate-400 flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                PRODUTOS: {masterProducts.length}
               </div>
             </div>
           </div>
