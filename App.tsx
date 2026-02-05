@@ -133,27 +133,66 @@ const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceRep
 };
 
 const mapDbReportToHistoryItem = (r: SupabaseService.DbReport): ReportHistoryItem => {
-    const formData = r.form_data || {};
-    // Extract info from 'gerencial' checklist if possible
-    const gerencial = formData['gerencial'] || {};
+    // 1. Safe JSON Parsing
+    let formData = r.form_data;
+    if (typeof formData === 'string') {
+        try {
+            formData = JSON.parse(formData);
+        } catch (e) {
+            console.error("Error parsing form_data JSON:", e);
+            formData = {};
+        }
+    }
+    formData = formData || {};
 
-    // Also try to find a valid checklist if gerencial is missing/empty
-    let fallbackInfo = { empresa: '', area: '', filial: '', gestor: '' };
-    if (!gerencial.empresa) {
-        // Look in other checklists
+    // 2. Robust Extraction Logic
+    // Try to find ANY checklist that has the basic info
+    let foundInfo = { empresa: '', area: '', filial: '', gestor: '' };
+
+    // Check 'gerencial' first as primary source
+    if (formData['gerencial']?.empresa) {
+        foundInfo = {
+            empresa: String(formData['gerencial'].empresa),
+            area: String(formData['gerencial'].area || ''),
+            filial: String(formData['gerencial'].filial || ''),
+            gestor: String(formData['gerencial'].gestor || '')
+        };
+    } else {
+        // Fallback: search all other checklists for ANY valid data
+        // We prioritize checklists that have BOTH empresa and filial
+        let bestMatch = null;
+
         for (const clId of Object.keys(formData)) {
             const data = formData[clId];
-            if (data?.empresa) {
-                fallbackInfo = {
+            if (data && typeof data === 'object' && data.empresa) {
+                const candidate = {
                     empresa: String(data.empresa),
                     area: String(data.area || ''),
                     filial: String(data.filial || ''),
                     gestor: String(data.gestor || '')
                 };
-                break;
+
+                // If we found a candidate with a filial, it's a strong match, stop looking
+                if (candidate.filial) {
+                    bestMatch = candidate;
+                    break;
+                }
+
+                // Otherwise keep it as a backup
+                if (!bestMatch) {
+                    bestMatch = candidate;
+                }
             }
         }
+
+        if (bestMatch) {
+            foundInfo = bestMatch;
+        }
     }
+
+    // Special handling for legacy data or partial failures
+    // If we have filial but missing area/empresa, we could theoretically look it up from config,
+    // but for now let's trust the report data or the fallback found.
 
     return {
         id: r.id || Date.now().toString(),
@@ -166,10 +205,10 @@ const mapDbReportToHistoryItem = (r: SupabaseService.DbReport): ReportHistoryIte
         images: r.images || {},
         signatures: r.signatures || {},
         ignoredChecklists: r.ignored_checklists || [],
-        empresa_avaliada: String(gerencial.empresa || fallbackInfo.empresa || 'Sem Empresa'),
-        area: String(gerencial.area || fallbackInfo.area || 'N/A'),
-        filial: String(gerencial.filial || fallbackInfo.filial || r.pharmacy_name || 'Sem Filial'),
-        gestor: String(gerencial.gestor || fallbackInfo.gestor || 'N/A')
+        empresa_avaliada: String(foundInfo.empresa || 'Sem Empresa'),
+        area: String(foundInfo.area || 'N/A'),
+        filial: String(foundInfo.filial || r.pharmacy_name || 'Sem Filial'),
+        gestor: String(foundInfo.gestor || 'N/A')
     };
 };
 
