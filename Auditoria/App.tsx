@@ -18,6 +18,9 @@ const GROUP_CONFIG_DEFAULTS: Record<string, string> = {
   "10000": "Conveniência"
 };
 
+const TRIER_API_BASE =
+  ((import.meta as any).env?.VITE_TRIER_INTEGRATION_URL as string) || "http://localhost:8000";
+
 type TermScopeType = 'group' | 'department' | 'category';
 
 interface TermScope {
@@ -45,6 +48,8 @@ const App: React.FC = () => {
   const [data, setData] = useState<AuditData | null>(null);
   const [view, setView] = useState<ViewState>({ level: 'groups' });
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isTrierLoading, setIsTrierLoading] = useState(false);
+  const [trierError, setTrierError] = useState<string | null>(null);
   const [sessionStartTime, setSessionStartTime] = useState<number>(Date.now());
   const [initialDoneUnits, setInitialDoneUnits] = useState<number>(0);
   const [termModal, setTermModal] = useState<TermScope | null>(null);
@@ -251,6 +256,71 @@ const App: React.FC = () => {
       setView({ level: 'groups' });
     } catch (err) { alert("Erro ao processar arquivos."); console.error(err); }
     finally { setIsProcessing(false); }
+  };
+
+  const handleLoadFromTrier = async () => {
+    if (!selectedFilial) {
+      alert("Selecione a filial antes de carregar do Trier.");
+      return;
+    }
+    setIsTrierLoading(true);
+    setTrierError(null);
+    try {
+      const params = new URLSearchParams({
+        filial: selectedFilial,
+        empresa: selectedEmpresa
+      });
+      const response = await fetch(`${TRIER_API_BASE}/audit/bootstrap?${params.toString()}`);
+      if (!response.ok) {
+        let detail = "";
+        try {
+          const body = await response.json();
+          detail = body?.detail || body?.message || "";
+        } catch {
+          detail = "";
+        }
+        throw new Error(buildTrierErrorMessage(response.status, detail));
+      }
+      const payload = await response.json();
+      if (!payload || !payload.groups) {
+        throw new Error("Resposta invalida do servidor Trier.");
+      }
+      setData(payload);
+      setView({ level: 'groups' });
+      setInitialDoneUnits(0);
+      setSessionStartTime(Date.now());
+      setFileGroups(null);
+      setFileStock(null);
+      setFileDeptIds(null);
+      setFileCatIds(null);
+    } catch (err: any) {
+      setTrierError(mapFetchError(err));
+    } finally {
+      setIsTrierLoading(false);
+    }
+  };
+
+  const buildTrierErrorMessage = (status: number, detail?: string) => {
+    if (status === 401 || status === 498) return "Token invalido ou expirado.";
+    if (status === 404) return "Endpoint do backend nao encontrado.";
+    if (status === 502) {
+      if (detail?.includes("ConnectTimeout")) return "Timeout ao conectar no Trier.";
+      return "SGF offline ou nao acessivel no momento.";
+    }
+    if (detail) return `Erro Trier (${status}): ${detail}`;
+    return `Erro Trier (${status}).`;
+  };
+
+  const mapFetchError = (err: any) => {
+    const message = String(err?.message || err || "");
+    if (
+      message.includes("Failed to fetch") ||
+      message.includes("NetworkError") ||
+      message.includes("ERR_CONNECTION_REFUSED")
+    ) {
+      return `Backend offline ou bloqueado (${TRIER_API_BASE}).`;
+    }
+    return message || "Falha ao carregar dados do Trier.";
   };
 
   const branchMetrics = useMemo(() => {
@@ -606,7 +676,7 @@ const App: React.FC = () => {
               <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-400">Empresa</label><select className="w-full bg-slate-50 border-2 rounded-xl px-4 py-3 font-bold border-slate-100" value={selectedEmpresa} onChange={e => setSelectedEmpresa(e.target.value)}><option>Drogaria Cidade</option></select></div>
               <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-400">Selecione a Filial</label><select className="w-full bg-slate-50 border-2 rounded-xl px-4 py-3 font-bold border-slate-100" value={selectedFilial} onChange={e => setSelectedFilial(e.target.value)}><option value="">Selecione...</option>{FILIAIS.map(f => <option key={f} value={f.toString()}>Filial {f}</option>)}</select></div>
             </div>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[ { f: fileGroups, set: setFileGroups, label: 'Estrutura' }, { f: fileStock, set: setFileStock, label: 'Saldos' }, { f: fileDeptIds, set: setFileDeptIds, label: 'IDs Depto' }, { f: fileCatIds, set: setFileCatIds, label: 'IDs Cat' } ].map((item, i) => (
                 <label key={i} className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${item.f ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
                   <input type="file" className="hidden" onChange={e => item.set(e.target.files?.[0] || null)} />
@@ -614,10 +684,24 @@ const App: React.FC = () => {
                   <p className="text-[8px] font-black uppercase truncate">{item.f ? item.f.name : item.label}</p>
                 </label>
               ))}
-            </div>
-            <button onClick={handleStartAudit} disabled={isProcessing} className="w-full py-4 rounded-xl bg-slate-900 text-white font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-xl active:scale-95">
-              {isProcessing ? 'Sincronizando Banco de Dados...' : 'Iniciar Inventário Master'}
+      </div>
+      <div className="space-y-3">
+        <button onClick={handleStartAudit} disabled={isProcessing} className="w-full py-4 rounded-xl bg-slate-900 text-white font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-xl active:scale-95">
+          {isProcessing ? 'Sincronizando Banco de Dados...' : 'Iniciar Inventário Master'}
+        </button>
+        <button onClick={handleLoadFromTrier} disabled={isTrierLoading} className="w-full py-4 rounded-xl bg-emerald-600 text-white font-black uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2">
+          <i className="fa-solid fa-bolt"></i>
+          {isTrierLoading ? 'Carregando do Trier...' : 'Carregar direto do Trier (tempo real)'}
+        </button>
+        {trierError && (
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-[10px] font-bold text-red-500 uppercase tracking-widest">{trierError}</p>
+            <button onClick={handleLoadFromTrier} className="text-[9px] font-black uppercase tracking-widest text-slate-600 hover:text-emerald-600">
+              Tentar novamente
             </button>
+          </div>
+        )}
+      </div>
           </div>
         </div>
       </div>

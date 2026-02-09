@@ -37,6 +37,7 @@ export interface AuditData {
     groups: Group[];
     empresa: string;
     filial: string;
+    inventoryNumber?: string;
 }
 
 export interface ViewState {

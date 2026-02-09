@@ -11,6 +11,7 @@ import {
 } from './types';
 import ProgressBar from './ProgressBar';
 import Breadcrumbs from './Breadcrumbs';
+import SignaturePad from '../SignaturePad';
 import {
     ClipboardList,
     FileBox,
@@ -40,6 +41,9 @@ const GROUP_CONFIG_DEFAULTS: Record<string, string> = {
     "10000": "Conveniência"
 };
 
+const TRIER_API_BASE =
+    ((import.meta as any).env?.VITE_TRIER_INTEGRATION_URL as string) || "http://localhost:8000";
+
 type TermScopeType = 'group' | 'department' | 'category';
 
 interface TermScope {
@@ -58,8 +62,12 @@ interface TermCollaborator {
 interface TermForm {
     inventoryNumber: string;
     date: string;
+    managerName2: string;
+    managerCpf2: string;
+    managerSignature2: string;
     managerName: string;
     managerCpf: string;
+    managerSignature: string;
     collaborators: TermCollaborator[];
 }
 
@@ -73,6 +81,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
     const [data, setData] = useState<AuditData | null>(null);
     const [view, setView] = useState<ViewState>({ level: 'groups' });
     const [isProcessing, setIsProcessing] = useState(false);
+    const [isTrierLoading, setIsTrierLoading] = useState(false);
+    const [trierError, setTrierError] = useState<string | null>(null);
     const [sessionStartTime, setSessionStartTime] = useState<number>(Date.now());
     const [initialDoneUnits, setInitialDoneUnits] = useState<number>(0);
     const [termModal, setTermModal] = useState<TermScope | null>(null);
@@ -81,6 +91,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
 
     const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
     const [selectedFilial, setSelectedFilial] = useState("");
+    const [inventoryNumber, setInventoryNumber] = useState("");
 
     const [fileGroups, setFileGroups] = useState<File | null>(null);
     const [fileStock, setFileStock] = useState<File | null>(null);
@@ -95,6 +106,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                 if (parsed && parsed.groups) {
                     setData(parsed);
                     if (parsed.filial) setSelectedFilial(parsed.filial);
+                    if (parsed.inventoryNumber) setInventoryNumber(parsed.inventoryNumber);
                     let done = 0;
                     parsed.groups.forEach((g: any) => g.departments.forEach((d: any) => d.categories.forEach((c: any) => {
                         if (c.status === AuditStatus.DONE) done += c.totalQuantity;
@@ -124,6 +136,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
             setFileCatIds(null);
             setInitialDoneUnits(0);
             setSessionStartTime(Date.now());
+            setInventoryNumber("");
             setView({ level: 'groups' });
         }
     };
@@ -166,6 +179,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
     const handleStartAudit = async () => {
         if (!fileGroups || !fileStock || !fileDeptIds || !fileCatIds || !selectedFilial) {
             alert("Por favor, carregue todos os arquivos e selecione a filial.");
+            return;
+        }
+        if (!inventoryNumber.trim()) {
+            alert("Informe o número do inventário.");
             return;
         }
         setIsProcessing(true);
@@ -274,11 +291,81 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
             setData({
                 groups: Object.values(groupsMap).sort((a, b) => parseInt(a.id.split('+')[0]) - parseInt(b.id.split('+')[0])),
                 empresa: selectedEmpresa,
-                filial: selectedFilial
+                filial: selectedFilial,
+                inventoryNumber: inventoryNumber.trim()
             });
             setView({ level: 'groups' });
         } catch (err) { alert("Erro ao processar arquivos."); console.error(err); }
         finally { setIsProcessing(false); }
+    };
+
+    const handleLoadFromTrier = async () => {
+        if (!selectedFilial) {
+            alert("Selecione a filial antes de carregar do Trier.");
+            return;
+        }
+        if (!inventoryNumber.trim()) {
+            alert("Informe o número do inventário.");
+            return;
+        }
+        setIsTrierLoading(true);
+        setTrierError(null);
+        try {
+            const params = new URLSearchParams({
+                filial: selectedFilial,
+                empresa: selectedEmpresa
+            });
+            const response = await fetch(`${TRIER_API_BASE}/audit/bootstrap?${params.toString()}`);
+            if (!response.ok) {
+                let detail = "";
+                try {
+                    const body = await response.json();
+                    detail = body?.detail || body?.message || "";
+                } catch {
+                    detail = "";
+                }
+                throw new Error(buildTrierErrorMessage(response.status, detail));
+            }
+            const payload = await response.json();
+            if (!payload || !payload.groups) {
+                throw new Error("Resposta invalida do servidor Trier.");
+            }
+            setData({ ...payload, inventoryNumber: inventoryNumber.trim() || payload.inventoryNumber || "" });
+            setView({ level: 'groups' });
+            setInitialDoneUnits(0);
+            setSessionStartTime(Date.now());
+            setFileGroups(null);
+            setFileStock(null);
+            setFileDeptIds(null);
+            setFileCatIds(null);
+        } catch (err: any) {
+            setTrierError(mapFetchError(err));
+        } finally {
+            setIsTrierLoading(false);
+        }
+    };
+
+    const buildTrierErrorMessage = (status: number, detail?: string) => {
+        if (status === 401 || status === 498) return "Token invalido ou expirado.";
+        if (status === 404) return "Endpoint do backend nao encontrado.";
+        if (status === 502) {
+            if (detail?.includes("ConnectTimeout")) return "Timeout ao conectar no Trier.";
+            return "SGF offline ou nao acessivel no momento.";
+        }
+        if (detail) return `Erro Trier (${status}): ${detail}`;
+        return `Erro Trier (${status}).`;
+    };
+
+    const mapFetchError = (err: any) => {
+        const message = String(err?.message || err || "");
+        if (
+            message.includes("Failed to fetch") ||
+            message.includes("NetworkError") ||
+            message.includes("ERR_CONNECTION_REFUSED")
+        ) {
+            return `Backend offline ou bloqueado (${TRIER_API_BASE}).`;
+        }
+        return message || "Falha ao carregar dados do Trier.";
     };
 
     const branchMetrics = useMemo(() => {
@@ -340,17 +427,30 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
     };
 
     const createDefaultTermForm = (): TermForm => ({
-        inventoryNumber: '',
+        inventoryNumber: inventoryNumber || data?.inventoryNumber || '',
         date: new Date().toLocaleDateString('pt-BR'),
+        managerName2: '',
+        managerCpf2: '',
+        managerSignature2: '',
         managerName: '',
         managerCpf: '',
+        managerSignature: '',
         collaborators: Array.from({ length: 10 }, () => ({ name: '', cpf: '', signature: '' }))
     });
 
     const openTermModal = (scope: TermScope) => {
         const key = buildTermKey(scope);
+        const draft = termDrafts[key];
+        const nextForm = draft
+            ? (!draft.inventoryNumber && (inventoryNumber || data?.inventoryNumber)
+                ? { ...draft, inventoryNumber: inventoryNumber || data?.inventoryNumber || '' }
+                : draft)
+            : createDefaultTermForm();
         setTermModal(scope);
-        setTermForm(termDrafts[key] || createDefaultTermForm());
+        setTermForm(nextForm);
+        if (draft && nextForm !== draft) {
+            setTermDrafts(current => ({ ...current, [key]: nextForm }));
+        }
     };
 
     const updateTermForm = (updater: (prev: TermForm) => TermForm) => {
@@ -471,14 +571,19 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
 
         const signatureRows = [
             [
-                termForm.managerName ? `Gestor: ${termForm.managerName}` : 'Gestor',
-                termForm.managerCpf || '',
-                '________________________'
+                termForm.managerName2 ? `Gestor 1: ${termForm.managerName2}` : 'Gestor 1',
+                termForm.managerCpf2 || '',
+                termForm.managerSignature2 ? { content: '', sig: termForm.managerSignature2 } : '________________________'
             ],
-            ...(termForm.collaborators.length ? termForm.collaborators : Array.from({ length: 10 }, () => ({ name: '', cpf: '', signature: '' }))).map(c => [
-                c.name || 'Colaborador',
+            [
+                termForm.managerName ? `Gestor 2: ${termForm.managerName}` : 'Gestor 2',
+                termForm.managerCpf || '',
+                termForm.managerSignature ? { content: '', sig: termForm.managerSignature } : '________________________'
+            ],
+            ...(termForm.collaborators.length ? termForm.collaborators : Array.from({ length: 10 }, () => ({ name: '', cpf: '', signature: '' }))).map((c, idx) => [
+                c.name || `Colaborador ${idx + 1}`,
                 c.cpf || '',
-                c.signature || '________________________'
+                c.signature ? { content: '', sig: c.signature } : '________________________'
             ])
         ];
 
@@ -488,8 +593,26 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
             head: [['Responsável', 'CPF', 'Ass.']],
             body: signatureRows,
             theme: 'grid',
-            styles: { fontSize: 9, cellPadding: 2 },
-            headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255] }
+            styles: { fontSize: 9, cellPadding: { top: 1, right: 2, bottom: 3, left: 2 }, valign: 'bottom', halign: 'left' },
+            columnStyles: {
+                0: { cellWidth: 80 },
+                1: { cellWidth: 45 },
+                2: { cellWidth: 55, minCellHeight: 18 }
+            },
+            headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255] },
+            didDrawCell: (data: any) => {
+                if (data.section !== 'body' || data.column.index !== 2) return;
+                const raw = data.cell.raw as any;
+                const sig = raw?.sig;
+                if (typeof sig === 'string' && sig.startsWith('data:image')) {
+                    const padding = 1;
+                    const x = data.cell.x + padding;
+                    const w = data.cell.width - padding * 2;
+                    const h = Math.min(12, data.cell.height - padding * 2);
+                    const y = data.cell.y + data.cell.height - h - padding;
+                    doc.addImage(sig, 'PNG', x, y, w, h);
+                }
+            }
         });
 
         // @ts-ignore
@@ -636,7 +759,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                         <p className="text-indigo-200 text-[10px] uppercase font-bold tracking-widest mt-1 italic">Sistema de Auditoria Master</p>
                     </div>
                     <div className="p-8 space-y-6">
-                        <div className="grid grid-cols-2 gap-4">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div className="space-y-1">
                                 <label className="text-[10px] font-black uppercase text-slate-400">Empresa</label>
                                 <select className="w-full bg-slate-50 border-2 rounded-xl px-4 py-3 font-bold border-slate-100" value={selectedEmpresa} onChange={e => setSelectedEmpresa(e.target.value)}>
@@ -650,6 +773,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                     <option value="">Selecione...</option>
                                     {FILIAIS.map(f => <option key={f} value={f.toString()}>Filial {f}</option>)}
                                 </select>
+                            </div>
+                            <div className="space-y-1">
+                                <label className="text-[10px] font-black uppercase text-slate-400">Número do Inventário</label>
+                                <input
+                                    type="text"
+                                    value={inventoryNumber}
+                                    onChange={e => setInventoryNumber(e.target.value)}
+                                    placeholder="Ex: 2026-0001"
+                                    className="w-full bg-slate-50 border-2 rounded-xl px-4 py-3 font-bold border-slate-100"
+                                />
                             </div>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -666,9 +799,23 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                 </label>
                             ))}
                         </div>
-                        <button onClick={handleStartAudit} disabled={isProcessing} className="w-full py-4 rounded-xl bg-slate-900 text-white font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-xl active:scale-95">
-                            {isProcessing ? 'Sincronizando Banco de Dados...' : 'Iniciar Inventário Master'}
-                        </button>
+                        <div className="space-y-3">
+                            <button onClick={handleStartAudit} disabled={isProcessing} className="w-full py-4 rounded-xl bg-slate-900 text-white font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-xl active:scale-95">
+                                {isProcessing ? 'Sincronizando Banco de Dados...' : 'Iniciar Inventário Master'}
+                            </button>
+                            <button onClick={handleLoadFromTrier} disabled={isTrierLoading} className="w-full py-4 rounded-xl bg-emerald-600 text-white font-black uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2">
+                                <Activity className="w-5 h-5" />
+                                {isTrierLoading ? 'Carregando do Trier...' : 'Carregar direto do Trier (tempo real)'}
+                            </button>
+                            {trierError && (
+                                <div className="flex items-center justify-between gap-3">
+                                    <p className="text-[10px] font-bold text-red-500 uppercase tracking-widest">{trierError}</p>
+                                    <button onClick={handleLoadFromTrier} className="text-[9px] font-black uppercase tracking-widest text-slate-600 hover:text-emerald-600">
+                                        Tentar novamente
+                                    </button>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1009,7 +1156,25 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                     />
                                 </div>
                                 <div className="md:col-span-2 space-y-1">
-                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Gestor</label>
+                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Gestor 1</label>
+                                    <input
+                                        type="text"
+                                        value={termForm.managerName2}
+                                        onChange={(e) => updateTermForm(prev => ({ ...prev, managerName2: e.target.value }))}
+                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                                    />
+                                </div>
+                                <div className="md:col-span-2 space-y-1">
+                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">CPF Gestor 1</label>
+                                    <input
+                                        type="text"
+                                        value={termForm.managerCpf2}
+                                        onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf2: e.target.value }))}
+                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                                    />
+                                </div>
+                                <div className="md:col-span-2 space-y-1">
+                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Gestor 2</label>
                                     <input
                                         type="text"
                                         value={termForm.managerName}
@@ -1018,13 +1183,56 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                     />
                                 </div>
                                 <div className="md:col-span-2 space-y-1">
-                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">CPF Gestor</label>
+                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">CPF Gestor 2</label>
                                     <input
                                         type="text"
                                         value={termForm.managerCpf}
                                         onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf: e.target.value }))}
                                         className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
                                     />
+                                </div>
+                            </div>
+
+                            <div className="space-y-3">
+                                <div className="flex items-center justify-between">
+                                    <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Assinaturas dos Gestores</h4>
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">A assinatura deve ser igual ao documento.</span>
+                                </div>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        {termForm.managerSignature2 ? (
+                                            <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
+                                                <img src={termForm.managerSignature2} alt="Assinatura Gestor" className="max-h-full" />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => updateTermForm(prev => ({ ...prev, managerSignature2: '' }))}
+                                                    className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
+                                                    title="Apagar assinatura"
+                                                >
+                                                    <X className="w-4 h-4" />
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <SignaturePad label="Gestor 1" onEnd={(dataUrl) => updateTermForm(prev => ({ ...prev, managerSignature2: dataUrl }))} />
+                                        )}
+                                    </div>
+                                    <div>
+                                        {termForm.managerSignature ? (
+                                            <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
+                                                <img src={termForm.managerSignature} alt="Assinatura Gestor" className="max-h-full" />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => updateTermForm(prev => ({ ...prev, managerSignature: '' }))}
+                                                    className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
+                                                    title="Apagar assinatura"
+                                                >
+                                                    <X className="w-4 h-4" />
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <SignaturePad label="Gestor 2" onEnd={(dataUrl) => updateTermForm(prev => ({ ...prev, managerSignature: dataUrl }))} />
+                                        )}
+                                    </div>
                                 </div>
                             </div>
 
@@ -1039,41 +1247,66 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                     </button>
                                 </div>
                                 <div className="grid grid-cols-1 gap-3">
-                                    {termForm.collaborators.map((collab, idx) => (
-                                        <div key={idx} className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                                            <input
-                                                type="text"
-                                                value={collab.name}
-                                                onChange={(e) => updateTermForm(prev => ({
-                                                    ...prev,
-                                                    collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, name: e.target.value } : c)
-                                                }))}
-                                                placeholder="Colaborador"
-                                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
-                                            />
-                                            <input
-                                                type="text"
-                                                value={collab.cpf}
-                                                onChange={(e) => updateTermForm(prev => ({
-                                                    ...prev,
-                                                    collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, cpf: e.target.value } : c)
-                                                }))}
-                                                placeholder="CPF"
-                                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
-                                            />
-                                            <input
-                                                type="text"
-                                                value={collab.signature}
-                                                onChange={(e) => updateTermForm(prev => ({
-                                                    ...prev,
-                                                    collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: e.target.value } : c)
-                                                }))}
-                                                placeholder="Ass."
-                                                className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
-                                            />
+                                    {termForm.collaborators.map((collab, idx) => {
+                                        const collabNumber = idx + 1;
+                                        return (
+                                        <div key={idx} className="flex gap-3 items-start">
+                                            <div className="mt-2 w-7 h-7 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-600 text-[10px] font-black flex items-center justify-center shrink-0">
+                                                {collabNumber}
+                                            </div>
+                                            <div className="flex-1 space-y-3">
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                    <input
+                                                        type="text"
+                                                        value={collab.name}
+                                                        onChange={(e) => updateTermForm(prev => ({
+                                                            ...prev,
+                                                            collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, name: e.target.value } : c)
+                                                        }))}
+                                                        placeholder={`Colaborador ${collabNumber}`}
+                                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
+                                                    />
+                                                    <input
+                                                        type="text"
+                                                        value={collab.cpf}
+                                                        onChange={(e) => updateTermForm(prev => ({
+                                                            ...prev,
+                                                            collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, cpf: e.target.value } : c)
+                                                        }))}
+                                                        placeholder={`CPF ${collabNumber}`}
+                                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
+                                                    />
+                                                </div>
+                                                {collab.signature ? (
+                                                    <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
+                                                        <img src={collab.signature} alt="Assinatura Colaborador" className="max-h-full" />
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => updateTermForm(prev => ({
+                                                                ...prev,
+                                                                collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: '' } : c)
+                                                            }))}
+                                                            className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
+                                                            title="Apagar assinatura"
+                                                        >
+                                                            <X className="w-4 h-4" />
+                                                        </button>
+                                                    </div>
+                                                ) : (
+                                                    <SignaturePad
+                                                        label={`Assinatura ${collabNumber}`}
+                                                        onEnd={(dataUrl) => updateTermForm(prev => ({
+                                                            ...prev,
+                                                            collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: dataUrl } : c)
+                                                        }))}
+                                                    />
+                                                )}
+                                            </div>
                                         </div>
-                                    ))}
+                                    );
+                                    })}
                                 </div>
+                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">A assinatura deve ser igual ao documento.</p>
                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Todos colaboradores da Filial devem assinar.</p>
                             </div>
                         </div>
