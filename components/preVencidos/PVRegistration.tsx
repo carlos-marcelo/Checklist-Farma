@@ -72,6 +72,17 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     }
   }, [scanningProduct, originBranch, sessionInfo?.filial, originBranches]);
 
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && scanningProduct) {
+        setScanningProduct(null);
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [scanningProduct]);
+
   const handleScan = (code: string) => {
     const foundByBarcode = masterProducts.find(p => p.barcode === code);
     const foundByReduced = masterProducts.find(p => p.reducedCode === code);
