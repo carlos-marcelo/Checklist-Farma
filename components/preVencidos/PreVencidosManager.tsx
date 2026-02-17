@@ -1492,6 +1492,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                 pvRecords={pvRecords} salesRecords={salesRecords} confirmedPVSales={confirmedPVSales}
                 finalizedREDSByPeriod={effectiveFinalizedByPeriod}
                 currentSalesPeriod={salesPeriod}
+                sessionInfo={sessionInfo}
+                lastUpload={localLastUpload}
                 onUpdatePVSale={handleUpdatePVSale} onFinalizeSale={handleFinalizeSale}
               />
             </div>
