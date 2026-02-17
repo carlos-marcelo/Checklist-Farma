@@ -869,7 +869,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
               </div>
               <div className="sm:col-span-2 p-4 bg-emerald-50/60 rounded-xl border border-emerald-100 min-w-0">
                 <p className="text-emerald-700 text-[10px] font-bold uppercase tracking-widest truncate">Total Previsto p/ Vencer</p>
-                <p className="text-xl sm:text-2xl font-black text-emerald-800 mt-0.5 break-words">{formatCurrency(totalCostPredicted)}</p>
+                <p className="text-xl sm:text-2xl font-black text-emerald-800 mt-0.5 whitespace-nowrap">{formatCurrency(totalCostPredicted)}</p>
               </div>
             </div>
           </div>
@@ -915,27 +915,25 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                           }`}
                       >
                         <div className="flex flex-col gap-2">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="leading-tight">
-                              <p className={`text-base font-black ${isActive ? 'text-blue-700' : status.color}`}>{date}</p>
-                              <div className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase inline-block mt-1 ${status.label === 'VENCIDO' ? 'bg-red-100 text-red-700' :
-                                status.label === 'CRÍTICO' ? 'bg-rose-100 text-rose-700' :
-                                  'bg-blue-100 text-blue-700'
-                                }`}>
-                                {status.label}
-                              </div>
-                            </div>
-                            <div className="text-right min-w-[120px]">
-                              <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">Custo</p>
-                              <p className="text-base font-bold text-emerald-700 leading-none break-words">{formatCurrency(data.costTotal)}</p>
+                          <div className="flex flex-col items-center text-center">
+                            <p className={`text-base font-black ${isActive ? 'text-blue-700' : status.color}`}>{date}</p>
+                            <div className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase inline-block mt-1 ${status.label === 'VENCIDO' ? 'bg-red-100 text-red-700' :
+                              status.label === 'CRÍTICO' ? 'bg-rose-100 text-rose-700' :
+                                'bg-blue-100 text-blue-700'
+                              }`}>
+                              {status.label}
                             </div>
                           </div>
+                          <div className="flex flex-col items-center text-center">
+                            <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">Custo</p>
+                            <p className="text-base font-bold text-emerald-700 leading-none">{formatCurrency(data.costTotal)}</p>
+                          </div>
                           <div className="grid grid-cols-2 gap-3">
-                            <div>
+                            <div className="text-center">
                               <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">Itens</p>
                               <p className="text-base font-black text-slate-800 leading-none">{data.items}</p>
                             </div>
-                            <div>
+                            <div className="text-center">
                               <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">SKUs</p>
                               <p className="text-base font-bold text-slate-700 leading-none">{data.skus.size}</p>
                             </div>
