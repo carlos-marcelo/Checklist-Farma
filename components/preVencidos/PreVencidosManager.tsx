@@ -27,6 +27,7 @@ import {
   DbPVInventoryReport,
   fetchPVSession,
   upsertPVSession,
+  deletePVSession,
   insertPVBranchRecord,
   fetchPVBranchRecords,
   deletePVBranchRecord,
@@ -2099,11 +2100,39 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     return `${date.toLocaleDateString('pt-BR')} ${date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
   };
 
-  const logout = () => {
-    if (confirm('Encerrar sessão?')) {
-      if (userEmail) clearLocalPVSession(userEmail);
-      window.location.reload();
+  const logout = async () => {
+    if (!confirm('Encerrar sessão?')) return;
+
+    if (userEmail) {
+      clearLocalPVSession(userEmail);
+      clearLastSalesUpload(userEmail);
+      await clearLocalPVReports(userEmail).catch(() => { });
+      await deletePVReports(userEmail).catch(() => { });
+      await deletePVSession(userEmail);
     }
+
+    setHasCompletedSetup(false);
+    setCurrentView(AppView.SETUP);
+    setSessionInfo(null);
+    setSystemProducts([]);
+    setDcbBaseProducts([]);
+    setMasterProducts([]);
+    setPvRecords([]);
+    setSalesRecords([]);
+    setConfirmedPVSales({});
+    setFinalizedREDSByPeriod({});
+    setSalesPeriod('');
+    setHistoryRecords([]);
+    setPvSessionId(null);
+    setSalesUploads([]);
+    setAnalysisReports({});
+    setInventoryReport(null);
+    setInventoryCostByBarcode({});
+    setInventoryStockByBarcode({});
+    setLocalLastUpload(null);
+    setLastDashboardReport(null);
+    setPvRecordEvents([]);
+    setPdfPreview(null);
   };
 
   const canSimulateDashboard = historyRecords.length > 0 || !!lastDashboardReport;

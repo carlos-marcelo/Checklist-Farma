@@ -1287,6 +1287,21 @@ export async function upsertPVSalesAnalysisReport(report: DbPVSalesAnalysisRepor
   }
 }
 
+export async function deletePVSession(userEmail: string): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('pv_sessions')
+      .delete()
+      .eq('user_email', userEmail);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Erro ao excluir sessão PV do Supabase:', error);
+    return false;
+  }
+}
+
 export async function fetchPVBranchRecordEvents(companyId: string, branch: string, sinceISO?: string): Promise<DbPVBranchRecordEvent[]> {
   try {
     if (!branch) return [];
