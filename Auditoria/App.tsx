@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { AuditData, ViewState, AuditStatus, Group, Department, Category, Product } from './types';
 import ProgressBar from './components/ProgressBar';
 import Breadcrumbs from './components/Breadcrumbs';
-import { fetchLatestAudit, upsertAuditSession, fetchAuditSession } from '../supabaseService';
+import { fetchLatestAudit, upsertAuditSession, fetchAuditSession, fetchAuditsHistory, DbAuditSession } from '../supabaseService';
 
 const ALLOWED_IDS = [66, 67, 2000, 3000, 4000, 8000, 10000];
 const FILIAIS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18];
@@ -56,6 +56,11 @@ const App: React.FC = () => {
   const [termModal, setTermModal] = useState<TermScope | null>(null);
   const [termForm, setTermForm] = useState<TermForm | null>(null);
   const [termDrafts, setTermDrafts] = useState<Record<string, TermForm>>({});
+
+  // History & Refinements
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyList, setHistoryList] = useState<DbAuditSession[]>([]);
+  const [viewingHistoryParams, setViewingHistoryParams] = useState<{ branch: string, number: number } | null>(null);
 
   const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
   const [selectedFilial, setSelectedFilial] = useState("");
@@ -111,6 +116,54 @@ const App: React.FC = () => {
     loadSession();
   }, [selectedFilial]);
 
+  const loadHistory = async () => {
+    if (!selectedFilial) return;
+    setIsProcessing(true);
+    try {
+      const list = await fetchAuditsHistory(selectedFilial);
+      setHistoryList(list);
+      setShowHistory(true);
+    } catch (err) {
+      console.error(err);
+      alert("Erro ao carregar histórico.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleFinishAudit = async () => {
+    if (!data || !dbSessionId || !selectedFilial) return;
+
+    // Enforce 100% progress
+    if (branchMetrics.progress < 100) {
+      alert(`A auditoria está apenas em ${Math.round(branchMetrics.progress)}%. É necessário 100% de conclusão para finalizar.`);
+      return;
+    }
+
+    if (!window.confirm("Confirma a finalização desta auditoria? Isso bloqueará edições e habilitará a próxima.")) return;
+
+    setIsProcessing(true);
+    try {
+      await upsertAuditSession({
+        id: dbSessionId,
+        branch: selectedFilial,
+        audit_number: auditNumber,
+        status: 'completed', // MARK AS COMPLETED
+        data: data,
+        progress: branchMetrics.progress
+      });
+      alert("Auditoria Finalizada com Sucesso! A próxima auditoria agora está liberada.");
+
+      // Reload state to prepare next
+      window.location.reload();
+    } catch (err) {
+      alert("Erro ao finalizar.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+
   // Remover localStorage effect antigo
   // useEffect(() => { ... }, []); 
 
@@ -147,21 +200,54 @@ const App: React.FC = () => {
     }
   }, [data]);
 
-  const handleReset = () => {
-    if (window.confirm("Atenção! Isso apagará todo o progresso atual para iniciar uma nova auditoria/filial. Confirmar?")) {
-      localStorage.removeItem(STORAGE_KEY);
-      localStorage.clear(); // Limpa todas as chaves para garantir
-      setData(null);
-      setSelectedFilial("");
-      setFileGroups(null);
-      setFileStock(null);
-      setFileDeptIds(null);
-      setFileCatIds(null);
-      setInitialDoneUnits(0);
-      setSessionStartTime(Date.now());
-      setView({ level: 'groups' });
-      // Força o reload para limpar estados globais e referências de arquivos
+  const handleSafeExit = async () => {
+    if (!selectedFilial) {
       window.location.reload();
+      return;
+    }
+
+    if (window.confirm("Deseja sair da auditoria? Seu progresso será salvo automaticamente e você poderá retomar depois.")) {
+      try {
+        setIsProcessing(true);
+        // Calculate current progress
+        let skus = 0, doneSkus = 0;
+        if (data && data.groups) {
+          data.groups.forEach(g => g.departments.forEach(d => d.categories.forEach(c => {
+            skus += c.itemsCount;
+            if (c.status === AuditStatus.DONE) doneSkus += c.itemsCount;
+          })));
+        }
+        const progress = skus > 0 ? (doneSkus / skus) * 100 : 0;
+
+        // Save to Supabase (using existing dbSessionId or create new if not exists, though handleStartAudit ensures it exists)
+        await upsertAuditSession({
+          id: dbSessionId, // Might be undefined if not started yet, but selectedFilial check covers most
+          branch: selectedFilial,
+          audit_number: auditNumber,
+          status: 'open',
+          data: data as any,
+          progress: progress
+        });
+
+        // Exit
+        localStorage.removeItem(STORAGE_KEY);
+        setData(null);
+        setSelectedFilial("");
+        setFileGroups(null);
+        setFileStock(null);
+        setFileDeptIds(null);
+        setFileCatIds(null);
+        setInitialDoneUnits(0);
+        setSessionStartTime(Date.now());
+        setView({ level: 'groups' });
+        window.location.reload();
+
+      } catch (err) {
+        console.error("Error saving session:", err);
+        alert("Erro ao salvar sessão. Tente novamente.");
+      } finally {
+        setIsProcessing(false);
+      }
     }
   };
 
@@ -211,6 +297,10 @@ const App: React.FC = () => {
 
     if (!fileGroups || !fileStock || !fileDeptIds || !fileCatIds) {
       alert("Por favor, carregue todos os arquivos para iniciar uma nova auditoria.");
+      return;
+    }
+
+    if (!window.confirm(`ATENÇÃO: Você está prestes a criar um NOVO inventário (Nº ${auditNumber}) para a Filial ${selectedFilial}.\n\nDeseja realmente prosseguir?`)) {
       return;
     }
 
@@ -478,7 +568,19 @@ const App: React.FC = () => {
   const openTermModal = (scope: TermScope) => {
     const key = buildTermKey(scope);
     setTermModal(scope);
-    setTermForm(termDrafts[key] || createDefaultTermForm());
+
+    // Auto-generate Inventory Number: YYYY-000X
+    const autoInventoryNumber = `${new Date().getFullYear()}-${String(auditNumber).padStart(4, '0')}`;
+
+    const existing = termDrafts[key];
+    if (existing) {
+      // Update existing draft with current audit number if missing or mismatch (optional, but safer to enforce)
+      setTermForm({ ...existing, inventoryNumber: autoInventoryNumber });
+    } else {
+      const def = createDefaultTermForm();
+      def.inventoryNumber = autoInventoryNumber;
+      setTermForm(def);
+    }
   };
 
   const updateTermForm = (updater: (prev: TermForm) => TermForm) => {
@@ -758,41 +860,93 @@ const App: React.FC = () => {
             <p className="text-indigo-200 text-[10px] uppercase font-bold tracking-widest mt-1 italic">Sistema de Auditoria Master</p>
           </div>
           <div className="p-8 space-y-6">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-400">Empresa</label><select className="w-full bg-slate-50 border-2 rounded-xl px-4 py-3 font-bold border-slate-100" value={selectedEmpresa} onChange={e => setSelectedEmpresa(e.target.value)}><option>Drogaria Cidade</option></select></div>
               <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-400">Selecione a Filial</label><select className="w-full bg-slate-50 border-2 rounded-xl px-4 py-3 font-bold border-slate-100" value={selectedFilial} onChange={e => setSelectedFilial(e.target.value)}><option value="">Selecione...</option>{FILIAIS.map(f => <option key={f} value={f.toString()}>Filial {f}</option>)}</select></div>
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-400">Número do Inventário</label>
+                <div className="w-full bg-slate-100 border-2 rounded-xl px-4 py-3 font-bold border-slate-200 text-slate-500 cursor-not-allowed">
+                  {selectedFilial ? `${new Date().getFullYear()}-${selectedFilial.padStart(4, '0')}-${String(auditNumber).padStart(4, '0')}` : 'Selecione a Filial...'}
+                </div>
+              </div>
             </div>
-<<<<<<< Updated upstream
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {[ { f: fileGroups, set: setFileGroups, label: 'Estrutura' }, { f: fileStock, set: setFileStock, label: 'Saldos' }, { f: fileDeptIds, set: setFileDeptIds, label: 'IDs Depto' }, { f: fileCatIds, set: setFileCatIds, label: 'IDs Cat' } ].map((item, i) => (
-=======
+
+            {selectedFilial && (
+              <div className="bg-slate-50 p-4 rounded-xl border border-slate-100 text-center mb-4">
+                {auditNumber > 1 ? (
+                  <p className="text-sm text-slate-600 font-bold">Próxima Auditoria Disponível: <span className="text-indigo-600 text-lg">Nº {auditNumber}</span></p>
+                ) : (
+                  <p className="text-sm text-slate-600 font-bold">Nenhuma auditoria anterior. Iniciando <span className="text-indigo-600 text-lg">Auditoria Nº 1</span></p>
+                )}
+                <button onClick={loadHistory} className="mt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400 hover:text-indigo-600 underline">
+                  Ver Histórico de Auditorias
+                </button>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[{ f: fileGroups, set: setFileGroups, label: 'Estrutura' }, { f: fileStock, set: setFileStock, label: 'Saldos' }, { f: fileDeptIds, set: setFileDeptIds, label: 'IDs Depto' }, { f: fileCatIds, set: setFileCatIds, label: 'IDs Cat' }].map((item, i) => (
->>>>>>> Stashed changes
                 <label key={i} className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${item.f ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
                   <input type="file" className="hidden" onChange={e => item.set(e.target.files?.[0] || null)} />
                   <i className={`fa-solid fa-file-excel text-xl mb-1 ${item.f ? 'text-emerald-500' : 'text-slate-300'}`}></i>
                   <p className="text-[8px] font-black uppercase truncate">{item.f ? item.f.name : item.label}</p>
                 </label>
               ))}
-      </div>
-      <div className="space-y-3">
-        <button onClick={handleStartAudit} disabled={isProcessing} className="w-full py-4 rounded-xl bg-slate-900 text-white font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-xl active:scale-95">
-          {isProcessing ? 'Sincronizando Banco de Dados...' : 'Iniciar Inventário Master'}
-        </button>
-        <button onClick={handleLoadFromTrier} disabled={isTrierLoading} className="w-full py-4 rounded-xl bg-emerald-600 text-white font-black uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2">
-          <i className="fa-solid fa-bolt"></i>
-          {isTrierLoading ? 'Carregando do Trier...' : 'Carregar direto do Trier (tempo real)'}
-        </button>
-        {trierError && (
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-[10px] font-bold text-red-500 uppercase tracking-widest">{trierError}</p>
-            <button onClick={handleLoadFromTrier} className="text-[9px] font-black uppercase tracking-widest text-slate-600 hover:text-emerald-600">
-              Tentar novamente
-            </button>
-          </div>
-        )}
-      </div>
+            </div>
+
+            <div className="space-y-3">
+              <button onClick={handleStartAudit} disabled={isProcessing || !selectedFilial} className="w-full py-4 rounded-xl bg-slate-900 text-white font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-xl active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed">
+                {isProcessing ? 'Sincronizando...' : `Iniciar Auditoria Nº ${auditNumber}`}
+              </button>
+
+              <button onClick={handleLoadFromTrier} disabled={isTrierLoading || !selectedFilial} className="w-full py-4 rounded-xl bg-emerald-600 text-white font-black uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                <i className="fa-solid fa-bolt"></i>
+                {isTrierLoading ? 'Carregando...' : 'Carregar direto do Trier (tempo real)'}
+              </button>
+            </div>
+
+            {showHistory && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm p-4">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+                  <div className="bg-slate-100 p-4 border-b flex justify-between items-center">
+                    <h3 className="font-bold text-slate-700">Histórico - Filial {selectedFilial}</h3>
+                    <button onClick={() => setShowHistory(false)} className="text-slate-400 hover:text-red-500"><i className="fa-solid fa-times"></i></button>
+                  </div>
+                  <div className="p-4 max-h-[60vh] overflow-y-auto space-y-2">
+                    {historyList.length === 0 ? (
+                      <p className="text-center text-slate-400 text-sm py-4">Nenhuma auditoria finalizada encontrada.</p>
+                    ) : (
+                      historyList.map(h => (
+                        <div key={h.id} className="border rounded-lg p-3 flex justify-between items-center hover:bg-slate-50">
+                          <div>
+                            <p className="font-bold text-slate-800">Auditoria Nº {h.audit_number}</p>
+                            <p className="text-xs text-slate-500">
+                              Status: <span className={h.status === 'completed' ? 'text-emerald-600 font-bold' : 'text-amber-600'}>{h.status === 'completed' ? 'Finalizada' : 'Em Aberto'}</span>
+                              • {new Date(h.updated_at!).toLocaleDateString()}
+                            </p>
+                            {h.status === 'completed' && <p className="text-[10px] text-slate-400">Progresso Final: {Math.round(h.progress)}%</p>}
+                          </div>
+                          {h.status === 'completed' && (
+                            <button
+                              onClick={() => {
+                                setData(h.data);
+                                setViewingHistoryParams({ branch: h.branch, number: h.audit_number });
+                                setShowHistory(false);
+                                setAuditNumber(h.audit_number);
+                              }}
+                              className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded text-xs font-bold hover:bg-indigo-200"
+                            >
+                              Visualizar
+                            </button>
+                          )}
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
           </div>
         </div>
       </div>
@@ -814,17 +968,26 @@ const App: React.FC = () => {
               <span className="text-[9px] font-black uppercase tracking-[0.3em] text-indigo-300 leading-none mb-1">AUDITANDO AGORA</span>
               <span className="text-2xl font-black italic tracking-tighter leading-tight text-white drop-shadow-md">
                 FILIAL UNIDADE F{data.filial} <span className="text-sm text-indigo-300 ml-2 not-italic">#{data.auditNumber || auditNumber}</span>
+                {viewingHistoryParams && <span className="ml-2 px-2 py-0.5 bg-amber-500 text-[10px] rounded text-white uppercase tracking-widest">Modo Visualização</span>}
               </span>
             </div>
-            <div className="ml-6 flex flex-col items-center">
-              <div className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_10px_#34d399]"></div>
-              <span className="text-[8px] font-bold text-emerald-400 mt-1 uppercase">LIVE</span>
+            <div className="ml-6 flex items-center gap-3">
+              {!viewingHistoryParams && (
+                <button onClick={handleFinishAudit} className="bg-emerald-500 hover:bg-emerald-400 text-white text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-lg shadow-lg hover:scale-105 transition-all">
+                  Finalizar Auditoria
+                </button>
+              )}
+              <div className="flex flex-col items-center">
+                <div className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_10px_#34d399]"></div>
+                <span className="text-[8px] font-bold text-emerald-400 mt-1 uppercase">LIVE</span>
+              </div>
             </div>
           </div>
         </div>
+
         <div className="flex gap-3">
           <button onClick={handleExportPDF} className="bg-white/10 hover:bg-white/20 px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all border border-white/10"><i className="fa-solid fa-file-export"></i> PDF ANALÍTICO</button>
-          <button onClick={handleReset} className="w-10 h-10 rounded-xl bg-red-600/20 text-red-500 border border-red-500/30 flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-lg active:scale-90"><i className="fa-solid fa-power-off"></i></button>
+          <button onClick={handleSafeExit} className="w-10 h-10 rounded-xl bg-red-600/20 text-red-500 border border-red-500/30 flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-lg active:scale-90" title="Sair e Salvar"><i className="fa-solid fa-power-off"></i></button>
         </div>
       </header>
 
@@ -877,7 +1040,7 @@ const App: React.FC = () => {
             <span className="text-[8px] font-bold text-indigo-300 uppercase mt-1 tracking-tighter">PREVISÃO FINAL</span>
           </div>
         </div>
-      </div>
+      </div >
 
       <main className="max-w-[1400px] mx-auto px-8 mt-8">
         <Breadcrumbs
@@ -904,8 +1067,8 @@ const App: React.FC = () => {
                         onClick={(e) => { e.stopPropagation(); if (isComplete) openTermModal({ type: 'group', groupId: group.id }); }}
                         disabled={!isComplete}
                         className={`px-3 h-10 rounded-xl border flex items-center justify-center gap-1 transition-all shadow-sm text-[10px] font-black uppercase ${isComplete
-                            ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-600 hover:text-white'
-                            : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                          ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-600 hover:text-white'
+                          : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                           }`}
                         title={isComplete ? 'Assinar e imprimir termo' : 'Conclua 100% para liberar'}
                       >
@@ -958,8 +1121,8 @@ const App: React.FC = () => {
                         onClick={() => { if (isComplete) openTermModal({ type: 'department', groupId: selectedGroup!.id, deptId: dept.id }); }}
                         disabled={!isComplete}
                         className={`px-4 py-2 min-w-[76px] rounded-xl text-[10px] font-black uppercase transition-all shadow-sm ${isComplete
-                            ? 'bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white'
-                            : 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed'
+                          ? 'bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white'
+                          : 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed'
                           }`}
                         title={isComplete ? 'Assinar e imprimir termo' : 'Conclua 100% para liberar'}
                       >
@@ -1002,8 +1165,8 @@ const App: React.FC = () => {
                   onClick={() => { if (cat.status === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id }); }}
                   disabled={cat.status !== AuditStatus.DONE}
                   className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${cat.status === AuditStatus.DONE
-                      ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:text-white hover:bg-indigo-600'
-                      : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                    ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:text-white hover:bg-indigo-600'
+                    : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                     }`}
                 >
                   Termo
@@ -1040,8 +1203,8 @@ const App: React.FC = () => {
                     onClick={() => { if (selectedCat.status === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: selectedCat.id }); }}
                     disabled={selectedCat.status !== AuditStatus.DONE}
                     className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${selectedCat.status === AuditStatus.DONE
-                        ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-600 hover:text-white'
-                        : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                      ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-600 hover:text-white'
+                      : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                       }`}
                   >
                     Imprimir Termo
@@ -1062,155 +1225,160 @@ const App: React.FC = () => {
         </div>
       </main>
 
-      {view.level !== 'groups' && (
-        <button onClick={() => setView(prev => ({ ...prev, level: prev.level === 'products' ? 'categories' : prev.level === 'categories' ? 'departments' : 'groups' }))} className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-16 py-6 rounded-full shadow-[0_25px_60px_rgba(0,0,0,0.4)] font-black text-[14px] uppercase tracking-[0.3em] hover:bg-indigo-600 hover:scale-110 active:scale-95 transition-all z-[2002] border-8 border-[#f1f5f9] flex items-center gap-6 group">
-          <i className="fa-solid fa-arrow-left-long transition-transform group-hover:-translate-x-3"></i> Retornar Nível
-        </button>
-      )}
+      {
+        view.level !== 'groups' && (
+          <button onClick={() => setView(prev => ({ ...prev, level: prev.level === 'products' ? 'categories' : prev.level === 'categories' ? 'departments' : 'groups' }))} className="fixed bottom-10 left-1/2 -translate-x-1/2 bg-slate-900 text-white px-16 py-6 rounded-full shadow-[0_25px_60px_rgba(0,0,0,0.4)] font-black text-[14px] uppercase tracking-[0.3em] hover:bg-indigo-600 hover:scale-110 active:scale-95 transition-all z-[2002] border-8 border-[#f1f5f9] flex items-center gap-6 group">
+            <i className="fa-solid fa-arrow-left-long transition-transform group-hover:-translate-x-3"></i> Retornar Nível
+          </button>
+        )
+      }
 
-      {termModal && termForm && termScopeInfo && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[2005] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-              <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest flex items-center gap-2">
-                <i className="fa-solid fa-file-signature text-indigo-500"></i>
-                Termo de Auditoria - {termModal.type === 'group' ? 'Grupo' : termModal.type === 'department' ? 'Departamento' : 'Categoria'}
-              </h3>
-              <button onClick={() => { setTermModal(null); setTermForm(null); }} className="text-slate-400 hover:text-red-500 transition-colors">
-                <i className="fa-solid fa-xmark"></i>
-              </button>
-            </div>
-            <div className="p-6 max-h-[70vh] overflow-y-auto custom-scrollbar space-y-6">
-              <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 text-xs text-slate-600">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
-                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Filial</p>
-                    <p className="font-bold">Filial {data?.filial}</p>
-                  </div>
-                  <div>
-                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Grupo</p>
-                    <p className="font-bold">{termScopeInfo.group.name}</p>
-                  </div>
-                  <div>
-                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Nível</p>
-                    <p className="font-bold capitalize">{termModal.type}</p>
-                  </div>
-                </div>
-                <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Departamentos</p>
-                    <p className="font-semibold">{termScopeInfo.departments.map(d => d.name).join(', ') || '-'}</p>
-                  </div>
-                  <div>
-                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Categorias</p>
-                    <p className="font-semibold">{termScopeInfo.categories.map(c => c.name).join(', ') || '-'}</p>
-                  </div>
-                </div>
+      {
+        termModal && termForm && termScopeInfo && (
+          <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[2005] flex items-center justify-center p-4">
+            <div className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+              <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+                <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest flex items-center gap-2">
+                  <i className="fa-solid fa-file-signature text-indigo-500"></i>
+                  Termo de Auditoria - {termModal.type === 'group' ? 'Grupo' : termModal.type === 'department' ? 'Departamento' : 'Categoria'}
+                </h3>
+                <button onClick={() => { setTermModal(null); setTermForm(null); }} className="text-slate-400 hover:text-red-500 transition-colors">
+                  <i className="fa-solid fa-xmark"></i>
+                </button>
               </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="md:col-span-2 space-y-1">
-                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Nº Inventário</label>
-                  <input
-                    type="text"
-                    value={termForm.inventoryNumber}
-                    onChange={(e) => updateTermForm(prev => ({ ...prev, inventoryNumber: e.target.value }))}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
-                  />
-                </div>
-                <div className="md:col-span-2 space-y-1">
-                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Data</label>
-                  <input
-                    type="text"
-                    value={termForm.date}
-                    onChange={(e) => updateTermForm(prev => ({ ...prev, date: e.target.value }))}
-                    placeholder="DD/MM/AAAA"
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
-                  />
-                </div>
-                <div className="md:col-span-2 space-y-1">
-                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Gestor</label>
-                  <input
-                    type="text"
-                    value={termForm.managerName}
-                    onChange={(e) => updateTermForm(prev => ({ ...prev, managerName: e.target.value }))}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
-                  />
-                </div>
-                <div className="md:col-span-2 space-y-1">
-                  <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">CPF Gestor</label>
-                  <input
-                    type="text"
-                    value={termForm.managerCpf}
-                    onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf: e.target.value }))}
-                    className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Colaboradores</h4>
-                  <button
-                    onClick={() => updateTermForm(prev => ({ ...prev, collaborators: [...prev.collaborators, { name: '', cpf: '', signature: '' }] }))}
-                    className="text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"
-                  >
-                    + Adicionar
-                  </button>
-                </div>
-                <div className="grid grid-cols-1 gap-3">
-                  {termForm.collaborators.map((collab, idx) => (
-                    <div key={idx} className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      <input
-                        type="text"
-                        value={collab.name}
-                        onChange={(e) => updateTermForm(prev => ({
-                          ...prev,
-                          collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, name: e.target.value } : c)
-                        }))}
-                        placeholder="Colaborador"
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
-                      />
-                      <input
-                        type="text"
-                        value={collab.cpf}
-                        onChange={(e) => updateTermForm(prev => ({
-                          ...prev,
-                          collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, cpf: e.target.value } : c)
-                        }))}
-                        placeholder="CPF"
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
-                      />
-                      <input
-                        type="text"
-                        value={collab.signature}
-                        onChange={(e) => updateTermForm(prev => ({
-                          ...prev,
-                          collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: e.target.value } : c)
-                        }))}
-                        placeholder="Ass."
-                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
-                      />
+              <div className="p-6 max-h-[70vh] overflow-y-auto custom-scrollbar space-y-6">
+                <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 text-xs text-slate-600">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Filial</p>
+                      <p className="font-bold">Filial {data?.filial}</p>
                     </div>
-                  ))}
+                    <div>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Grupo</p>
+                      <p className="font-bold">{termScopeInfo.group.name}</p>
+                    </div>
+                    <div>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Nível</p>
+                      <p className="font-bold capitalize">{termModal.type}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Departamentos</p>
+                      <p className="font-semibold">{termScopeInfo.departments.map(d => d.name).join(', ') || '-'}</p>
+                    </div>
+                    <div>
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Categorias</p>
+                      <p className="font-semibold">{termScopeInfo.categories.map(c => c.name).join(', ') || '-'}</p>
+                    </div>
+                  </div>
                 </div>
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Todos colaboradores da Filial devem assinar.</p>
+
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="md:col-span-2 space-y-1">
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Nº Inventário</label>
+                    <input
+                      type="text"
+                      value={termForm.inventoryNumber}
+                      readOnly
+                      title="Gerado automaticamente"
+                      className="w-full bg-slate-100 border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-500 cursor-not-allowed"
+                    />
+                  </div>
+                  <div className="md:col-span-2 space-y-1">
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Data</label>
+                    <input
+                      type="text"
+                      value={termForm.date}
+                      onChange={(e) => updateTermForm(prev => ({ ...prev, date: e.target.value }))}
+                      placeholder="DD/MM/AAAA"
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                    />
+                  </div>
+                  <div className="md:col-span-2 space-y-1">
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Gestor</label>
+                    <input
+                      type="text"
+                      value={termForm.managerName}
+                      onChange={(e) => updateTermForm(prev => ({ ...prev, managerName: e.target.value }))}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                    />
+                  </div>
+                  <div className="md:col-span-2 space-y-1">
+                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">CPF Gestor</label>
+                    <input
+                      type="text"
+                      value={termForm.managerCpf}
+                      onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf: e.target.value }))}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Colaboradores</h4>
+                    <button
+                      onClick={() => updateTermForm(prev => ({ ...prev, collaborators: [...prev.collaborators, { name: '', cpf: '', signature: '' }] }))}
+                      className="text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"
+                    >
+                      + Adicionar
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3">
+                    {termForm.collaborators.map((collab, idx) => (
+                      <div key={idx} className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <input
+                          type="text"
+                          value={collab.name}
+                          onChange={(e) => updateTermForm(prev => ({
+                            ...prev,
+                            collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, name: e.target.value } : c)
+                          }))}
+                          placeholder="Colaborador"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
+                        />
+                        <input
+                          type="text"
+                          value={collab.cpf}
+                          onChange={(e) => updateTermForm(prev => ({
+                            ...prev,
+                            collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, cpf: e.target.value } : c)
+                          }))}
+                          placeholder="CPF"
+                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
+                        />
+                        <input
+                          type="text"
+                          value={collab.signature}
+                          onChange={(e) => updateTermForm(prev => ({
+                            ...prev,
+                            collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: e.target.value } : c)
+                          }))}
+                          placeholder="Ass."
+                          className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Todos colaboradores da Filial devem assinar.</p>
+                </div>
               </div>
-            </div>
-            <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
-              <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
-                Produtos no termo: {termScopeInfo.products.length}
-              </span>
-              <button
-                onClick={handlePrintTerm}
-                className="px-6 py-3 rounded-xl bg-slate-900 text-white font-black text-[11px] uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-md"
-              >
-                Imprimir Termo
-              </button>
+              <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                  Produtos no termo: {termScopeInfo.products.length}
+                </span>
+                <button
+                  onClick={handlePrintTerm}
+                  className="px-6 py-3 rounded-xl bg-slate-900 text-white font-black text-[11px] uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-md"
+                >
+                  Imprimir Termo
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 10px; }
@@ -1218,7 +1386,7 @@ const App: React.FC = () => {
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 12px; border: 3px solid #f8fafc; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
       `}</style>
-    </div>
+    </div >
   );
 };
 

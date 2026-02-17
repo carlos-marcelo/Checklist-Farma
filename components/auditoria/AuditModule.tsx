@@ -9,6 +9,7 @@ import {
     Category,
     Product
 } from './types';
+import { fetchLatestAudit, upsertAuditSession } from '../../supabaseService';
 import ProgressBar from './ProgressBar';
 import Breadcrumbs from './Breadcrumbs';
 import SignaturePad from '../SignaturePad';
@@ -74,10 +75,12 @@ interface TermForm {
 interface AuditModuleProps {
     userEmail: string;
     userName: string;
+    userRole: string;
     companies: any[];
 }
 
-const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companies }) => {
+const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole, companies }) => {
+    const isMaster = userRole === 'MASTER';
     const [data, setData] = useState<AuditData | null>(null);
     const [view, setView] = useState<ViewState>({ level: 'groups' });
     const [isProcessing, setIsProcessing] = useState(false);
@@ -91,7 +94,85 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
 
     const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
     const [selectedFilial, setSelectedFilial] = useState("");
-    const [inventoryNumber, setInventoryNumber] = useState("");
+    const [nextAuditNumber, setNextAuditNumber] = useState(1);
+    const [dbSessionId, setDbSessionId] = useState<string | undefined>(undefined);
+    const [isUpdatingStock, setIsUpdatingStock] = useState(false);
+
+    // Fetch next audit number when branch changes
+    useEffect(() => {
+        let active = true;
+        const loadAuditNum = async () => {
+            if (!selectedFilial) return;
+            try {
+                const latest = await fetchLatestAudit(selectedFilial);
+                if (active) {
+                    if (latest && latest.status !== 'completed') {
+                        setNextAuditNumber(latest.audit_number);
+                        setDbSessionId(latest.id);
+                        if (latest.data) {
+                            setData(latest.data);
+                            setDbSessionId(latest.id);
+
+                            if (isMaster) {
+                                const wantsToUpdate = window.confirm(`Auditoria Nº ${latest.audit_number} em aberto encontrada.\n\nDeseja carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
+                                if (wantsToUpdate) {
+                                    setIsUpdatingStock(true);
+                                } else {
+                                    setIsUpdatingStock(false);
+                                }
+                                setView({ level: 'groups' });
+                            } else {
+                                // Non-master: auto-enter and warn
+                                setIsUpdatingStock(false);
+                                setView({ level: 'groups' });
+                                const lastLoadStr = latest.updated_at ? new Date(latest.updated_at).toLocaleString('pt-BR') : 'não informada';
+                                alert(`ENTRANDO EM MODO CONSULTA.\n\nAviso: O estoque exibido reflete a última carga realizada pelo usuário Master em ${lastLoadStr} e pode estar desatualizado.`);
+                            }
+
+                            let done = 0;
+                            if (latest.data.groups) {
+                                latest.data.groups.forEach((g: any) =>
+                                    g.departments.forEach((d: any) =>
+                                        d.categories.forEach((c: any) => {
+                                            if (c.status === 'DONE') done += c.totalQuantity;
+                                        })
+                                    )
+                                );
+                            }
+                            setInitialDoneUnits(done);
+                        }
+                    } else {
+                        // No open audit found
+                        if (!isMaster) {
+                            alert("Esta filial não está disponível para visualização pois não possui um inventário aberto no momento.");
+                            setSelectedFilial("");
+                            setData(null);
+                        } else {
+                            if (latest && latest.status === 'completed') {
+                                setNextAuditNumber(latest.audit_number + 1);
+                            } else {
+                                setNextAuditNumber(1);
+                            }
+                            setData(null);
+                            setView({ level: 'groups' });
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error("Error fetching audit number:", err);
+            }
+        };
+        loadAuditNum();
+        return () => { active = false; };
+    }, [selectedFilial]);
+
+    // Derived inventory number (Auto-generated)
+    const inventoryNumber = useMemo(() => {
+        return selectedFilial ? `${new Date().getFullYear()}-${selectedFilial.padStart(4, '0')}-${String(nextAuditNumber).padStart(4, '0')}` : '';
+    }, [selectedFilial, nextAuditNumber]);
+
+    // Dummy setter to keep existing logic working without massive refactor
+    const setInventoryNumber = (val: string) => { };
 
     const [fileGroups, setFileGroups] = useState<File | null>(null);
     const [fileStock, setFileStock] = useState<File | null>(null);
@@ -125,10 +206,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
         }
     }, [data]);
 
-    const handleReset = () => {
-        if (window.confirm("Atenção! Isso apagará todo o progresso atual para iniciar uma nova auditoria/filial. Confirmar?")) {
+    const handleSafeExit = async () => {
+        if (!selectedFilial) {
+            setData(null);
+            setView({ level: 'groups' });
+            return;
+        }
+
+        // Se não for Master, não precisa confirmar nem salvar (já que não salvou nada)
+        if (!isMaster) {
             localStorage.removeItem(STORAGE_KEY);
             setData(null);
+            setDbSessionId(undefined);
             setSelectedFilial("");
             setFileGroups(null);
             setFileStock(null);
@@ -136,8 +225,89 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
             setFileCatIds(null);
             setInitialDoneUnits(0);
             setSessionStartTime(Date.now());
-            setInventoryNumber("");
             setView({ level: 'groups' });
+            return;
+        }
+
+        if (window.confirm("Deseja sair da auditoria? Seu progresso será salvo automaticamente e você poderá retomar depois.")) {
+            try {
+                setIsProcessing(true);
+                // Calculate current progress
+                const progress = calculateProgress(data!);
+
+                // Save to Supabase
+                await upsertAuditSession({
+                    id: dbSessionId,
+                    branch: selectedFilial,
+                    audit_number: nextAuditNumber,
+                    status: 'open',
+                    data: data as any,
+                    progress: progress
+                });
+
+                // Clear local view state to 'exit'
+                localStorage.removeItem(STORAGE_KEY);
+                setData(null);
+                setDbSessionId(undefined);
+                setSelectedFilial("");
+                setFileGroups(null);
+                setFileStock(null);
+                setFileDeptIds(null);
+                setFileCatIds(null);
+                setInitialDoneUnits(0);
+                setSessionStartTime(Date.now());
+                setView({ level: 'groups' });
+            } catch (err) {
+                console.error("Error saving session:", err);
+                alert("Erro ao salvar sessão. Tente novamente.");
+            } finally {
+                setIsProcessing(false);
+            }
+        }
+    };
+
+    const handleFinishAudit = async () => {
+        if (!data) return;
+
+        const progress = calculateProgress(data);
+
+        if (progress < 100) {
+            alert("A auditoria ainda não está 100% completa. Verifique os itens pendentes.");
+            return;
+        }
+
+        if (window.confirm(`ATENÇÃO: Você está prestes a FINALIZAR a auditoria Nº ${nextAuditNumber}.\n\nIsso irá concluir o processo e não permitirá mais edições.\n\nDeseja continuar?`)) {
+            try {
+                setIsProcessing(true);
+                await upsertAuditSession({
+                    id: dbSessionId,
+                    branch: selectedFilial,
+                    audit_number: nextAuditNumber,
+                    status: 'completed',
+                    data: data as any,
+                    progress: 100
+                });
+
+                alert("Auditoria finalizada com sucesso!");
+
+                // Clear local view state to 'exit'
+                localStorage.removeItem(STORAGE_KEY);
+                setData(null);
+                setDbSessionId(undefined);
+                setSelectedFilial("");
+                setFileGroups(null);
+                setFileStock(null);
+                setFileDeptIds(null);
+                setFileCatIds(null);
+                setInitialDoneUnits(0);
+                setSessionStartTime(Date.now());
+                setView({ level: 'groups' });
+            } catch (err) {
+                console.error("Error finishing session:", err);
+                alert("Erro ao finalizar auditoria. Tente novamente.");
+            } finally {
+                setIsProcessing(false);
+            }
         }
     };
 
@@ -177,17 +347,67 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
     };
 
     const handleStartAudit = async () => {
-        if (!fileGroups || !fileStock || !fileDeptIds || !fileCatIds || !selectedFilial) {
-            alert("Por favor, carregue todos os arquivos e selecione a filial.");
+        if (!selectedFilial) {
+            alert("Selecione a filial.");
             return;
         }
-        if (!inventoryNumber.trim()) {
-            alert("Informe o número do inventário.");
-            return;
+
+        if (isUpdatingStock) {
+            if (!fileStock) {
+                alert("Por favor, carregue o arquivo de SALDOS.");
+                return;
+            }
+        } else {
+            if (data && data.groups && data.groups.length > 0) {
+                setView({ level: 'groups' });
+                return;
+            }
+            if (!fileGroups || !fileStock || !fileDeptIds || !fileCatIds) {
+                alert("Por favor, carregue todos os arquivos para iniciar uma nova auditoria.");
+                return;
+            }
+            if (!window.confirm(`ATENÇÃO: Você está prestes a criar um NOVO inventário (Nº ${nextAuditNumber}) para a Filial ${selectedFilial}.\n\nDeseja realmente prosseguir?`)) {
+                return;
+            }
         }
+
         setIsProcessing(true);
         try {
-            const rowsGroups = await readExcel(fileGroups);
+            if (isUpdatingStock && data) {
+                // Lógica de MERGE de estoque
+                const rowsStock = await readExcel(fileStock!);
+                const stockMap: Record<string, number> = {};
+                rowsStock.forEach(row => {
+                    if (!row || row.length < 14) return;
+                    const b = normalizeBarcode(row[1]);
+                    const q = parseFloat(row[13]?.toString() || "0");
+                    if (b) stockMap[b] = q;
+                });
+
+                const newData = { ...data };
+                newData.groups.forEach(g => {
+                    g.departments.forEach(d => {
+                        d.categories.forEach(c => {
+                            if (c.status !== AuditStatus.DONE) {
+                                c.totalQuantity = 0;
+                                c.products.forEach(p => {
+                                    const newQty = stockMap[p.code] || 0;
+                                    p.quantity = newQty;
+                                    c.totalQuantity += newQty;
+                                });
+                            }
+                        });
+                    });
+                });
+
+                setData(newData);
+                setIsUpdatingStock(false);
+                setView({ level: 'groups' });
+                alert("Estoques atualizados (apenas para itens não finalizados).");
+                return;
+            }
+
+            const rowsGroups = await readExcel(fileGroups!);
             const rowsStock = await readExcel(fileStock);
             const rowsDepts = await readExcel(fileDeptIds);
             const rowsCats = await readExcel(fileCatIds);
@@ -641,35 +861,80 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
         const fileName = `Termo_Auditoria_F${data.filial}_${termModal.type}_${safeName}.pdf`;
         doc.save(fileName);
     };
+    const calculateProgress = (auditData: AuditData) => {
+        let skus = 0, doneSkus = 0;
+        if (auditData.groups) {
+            auditData.groups.forEach(g => g.departments.forEach(d => d.categories.forEach(c => {
+                skus += c.itemsCount;
+                if (c.status === AuditStatus.DONE) doneSkus += c.itemsCount;
+            })));
+        }
+        return skus > 0 ? (doneSkus / skus) * 100 : 0;
+    };
 
-    const toggleScopeStatus = (groupId?: string, deptId?: string, catId?: string) => {
+    const toggleScopeStatus = async (groupId?: string, deptId?: string, catId?: string) => {
         if (!data) return;
-        setData(prev => {
-            if (!prev) return null;
-            return {
-                ...prev,
-                groups: prev.groups.map(g => {
-                    if (groupId && g.id !== groupId) return g;
-                    return {
-                        ...g,
-                        departments: g.departments.map(d => {
-                            if (deptId && d.id !== deptId) return d;
-                            let targetCats = d.categories;
-                            if (catId) targetCats = d.categories.filter(c => c.id === catId);
-                            const allDone = targetCats.every(c => c.status === AuditStatus.DONE);
-                            const newStatus = allDone ? AuditStatus.TODO : AuditStatus.DONE;
-                            return {
-                                ...d,
-                                categories: d.categories.map(c => {
-                                    if (catId && c.id !== catId) return c;
-                                    return { ...c, status: newStatus };
-                                })
-                            };
-                        })
-                    };
-                })
-            };
+
+        // Determinar se o escopo atual já está todo concluído
+        let allDone = true;
+        data.groups.forEach(g => {
+            if (groupId && g.id !== groupId) return;
+            g.departments.forEach(d => {
+                if (deptId && d.id !== deptId) return;
+                d.categories.forEach(c => {
+                    if (catId && c.id !== catId) return;
+                    if (c.status !== AuditStatus.DONE) allDone = false;
+                });
+            });
         });
+
+        const msg = allDone
+            ? "Tem certeza que deseja desmarcar? O registro será atualizado no Supabase."
+            : "Tem certeza que deseja finalizar e gravar o estoque no Supabase?";
+
+        if (!window.confirm(msg)) return;
+
+        const nextData: AuditData = {
+            ...data,
+            groups: data.groups.map(g => {
+                if (groupId && g.id !== groupId) return g;
+                return {
+                    ...g,
+                    departments: g.departments.map(d => {
+                        if (deptId && d.id !== deptId) return d;
+                        let targetCats = d.categories;
+                        if (catId) targetCats = d.categories.filter(c => c.id === catId);
+                        const allDone = targetCats.every(c => c.status === AuditStatus.DONE);
+                        const newStatus = allDone ? AuditStatus.TODO : AuditStatus.DONE;
+                        return {
+                            ...d,
+                            categories: d.categories.map(c => {
+                                if (catId && c.id !== catId) return c;
+                                return { ...c, status: newStatus };
+                            })
+                        };
+                    })
+                };
+            })
+        };
+
+        setData(nextData);
+
+        try {
+            const progress = calculateProgress(nextData);
+            await upsertAuditSession({
+                id: dbSessionId,
+                branch: selectedFilial,
+                audit_number: nextAuditNumber,
+                status: 'open',
+                data: nextData as any,
+                progress: progress
+            });
+            alert("Estoque gravado no Supabase com sucesso!");
+        } catch (err) {
+            console.error("Error persisting toggle:", err);
+            alert("Erro ao gravar no Supabase. O progresso foi salvo localmente.");
+        }
     };
 
     const handleExportPDF = async () => {
@@ -750,7 +1015,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
     const selectedCat = useMemo(() => selectedDept?.categories.find(c => c.id === view.selectedCatId), [selectedDept, view.selectedCatId]);
     const termScopeInfo = useMemo(() => (termModal ? buildTermScopeInfo(termModal) : null), [termModal, data]);
 
-    if (!data) {
+    if (!data || isUpdatingStock) {
         return (
             <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6 font-sans">
                 <div className="max-w-2xl w-full bg-white rounded-[2rem] shadow-2xl overflow-hidden">
@@ -775,14 +1040,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                 </select>
                             </div>
                             <div className="space-y-1">
-                                <label className="text-[10px] font-black uppercase text-slate-400">Número do Inventário</label>
-                                <input
-                                    type="text"
-                                    value={inventoryNumber}
-                                    onChange={e => setInventoryNumber(e.target.value)}
-                                    placeholder="Ex: 2026-0001"
-                                    className="w-full bg-slate-50 border-2 rounded-xl px-4 py-3 font-bold border-slate-100"
-                                />
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-black uppercase text-slate-400">Número do Inventário</label>
+                                    <div className="w-full bg-slate-100 border-2 rounded-xl px-4 py-3 font-bold border-slate-200 text-slate-500 cursor-not-allowed">
+                                        {inventoryNumber || 'Selecione a Filial...'}
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -791,21 +1054,24 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                 { f: fileStock, set: setFileStock, label: 'Saldos' },
                                 { f: fileDeptIds, set: setFileDeptIds, label: 'IDs Depto' },
                                 { f: fileCatIds, set: setFileCatIds, label: 'IDs Cat' }
-                            ].map((item, i) => (
-                                <label key={i} className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${item.f ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
-                                    <input type="file" className="hidden" onChange={e => item.set(e.target.files?.[0] || null)} />
-                                    <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${item.f ? 'text-emerald-500' : 'text-slate-300'}`} />
-                                    <p className="text-[8px] font-black uppercase truncate">{item.f ? item.f.name : item.label}</p>
-                                </label>
-                            ))}
+                            ].map((item, i) => {
+                                const isDisabled = (isUpdatingStock && item.label !== 'Saldos') || !isMaster;
+                                return (
+                                    <label key={i} className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${isDisabled ? 'opacity-30 cursor-not-allowed' : ''} ${item.f ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
+                                        <input type="file" className="hidden" disabled={isDisabled} onChange={e => item.set(e.target.files?.[0] || null)} />
+                                        <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${item.f ? 'text-emerald-500' : 'text-slate-300'}`} />
+                                        <p className="text-[8px] font-black uppercase truncate">{item.f ? item.f.name : item.label}</p>
+                                    </label>
+                                );
+                            })}
                         </div>
                         <div className="space-y-3">
-                            <button onClick={handleStartAudit} disabled={isProcessing} className="w-full py-4 rounded-xl bg-slate-900 text-white font-black uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-xl active:scale-95">
-                                {isProcessing ? 'Sincronizando Banco de Dados...' : 'Iniciar Inventário Master'}
+                            <button onClick={handleStartAudit} disabled={isProcessing || !isMaster} className={`w-full py-4 rounded-xl text-white font-black uppercase tracking-widest transition-all shadow-xl active:scale-95 ${isProcessing || !isMaster ? 'bg-slate-300 cursor-not-allowed' : 'bg-slate-900 hover:bg-indigo-600'}`}>
+                                {isProcessing ? 'Sincronizando Banco de Dados...' : isMaster ? 'Iniciar Inventário Master' : 'Apenas Master pode Iniciar'}
                             </button>
-                            <button onClick={handleLoadFromTrier} disabled={isTrierLoading} className="w-full py-4 rounded-xl bg-emerald-600 text-white font-black uppercase tracking-widest hover:bg-emerald-500 transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2">
+                            <button onClick={handleLoadFromTrier} disabled={isTrierLoading || !isMaster} className={`w-full py-4 rounded-xl text-white font-black uppercase tracking-widest transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2 ${isTrierLoading || !isMaster ? 'bg-slate-300 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-500'}`}>
                                 <Activity className="w-5 h-5" />
-                                {isTrierLoading ? 'Carregando do Trier...' : 'Carregar direto do Trier (tempo real)'}
+                                {isTrierLoading ? 'Carregando do Trier...' : isMaster ? 'Carregar direto do Trier (tempo real)' : 'Apenas Master pode Carregar'}
                             </button>
                             {trierError && (
                                 <div className="flex items-center justify-between gap-3">
@@ -848,7 +1114,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                     <button onClick={handleExportPDF} className="bg-white/10 hover:bg-white/20 px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all border border-white/10">
                         <FileBox className="w-4 h-4" /> PDF ANALÍTICO
                     </button>
-                    <button onClick={handleReset} className="w-10 h-10 rounded-xl bg-red-600/20 text-red-500 border border-red-500/30 flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-lg active:scale-90">
+                    {Math.round(branchMetrics.progress) === 100 && (
+                        <button onClick={handleFinishAudit} disabled={!isMaster} className={`px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all shadow-lg ${!isMaster ? 'bg-slate-400 opacity-50 cursor-not-allowed' : 'bg-emerald-500 hover:bg-emerald-400 animate-pulse'}`}>
+                            <CheckSquare className="w-4 h-4" /> CONCLUIR AUDITORIA
+                        </button>
+                    )}
+                    <button onClick={handleSafeExit} className="w-10 h-10 rounded-xl bg-red-600/20 text-red-500 border border-red-500/30 flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-lg active:scale-90" title="Sair e Salvar">
                         <Power className="w-5 h-5" />
                     </button>
                 </div>
@@ -930,7 +1201,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                                 <FileSignature className="w-4 h-4" />
                                                 Termo
                                             </button>
-                                            <button onClick={(e) => { e.stopPropagation(); toggleScopeStatus(group.id); }} className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center hover:bg-emerald-600 hover:text-white transition-all shadow-sm">
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); toggleScopeStatus(group.id); }}
+                                                disabled={!isMaster}
+                                                className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all shadow-sm ${!isMaster ? 'bg-slate-50 text-slate-200 border-slate-100 cursor-not-allowed' : 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white'}`}
+                                            >
                                                 <CheckSquare className="w-5 h-5" />
                                             </button>
                                             <button onClick={() => setView({ level: 'departments', selectedGroupId: group.id })} className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center hover:bg-indigo-600 transition-all shadow-md">
@@ -984,7 +1259,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                             >
                                                 Termo
                                             </button>
-                                            <button onClick={() => toggleScopeStatus(selectedGroup?.id, dept.id)} className="px-4 py-2 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 text-[10px] font-black uppercase hover:bg-emerald-600 hover:text-white transition-all shadow-sm">Alternar Tudo</button>
+                                            <button
+                                                onClick={() => toggleScopeStatus(selectedGroup?.id, dept.id)}
+                                                disabled={!isMaster}
+                                                className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${!isMaster ? 'bg-slate-50 text-slate-200 border-slate-100 cursor-not-allowed' : 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white'}`}
+                                            >
+                                                Alternar Tudo
+                                            </button>
                                             <button onClick={() => setView(prev => ({ ...prev, level: 'categories', selectedDeptId: dept.id }))} className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center hover:bg-indigo-600 transition-all shadow-lg">
                                                 <ChevronRight className="w-6 h-6" />
                                             </button>
@@ -1027,7 +1308,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                     Termo
                                 </button>
                                 <button onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className="px-6 py-4 rounded-xl bg-slate-50 text-slate-400 text-[10px] font-black uppercase hover:text-indigo-600 hover:bg-white transition-all border border-transparent hover:border-indigo-100 shadow-sm">Detalhar</button>
-                                <button onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, cat.id)} className={`px-10 py-4 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-md active:scale-95 ${cat.status === AuditStatus.DONE ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}>{cat.status === AuditStatus.DONE ? 'CONCLUÍDO' : 'FINALIZAR'}</button>
+                                <button
+                                    onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, cat.id)}
+                                    disabled={!isMaster}
+                                    className={`px-10 py-4 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-md active:scale-95 ${!isMaster ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : cat.status === AuditStatus.DONE ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}
+                                >
+                                    {!isMaster ? 'APENAS VISUALIZAÇÃO' : cat.status === AuditStatus.DONE ? 'CONCLUÍDO' : 'FINALIZAR'}
+                                </button>
                             </div>
                         </div>
                     ))}
@@ -1061,8 +1348,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                     >
                                         Imprimir Termo
                                     </button>
-                                    <button onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, selectedCat.id)} className={`px-10 py-5 rounded-2xl font-black text-[12px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95 border-b-4 ${selectedCat.status === AuditStatus.DONE ? 'bg-emerald-600 border-emerald-800' : 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500'}`}>
-                                        {selectedCat.status === AuditStatus.DONE ? 'REABRIR CATEGORIA' : 'CONCLUIR AUDITORIA'}
+                                    <button
+                                        onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
+                                        disabled={!isMaster}
+                                        className={`px-10 py-5 rounded-2xl font-black text-[12px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95 border-b-4 ${!isMaster ? 'bg-slate-300 border-slate-400 text-slate-500 cursor-not-allowed' : selectedCat.status === AuditStatus.DONE ? 'bg-emerald-600 border-emerald-800' : 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500'}`}
+                                    >
+                                        {!isMaster ? 'APENAS CONSULTA' : selectedCat.status === AuditStatus.DONE ? 'REABRIR CATEGORIA' : 'CONCLUIR AUDITORIA'}
                                     </button>
                                 </div>
                             </div>
@@ -1142,7 +1433,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                         type="text"
                                         value={termForm.inventoryNumber}
                                         onChange={(e) => updateTermForm(prev => ({ ...prev, inventoryNumber: e.target.value }))}
-                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                                        readOnly={!isMaster}
+                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                     />
                                 </div>
                                 <div className="md:col-span-2 space-y-1">
@@ -1152,7 +1444,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                         value={termForm.date}
                                         onChange={(e) => updateTermForm(prev => ({ ...prev, date: e.target.value }))}
                                         placeholder="DD/MM/AAAA"
-                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                                        readOnly={!isMaster}
+                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                     />
                                 </div>
                                 <div className="md:col-span-2 space-y-1">
@@ -1161,7 +1454,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                         type="text"
                                         value={termForm.managerName2}
                                         onChange={(e) => updateTermForm(prev => ({ ...prev, managerName2: e.target.value }))}
-                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                                        readOnly={!isMaster}
+                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                     />
                                 </div>
                                 <div className="md:col-span-2 space-y-1">
@@ -1170,7 +1464,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                         type="text"
                                         value={termForm.managerCpf2}
                                         onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf2: e.target.value }))}
-                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                                        readOnly={!isMaster}
+                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                     />
                                 </div>
                                 <div className="md:col-span-2 space-y-1">
@@ -1179,7 +1474,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                         type="text"
                                         value={termForm.managerName}
                                         onChange={(e) => updateTermForm(prev => ({ ...prev, managerName: e.target.value }))}
-                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                                        readOnly={!isMaster}
+                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                     />
                                 </div>
                                 <div className="md:col-span-2 space-y-1">
@@ -1188,7 +1484,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                         type="text"
                                         value={termForm.managerCpf}
                                         onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf: e.target.value }))}
-                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700"
+                                        readOnly={!isMaster}
+                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                     />
                                 </div>
                             </div>
@@ -1203,34 +1500,42 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                                         {termForm.managerSignature2 ? (
                                             <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
                                                 <img src={termForm.managerSignature2} alt="Assinatura Gestor" className="max-h-full" />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => updateTermForm(prev => ({ ...prev, managerSignature2: '' }))}
-                                                    className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
-                                                    title="Apagar assinatura"
-                                                >
-                                                    <X className="w-4 h-4" />
-                                                </button>
+                                                {isMaster && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => updateTermForm(prev => ({ ...prev, managerSignature2: '' }))}
+                                                        className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
+                                                        title="Apagar assinatura"
+                                                    >
+                                                        <X className="w-4 h-4" />
+                                                    </button>
+                                                )}
                                             </div>
-                                        ) : (
+                                        ) : isMaster ? (
                                             <SignaturePad label="Gestor 1" onEnd={(dataUrl) => updateTermForm(prev => ({ ...prev, managerSignature2: dataUrl }))} />
+                                        ) : (
+                                            <div className="border border-slate-100 rounded-xl bg-slate-50 h-40 flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase tracking-widest italic">Assinatura Pendente</div>
                                         )}
                                     </div>
                                     <div>
                                         {termForm.managerSignature ? (
                                             <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
                                                 <img src={termForm.managerSignature} alt="Assinatura Gestor" className="max-h-full" />
-                                                <button
-                                                    type="button"
-                                                    onClick={() => updateTermForm(prev => ({ ...prev, managerSignature: '' }))}
-                                                    className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
-                                                    title="Apagar assinatura"
-                                                >
-                                                    <X className="w-4 h-4" />
-                                                </button>
+                                                {isMaster && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => updateTermForm(prev => ({ ...prev, managerSignature: '' }))}
+                                                        className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
+                                                        title="Apagar assinatura"
+                                                    >
+                                                        <X className="w-4 h-4" />
+                                                    </button>
+                                                )}
                                             </div>
-                                        ) : (
+                                        ) : isMaster ? (
                                             <SignaturePad label="Gestor 2" onEnd={(dataUrl) => updateTermForm(prev => ({ ...prev, managerSignature: dataUrl }))} />
+                                        ) : (
+                                            <div className="border border-slate-100 rounded-xl bg-slate-50 h-40 flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase tracking-widest italic">Assinatura Pendente</div>
                                         )}
                                     </div>
                                 </div>
@@ -1239,71 +1544,79 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, companie
                             <div className="space-y-3">
                                 <div className="flex items-center justify-between">
                                     <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Colaboradores</h4>
-                                    <button
-                                        onClick={() => updateTermForm(prev => ({ ...prev, collaborators: [...prev.collaborators, { name: '', cpf: '', signature: '' }] }))}
-                                        className="text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"
-                                    >
-                                        + Adicionar
-                                    </button>
+                                    {isMaster && (
+                                        <button
+                                            onClick={() => updateTermForm(prev => ({ ...prev, collaborators: [...prev.collaborators, { name: '', cpf: '', signature: '' }] }))}
+                                            className="text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"
+                                        >
+                                            + Adicionar
+                                        </button>
+                                    )}
                                 </div>
                                 <div className="grid grid-cols-1 gap-3">
                                     {termForm.collaborators.map((collab, idx) => {
                                         const collabNumber = idx + 1;
                                         return (
-                                        <div key={idx} className="flex gap-3 items-start">
-                                            <div className="mt-2 w-7 h-7 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-600 text-[10px] font-black flex items-center justify-center shrink-0">
-                                                {collabNumber}
-                                            </div>
-                                            <div className="flex-1 space-y-3">
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                    <input
-                                                        type="text"
-                                                        value={collab.name}
-                                                        onChange={(e) => updateTermForm(prev => ({
-                                                            ...prev,
-                                                            collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, name: e.target.value } : c)
-                                                        }))}
-                                                        placeholder={`Colaborador ${collabNumber}`}
-                                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
-                                                    />
-                                                    <input
-                                                        type="text"
-                                                        value={collab.cpf}
-                                                        onChange={(e) => updateTermForm(prev => ({
-                                                            ...prev,
-                                                            collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, cpf: e.target.value } : c)
-                                                        }))}
-                                                        placeholder={`CPF ${collabNumber}`}
-                                                        className="w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700"
-                                                    />
+                                            <div key={idx} className="flex gap-3 items-start">
+                                                <div className="mt-2 w-7 h-7 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-600 text-[10px] font-black flex items-center justify-center shrink-0">
+                                                    {collabNumber}
                                                 </div>
-                                                {collab.signature ? (
-                                                    <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
-                                                        <img src={collab.signature} alt="Assinatura Colaborador" className="max-h-full" />
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => updateTermForm(prev => ({
+                                                <div className="flex-1 space-y-3">
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                        <input
+                                                            type="text"
+                                                            value={collab.name}
+                                                            onChange={(e) => updateTermForm(prev => ({
                                                                 ...prev,
-                                                                collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: '' } : c)
+                                                                collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, name: e.target.value } : c)
                                                             }))}
-                                                            className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
-                                                            title="Apagar assinatura"
-                                                        >
-                                                            <X className="w-4 h-4" />
-                                                        </button>
+                                                            placeholder={`Colaborador ${collabNumber}`}
+                                                            readOnly={!isMaster}
+                                                            className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                        />
+                                                        <input
+                                                            type="text"
+                                                            value={collab.cpf}
+                                                            onChange={(e) => updateTermForm(prev => ({
+                                                                ...prev,
+                                                                collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, cpf: e.target.value } : c)
+                                                            }))}
+                                                            placeholder={`CPF ${collabNumber}`}
+                                                            readOnly={!isMaster}
+                                                            className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                        />
                                                     </div>
-                                                ) : (
-                                                    <SignaturePad
-                                                        label={`Assinatura ${collabNumber}`}
-                                                        onEnd={(dataUrl) => updateTermForm(prev => ({
-                                                            ...prev,
-                                                            collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: dataUrl } : c)
-                                                        }))}
-                                                    />
-                                                )}
+                                                    {collab.signature ? (
+                                                        <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
+                                                            <img src={collab.signature} alt="Assinatura Colaborador" className="max-h-full" />
+                                                            {isMaster && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => updateTermForm(prev => ({
+                                                                        ...prev,
+                                                                        collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: '' } : c)
+                                                                    }))}
+                                                                    className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
+                                                                    title="Apagar assinatura"
+                                                                >
+                                                                    <X className="w-4 h-4" />
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    ) : isMaster ? (
+                                                        <SignaturePad
+                                                            label={`Assinatura ${collabNumber}`}
+                                                            onEnd={(dataUrl) => updateTermForm(prev => ({
+                                                                ...prev,
+                                                                collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: dataUrl } : c)
+                                                            }))}
+                                                        />
+                                                    ) : (
+                                                        <div className="border border-slate-100 rounded-xl bg-slate-50 h-40 flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase tracking-widest italic">Assinatura Pendente</div>
+                                                    )}
+                                                </div>
                                             </div>
-                                        </div>
-                                    );
+                                        );
                                     })}
                                 </div>
                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">A assinatura deve ser igual ao documento.</p>

@@ -16,21 +16,19 @@ CREATE TABLE IF NOT EXISTS public.audit_sessions (
 ALTER TABLE public.audit_sessions ENABLE ROW LEVEL SECURITY;
 
 -- Create policies (Adjust as needed for your auth setup)
--- Allow authenticated users to view all audit sessions
-CREATE POLICY "Enable read access for authenticated users" ON public.audit_sessions
+CREATE POLICY "Enable read access for all" ON public.audit_sessions
     FOR SELECT
-    TO authenticated
+    TO anon, authenticated
     USING (true);
 
--- Allow authenticated users to insert/update audit sessions
-CREATE POLICY "Enable insert for authenticated users" ON public.audit_sessions
+CREATE POLICY "Enable insert for all" ON public.audit_sessions
     FOR INSERT
-    TO authenticated
+    TO anon, authenticated
     WITH CHECK (true);
 
-CREATE POLICY "Enable update for authenticated users" ON public.audit_sessions
+CREATE POLICY "Enable update for all" ON public.audit_sessions
     FOR UPDATE
-    TO authenticated
+    TO anon, authenticated
     USING (true)
     WITH CHECK (true);
 

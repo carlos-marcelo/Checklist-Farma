@@ -892,6 +892,22 @@ export async function upsertAuditSession(session: DbAuditSession): Promise<DbAud
   }
 }
 
+export async function fetchAuditsHistory(branch: string): Promise<DbAuditSession[]> {
+  try {
+    const { data, error } = await supabase
+      .from('audit_sessions')
+      .select('*')
+      .eq('branch', branch)
+      .order('audit_number', { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching audit history:', error);
+    return [];
+  }
+}
+
 
 
 export async function fetchActiveSalesReport(companyId: string, branch: string): Promise<DbActiveSalesReport | null> {
