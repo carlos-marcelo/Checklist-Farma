@@ -2263,6 +2263,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             <PVRegistration
               masterProducts={masterProducts} pvRecords={pvRecords} sessionInfo={sessionInfo}
               pvEventSummary={pvEventSummary}
+              barcodeByReduced={barcodeByReduced}
+              inventoryCostByBarcode={inventoryCostByBarcode}
               originBranches={originBranches}
               onRefresh={handleRefresh}
               onUpdatePV={handleUpdatePVRecord}

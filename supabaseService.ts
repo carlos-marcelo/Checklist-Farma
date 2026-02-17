@@ -132,6 +132,9 @@ export interface DbPVSalesHistory {
   qty_sold_pv: number;
   qty_ignored: number;
   qty_neutral: number;
+  unit_price?: number;
+  value_sold_pv?: number;
+  value_ignored?: number;
   finalized_at?: string;
 }
 

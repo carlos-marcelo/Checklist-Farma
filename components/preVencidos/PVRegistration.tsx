@@ -13,6 +13,8 @@ interface PVRegistrationProps {
     deleted: number;
     lastUpdatedAt: string | null;
   };
+  barcodeByReduced?: Record<string, string>;
+  inventoryCostByBarcode?: Record<string, number>;
   originBranches?: string[];
   onUpdatePV?: (id: string, updates: Partial<PVRecord>) => void;
   onAddPV: (record: PVRecord) => void;
@@ -25,6 +27,8 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   pvRecords,
   sessionInfo,
   pvEventSummary,
+  barcodeByReduced = {},
+  inventoryCostByBarcode = {},
   originBranches = [],
   onUpdatePV,
   onAddPV,
@@ -235,6 +239,29 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     return map;
   }, [masterProducts]);
 
+  const formatCurrency = (value: number) => {
+    try {
+      return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0);
+    } catch {
+      return `R$ ${Number(value || 0).toFixed(2)}`;
+    }
+  };
+
+  const getInventoryCostUnitByReduced = (reducedCode?: string) => {
+    if (!reducedCode) return 0;
+    const barcode = barcodeByReduced[reducedCode] || '';
+    if (!barcode) return 0;
+    const normalized = String(barcode || '').replace(/\D/g, '');
+    const noZeros = normalized.replace(/^0+/, '') || normalized;
+    const value = inventoryCostByBarcode[normalized] ?? inventoryCostByBarcode[noZeros];
+    return Number(value || 0);
+  };
+
+  const totalCostPredicted = pvRecords.reduce((acc, rec) => {
+    const unit = getInventoryCostUnitByReduced(rec.reducedCode);
+    return acc + unit * rec.quantity;
+  }, 0);
+
   // PDF Export
   const handleExportPDF = () => {
     const jsPDF = (window as any).jspdf?.jsPDF;
@@ -255,17 +282,20 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     doc.text('Legenda: Vermelho = Vencido, Vinho = < 30 dias', 14, 35);
     doc.setTextColor(0, 0, 0);
 
-    const tableColumn = ['Reduzido', 'Descrição', 'Origem', 'Resp. Setor', 'Qtd', 'Vencimento', 'Status', 'Dias', 'Resp.', 'Cadastro'];
+    const tableColumn = ['Reduzido', 'Descrição', 'Origem', 'Resp. Setor', 'Qtd', 'Custo Unit.', 'Custo Total', 'Vencimento', 'Status', 'Dias', 'Resp.', 'Cadastro'];
     const tableRows: any[] = [];
 
     filteredRecords.forEach(rec => {
       const status = getExpiryStatus(rec.expiryDate);
+      const unitCost = getInventoryCostUnitByReduced(rec.reducedCode);
       tableRows.push([
         rec.reducedCode,
         rec.name,
         rec.originBranch || '-',
         rec.sectorResponsible || '-',
         rec.quantity,
+        formatCurrency(unitCost),
+        formatCurrency(unitCost * rec.quantity),
         rec.expiryDate,
         status.label,
         status.days + ' dias',
@@ -281,7 +311,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       theme: 'grid',
       styles: { fontSize: 8 },
       didParseCell: (data: any) => {
-        if (data.section === 'body' && data.column.index === 6) {
+        if (data.section === 'body' && data.column.index === 8) {
           const statusLabel = data.cell.raw;
           if (statusLabel === 'VENCIDO') data.cell.styles.textColor = [220, 38, 38]; // Red
           if (statusLabel === 'CRÍTICO') data.cell.styles.textColor = [159, 18, 57]; // Rose/Wine
@@ -676,6 +706,12 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                         Qtd {getSortIcon('quantity')}
                       </div>
                     </th>
+                    <th className="px-4 py-3 text-right w-28">
+                      Custo Unit.
+                    </th>
+                    <th className="px-4 py-3 text-right w-28">
+                      Custo Total
+                    </th>
                     <th className="px-4 py-3 text-center w-28 border-l border-slate-100 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('expiryDate')}>
                       <div className="space-y-1">
                         <div className="flex items-center justify-center">
@@ -705,7 +741,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                 <tbody className="divide-y divide-slate-100">
                   {filteredRecords.length === 0 ? (
                     <tr>
-                      <td colSpan={9} className="px-6 py-20 text-center text-slate-400 italic">
+                      <td colSpan={11} className="px-6 py-20 text-center text-slate-400 italic">
                         <div className="flex flex-col items-center gap-3">
                           <Search size={40} className="text-slate-200" />
                           <p className="text-sm">Nenhum item encontrado.</p>
@@ -785,10 +821,16 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                               className="w-12 text-center bg-white/80 text-slate-800 px-1 py-0.5 rounded-lg font-bold text-xs border border-slate-200 shadow-sm focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
                             />
                           </td>
-                          <td className="px-4 py-2 text-center border-l border-slate-100/50">
-                            <div className="text-sm font-black text-slate-700">{rec.expiryDate}</div>
-                            <div className={`text-[9px] font-bold ${status.color} mt-0.5`}>{status.days} dias</div>
-                          </td>
+                      <td className="px-4 py-2 text-right">
+                        {formatCurrency(getInventoryCostUnitByReduced(rec.reducedCode))}
+                      </td>
+                      <td className="px-4 py-2 text-right font-bold text-slate-700">
+                        {formatCurrency(getInventoryCostUnitByReduced(rec.reducedCode) * rec.quantity)}
+                      </td>
+                      <td className="px-4 py-2 text-center border-l border-slate-100/50">
+                        <div className="text-sm font-black text-slate-700">{rec.expiryDate}</div>
+                        <div className={`text-[9px] font-bold ${status.color} mt-0.5`}>{status.days} dias</div>
+                      </td>
                           <td className="px-4 py-2">
                             <div className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase mb-0.5 ${status.label === 'VENCIDO' ? 'bg-red-200 text-red-800' : status.label === 'CRÍTICO' ? 'bg-rose-200 text-rose-900' : 'bg-blue-200 text-blue-800'}`}>
                               {status.label}
@@ -816,14 +858,18 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
         <div className="space-y-6">
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
             <h3 className="font-bold text-slate-800 mb-4">Métricas da Sessão</h3>
-            <div className="grid grid-cols-1 gap-3">
-              <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 shadow-sm">
-                <p className="text-blue-600 text-[10px] font-bold uppercase tracking-widest">Itens Totais</p>
-                <p className="text-2xl font-black text-blue-800 mt-0.5">{pvRecords.reduce((acc, r) => acc + r.quantity, 0)}</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="p-3 bg-blue-50/50 rounded-xl border border-blue-100 shadow-sm min-w-0">
+                <p className="text-blue-600 text-[10px] font-bold uppercase tracking-widest truncate">Itens Totais</p>
+                <p className="text-2xl font-black text-blue-800 mt-0.5 truncate">{pvRecords.reduce((acc, r) => acc + r.quantity, 0)}</p>
               </div>
-              <div className="p-3 bg-slate-50/50 rounded-xl border border-slate-100">
-                <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest">SKUs Únicos</p>
-                <p className="text-2xl font-bold text-slate-800 mt-0.5">{new Set(pvRecords.map(r => r.reducedCode)).size}</p>
+              <div className="p-3 bg-slate-50/50 rounded-xl border border-slate-100 min-w-0">
+                <p className="text-slate-500 text-[10px] font-bold uppercase tracking-widest truncate">SKUs Únicos</p>
+                <p className="text-2xl font-bold text-slate-800 mt-0.5 truncate">{new Set(pvRecords.map(r => r.reducedCode)).size}</p>
+              </div>
+              <div className="sm:col-span-2 p-4 bg-emerald-50/60 rounded-xl border border-emerald-100 min-w-0">
+                <p className="text-emerald-700 text-[10px] font-bold uppercase tracking-widest truncate">Total Previsto p/ Vencer</p>
+                <p className="text-xl sm:text-2xl font-black text-emerald-800 mt-0.5 break-words">{formatCurrency(totalCostPredicted)}</p>
               </div>
             </div>
           </div>
@@ -831,15 +877,17 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
           {/* Resumo por Validade */}
           <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
             <h3 className="font-bold text-slate-800 mb-4 text-sm uppercase tracking-wider">Resumo por Validade</h3>
-            <div className="space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar pr-1">
+            <div className="space-y-3 pr-1">
               {(() => {
                 const grouped = pvRecords.reduce((acc, rec) => {
                   const key = rec.expiryDate;
-                  if (!acc[key]) acc[key] = { items: 0, skus: new Set<string>() };
+                  if (!acc[key]) acc[key] = { items: 0, skus: new Set<string>(), costTotal: 0 };
+                  const unit = getInventoryCostUnitByReduced(rec.reducedCode);
                   acc[key].items += rec.quantity;
                   acc[key].skus.add(rec.reducedCode);
+                  acc[key].costTotal += unit * rec.quantity;
                   return acc;
-                }, {} as Record<string, { items: number; skus: Set<string> }>);
+                }, {} as Record<string, { items: number; skus: Set<string>; costTotal: number }>);
 
                 const sortedDates = Object.keys(grouped).sort((a, b) => {
                   const [m1, y1] = a.split('/').map(Number);
@@ -861,28 +909,36 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                       <div
                         key={date}
                         onClick={() => setFilterMonth(isActive ? '' : date)}
-                        className={`p-2 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center ${isActive
+                        className={`p-3 rounded-2xl border-2 transition-all cursor-pointer ${isActive
                           ? 'border-amber-400 bg-amber-100/60 shadow-sm ring-1 ring-amber-200 hover:bg-amber-100/60'
                           : `${status.bg} border-transparent`
                           }`}
                       >
-                        <div className="leading-tight">
-                          <p className={`text-sm font-black ${isActive ? 'text-blue-700' : status.color}`}>{date}</p>
-                          <div className={`px-1.5 py-0.5 rounded text-[8px] font-bold uppercase inline-block mt-0.5 ${status.label === 'VENCIDO' ? 'bg-red-100 text-red-700' :
-                            status.label === 'CRÍTICO' ? 'bg-rose-100 text-rose-700' :
-                              'bg-blue-100 text-blue-700'
-                            }`}>
-                            {status.label}
+                        <div className="flex flex-col gap-2">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="leading-tight">
+                              <p className={`text-base font-black ${isActive ? 'text-blue-700' : status.color}`}>{date}</p>
+                              <div className={`px-2 py-0.5 rounded text-[8px] font-bold uppercase inline-block mt-1 ${status.label === 'VENCIDO' ? 'bg-red-100 text-red-700' :
+                                status.label === 'CRÍTICO' ? 'bg-rose-100 text-rose-700' :
+                                  'bg-blue-100 text-blue-700'
+                                }`}>
+                                {status.label}
+                              </div>
+                            </div>
+                            <div className="text-right min-w-[120px]">
+                              <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">Custo</p>
+                              <p className="text-base font-bold text-emerald-700 leading-none break-words">{formatCurrency(data.costTotal)}</p>
+                            </div>
                           </div>
-                        </div>
-                        <div className="flex gap-3">
-                          <div className="text-right">
-                            <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">Itens</p>
-                            <p className="text-base font-black text-slate-800 leading-none">{data.items}</p>
-                          </div>
-                          <div className="text-right">
-                            <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">SKUs</p>
-                            <p className="text-base font-bold text-slate-700 leading-none">{data.skus.size}</p>
+                          <div className="grid grid-cols-2 gap-3">
+                            <div>
+                              <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">Itens</p>
+                              <p className="text-base font-black text-slate-800 leading-none">{data.items}</p>
+                            </div>
+                            <div>
+                              <p className="text-[8px] text-slate-400 font-bold uppercase tracking-tighter">SKUs</p>
+                              <p className="text-base font-bold text-slate-700 leading-none">{data.skus.size}</p>
+                            </div>
                           </div>
                         </div>
                       </div>
