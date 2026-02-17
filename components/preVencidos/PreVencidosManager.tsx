@@ -5,7 +5,8 @@ import {
   parseSystemProductsXLSX,
   parseDCBProductsXLSX,
   parseSalesXLSX,
-  parseSalesCSV
+  parseSalesCSV,
+  parseInventoryXLSX
 } from '../../preVencidos/dataService';
 import PVRegistration from './PVRegistration';
 import AnalysisView from './AnalysisView';
@@ -20,6 +21,7 @@ import {
   DbPVConfirmedSalesPayload,
   DbPVConfirmedSalesMeta,
   DbPVSalesAnalysisReport,
+  DbPVInventoryReport,
   fetchPVSession,
   upsertPVSession,
   insertPVBranchRecord,
@@ -39,7 +41,9 @@ import {
   fetchActiveSalesReport,
   upsertActiveSalesReport,
   fetchPVSalesAnalysisReports,
-  upsertPVSalesAnalysisReport
+  upsertPVSalesAnalysisReport,
+  fetchPVInventoryReport,
+  upsertPVInventoryReport
 } from '../../supabaseService';
 import {
   loadLocalPVSession,
@@ -102,6 +106,18 @@ const mergeFinalizedMaps = (base: Record<string, string[]>, extra: Record<string
   return merged;
 };
 
+const normalizeBarcode = (value?: string) => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number') return String(Math.trunc(value));
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/e\+?/i.test(raw)) {
+    const num = Number(raw.replace(',', '.'));
+    if (Number.isFinite(num)) return String(Math.trunc(num));
+  }
+  return raw.replace(/\D/g, '');
+};
+
 const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, userName, companies = [] }) => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.SETUP);
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
@@ -123,11 +139,34 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const [salesUploads, setSalesUploads] = useState<DbPVSalesUpload[]>([]);
   const [analysisReports, setAnalysisReports] = useState<Record<string, AnalysisReportPayload>>({});
+  const [inventoryReport, setInventoryReport] = useState<DbPVInventoryReport | null>(null);
+  const [inventoryCostByBarcode, setInventoryCostByBarcode] = useState<Record<string, number>>({});
+  const [inventoryStockByBarcode, setInventoryStockByBarcode] = useState<Record<string, number>>({});
   const [localLastUpload, setLocalLastUpload] = useState<SalesUploadRecord | null>(null);
   const [historyDetail, setHistoryDetail] = useState<{ type: 'seller' | 'recovered' | 'ignored'; seller?: string } | null>(null);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+
+  const buildInventoryMaps = useCallback((records: { barcode: string; cost: number; stock?: number }[]) => {
+    const costMap: Record<string, number> = {};
+    const stockMap: Record<string, number> = {};
+    records.forEach(rec => {
+      const rawBarcode = (rec.barcode || '').trim();
+      const normalized = normalizeBarcode(rawBarcode);
+      const noZeros = normalized.replace(/^0+/, '') || normalized;
+      const barcodeKeys = Array.from(new Set([normalized, noZeros].filter(Boolean)));
+      if (barcodeKeys.length === 0) return;
+      barcodeKeys.forEach(barcode => {
+        costMap[barcode] = Number(rec.cost || 0);
+        if (typeof rec.stock === 'number') {
+          stockMap[barcode] = rec.stock;
+        }
+      });
+    });
+    setInventoryCostByBarcode(costMap);
+    setInventoryStockByBarcode(stockMap);
+  }, []);
 
   useEffect(() => {
     if (!userEmail) return;
@@ -416,7 +455,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           name: sysProd?.name || dcbProd?.name || 'Produto identificado via DCB',
           barcode: sysProd?.barcode || dcbProd?.barcode || '',
           reducedCode: code,
-          dcb: dcbProd?.dcb || sysProd?.dcb || 'N/A'
+          dcb: dcbProd?.dcb || sysProd?.dcb || 'N/A',
+          lab: sysProd?.lab || dcbProd?.lab
         });
       });
       setMasterProducts(merged);
@@ -639,6 +679,37 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     };
   }, [sessionInfo?.companyId, sessionInfo?.filial]);
 
+  useEffect(() => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) {
+      setInventoryReport(null);
+      setInventoryCostByBarcode({});
+      setInventoryStockByBarcode({});
+      return;
+    }
+
+    let cancelled = false;
+    fetchPVInventoryReport(sessionInfo.companyId, sessionInfo.filial)
+      .then(report => {
+        if (cancelled) return;
+        if (report) {
+          setInventoryReport(report);
+          buildInventoryMaps(report.records || []);
+        } else {
+          setInventoryReport(null);
+          setInventoryCostByBarcode({});
+          setInventoryStockByBarcode({});
+        }
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error('Erro carregando relatório de estoque da filial:', err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionInfo?.companyId, sessionInfo?.filial, buildInventoryMaps]);
+
   const originBranches = useMemo(() => {
     const byId = companies.find(c => c.id === sessionInfo?.companyId);
     const fallback = byId ? null : companies.find(c => (c.name || '').toLowerCase().includes('drogaria cidade'));
@@ -665,6 +736,104 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     () => mergeFinalizedMaps(finalizedREDSByPeriod, historyFinalizedByPeriod),
     [finalizedREDSByPeriod, historyFinalizedByPeriod]
   );
+
+  const barcodeByReduced = useMemo(() => {
+    const map: Record<string, string> = {};
+    masterProducts.forEach(prod => {
+      if (prod.reducedCode) {
+        map[prod.reducedCode] = normalizeBarcode(prod.barcode || '');
+      }
+    });
+    pvRecords.forEach(rec => {
+      if (!map[rec.reducedCode] && rec.barcode) {
+        map[rec.reducedCode] = normalizeBarcode(rec.barcode || '');
+      }
+    });
+    return map;
+  }, [masterProducts, pvRecords]);
+
+  const labByReduced = useMemo(() => {
+    const map: Record<string, string> = {};
+    masterProducts.forEach(prod => {
+      if (prod.reducedCode && prod.lab) {
+        map[prod.reducedCode] = prod.lab;
+      }
+    });
+    pvRecords.forEach(rec => {
+      if (!map[rec.reducedCode] && rec.lab) {
+        map[rec.reducedCode] = rec.lab;
+      }
+    });
+    return map;
+  }, [masterProducts, pvRecords]);
+
+  type PeriodRange = {
+    start: Date | null;
+    end: Date | null;
+  };
+
+  const parsePeriodRange = (label?: string): PeriodRange => {
+    if (!label) return { start: null, end: null };
+    const regex = /(\d{1,2})\/(\d{1,2})\/(\d{2,4})/g;
+    const matches = Array.from(label.matchAll(regex));
+    const toDate = (match: RegExpMatchArray) => {
+      const day = Number(match[1]);
+      const month = Number(match[2]) - 1;
+      let year = Number(match[3]);
+      if (match[3].length <= 2) {
+        year += 2000;
+      }
+      // Set to NOON (12:00:00) to avoid Timezone/Midnight issues
+      return new Date(year, month, day, 12, 0, 0);
+    };
+    const start = matches.length > 0 ? toDate(matches[0]) : null;
+    const end = matches.length > 1 ? toDate(matches[1]) : start;
+    return { start, end };
+  };
+
+  const rangesOverlap = (a: PeriodRange, b: PeriodRange) => {
+    if (!a.start || !a.end || !b.start || !b.end) return false;
+    return a.start.getTime() <= b.end.getTime() && b.start.getTime() <= a.end.getTime();
+  };
+
+  const parseDBDate = (dateStr?: string | null) => {
+    if (!dateStr) return null;
+    const cleanDate = dateStr.split('T')[0];
+    const [y, m, d] = cleanDate.split('-').map(Number);
+    return new Date(y, m - 1, d, 12, 0, 0);
+  };
+
+  const buildRecordRange = (record?: SalesUploadRecord): PeriodRange => ({
+    start: parseDBDate(record?.period_start),
+    end: parseDBDate(record?.period_end)
+  });
+
+  const resolveUploadMetaForPeriod = (label: string) => {
+    const normalizedLabel = (label || '').trim();
+    const fallbackRange = parsePeriodRange(normalizedLabel);
+
+    const matchInHistory = salesUploads.find(report => (report.period_label || '').trim() === normalizedLabel);
+    const match = matchInHistory
+      || (localLastUpload && (localLastUpload.period_label || '').trim() === normalizedLabel ? localLastUpload : undefined);
+
+    if (!match) {
+      return {
+        range: fallbackRange,
+        fileName: undefined,
+        uploadedAt: undefined
+      };
+    }
+
+    const recordRange = buildRecordRange(match);
+    return {
+      range: {
+        start: recordRange.start || fallbackRange.start,
+        end: recordRange.end || fallbackRange.end
+      },
+      fileName: match.file_name || undefined,
+      uploadedAt: match.uploaded_at || undefined
+    };
+  };
 
   const currentAnalysisReport = useMemo(() => {
     const normalizedPeriod = (salesPeriod || '').trim();
@@ -972,80 +1141,6 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     }
   };
 
-  type PeriodRange = {
-    start: Date | null;
-    end: Date | null;
-  };
-
-  function parsePeriodRange(label?: string): PeriodRange {
-    if (!label) return { start: null, end: null };
-    const regex = /(\d{1,2})\/(\d{1,2})\/(\d{2,4})/g;
-    const matches = Array.from(label.matchAll(regex));
-    const toDate = (match: RegExpMatchArray) => {
-      const day = Number(match[1]);
-      const month = Number(match[2]) - 1;
-      let year = Number(match[3]);
-      if (match[3].length <= 2) {
-        year += 2000;
-      }
-      // Set to NOON (12:00:00) to avoid Timezone/Midnight issues
-      return new Date(year, month, day, 12, 0, 0);
-    };
-    const start = matches.length > 0 ? toDate(matches[0]) : null;
-    const end = matches.length > 1 ? toDate(matches[1]) : start;
-    return { start, end };
-  }
-
-  function rangesOverlap(a: PeriodRange, b: PeriodRange) {
-    if (!a.start || !a.end || !b.start || !b.end) return false;
-    // Compare times
-    return a.start.getTime() <= b.end.getTime() && b.start.getTime() <= a.end.getTime();
-  }
-
-  function parseDBDate(dateStr?: string | null) {
-    if (!dateStr) return null;
-    // Accessing YYYY-MM-DD safely
-    // If it's a full ISO string (with T), split by T first
-    const cleanDate = dateStr.split('T')[0];
-    const [y, m, d] = cleanDate.split('-').map(Number);
-    // Set to NOON (12:00:00) to match parsePeriodRange
-    return new Date(y, m - 1, d, 12, 0, 0);
-  }
-
-  function buildRecordRange(record?: SalesUploadRecord): PeriodRange {
-    return {
-      start: parseDBDate(record?.period_start),
-      end: parseDBDate(record?.period_end)
-    };
-  }
-
-  function resolveUploadMetaForPeriod(label: string) {
-    const normalizedLabel = (label || '').trim();
-    const fallbackRange = parsePeriodRange(normalizedLabel);
-
-    const matchInHistory = salesUploads.find(report => (report.period_label || '').trim() === normalizedLabel);
-    const match = matchInHistory
-      || (localLastUpload && (localLastUpload.period_label || '').trim() === normalizedLabel ? localLastUpload : undefined);
-
-    if (!match) {
-      return {
-        range: fallbackRange,
-        fileName: undefined,
-        uploadedAt: undefined
-      };
-    }
-
-    const recordRange = buildRecordRange(match);
-    return {
-      range: {
-        start: recordRange.start || fallbackRange.start,
-        end: recordRange.end || fallbackRange.end
-      },
-      fileName: match.file_name || undefined,
-      uploadedAt: match.uploaded_at || undefined
-    };
-  }
-
   const matchesContext = (record?: SalesUploadRecord) => {
     if (!record || !sessionInfo?.companyId || !sessionInfo?.filial) return false;
     return record.company_id === sessionInfo.companyId && record.branch === sessionInfo.filial;
@@ -1147,16 +1242,17 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   };
 
   const processAndSetSales = (sales: SalesRecord[], period: string, fileName?: string, range?: PeriodRange, uploadedAt?: string) => {
-    const cleanedPeriod = (period || '').trim() || 'Período não identificado';
-    const enrichedSales = sales.map(s => {
-      const product = masterProducts.find(p => p.reducedCode === s.reducedCode);
-      return {
-        ...s,
-        date: cleanedPeriod,
-        dcb: product ? product.dcb : s.dcb,
-        productName: product ? product.name : s.productName
-      };
-    });
+      const cleanedPeriod = (period || '').trim() || 'Período não identificado';
+      const enrichedSales = sales.map(s => {
+        const product = masterProducts.find(p => p.reducedCode === s.reducedCode);
+        return {
+          ...s,
+          date: cleanedPeriod,
+          dcb: product ? product.dcb : s.dcb,
+          productName: product ? product.name : s.productName,
+          lab: product?.lab || s.lab
+        };
+      });
     setSalesRecords(enrichedSales);
     setSalesPeriod(cleanedPeriod);
     setCurrentView(AppView.ANALYSIS);
@@ -1244,7 +1340,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const fileName = file.name;
     const fileNameLower = fileName.toLowerCase();
 
-    const notifyError = () => alert('Erro ao processar arquivo de vendas.');
+    const formatSalesUploadError = (err?: unknown) => {
+      const message = err instanceof Error ? err.message : String(err || '');
+      const lower = message.toLowerCase();
+      if (lower.includes('includes') || lower.includes('undefined')) {
+        return 'Erro ao processar arquivo de vendas. O arquivo não contém o cabeçalho ou as colunas esperadas.';
+      }
+      if (lower.includes('sheet') || lower.includes('workbook')) {
+        return 'Erro ao processar arquivo de vendas. Não foi possível ler a planilha.';
+      }
+      if (lower.includes('csv') || lower.includes('parse')) {
+        return 'Erro ao processar arquivo de vendas. O arquivo CSV está inválido ou fora do padrão.';
+      }
+      return 'Erro ao processar arquivo de vendas. Verifique se o arquivo está no formato correto (código, descrição, laboratório, quantidade e valor).';
+    };
+    const notifyError = (err?: unknown) => alert(formatSalesUploadError(err));
 
     if (fileNameLower.endsWith('.csv') || fileNameLower.endsWith('.txt')) {
       const reader = new FileReader();
@@ -1253,24 +1363,68 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           const text = event.target?.result as string;
           const sales = parseSalesCSV(text);
           await handleParsedSales(sales, `CSV-Upload-${new Date().toLocaleDateString()}`, fileName);
-        } catch (err) {
-          console.error('Erro ao ler CSV de vendas:', err);
-          notifyError();
-        }
-      };
-      reader.onerror = () => notifyError();
-      reader.readAsText(file);
-    } else {
-      (async () => {
-        try {
-          const salesData = await parseSalesXLSX(file);
-          await handleParsedSales(salesData.sales, salesData.period, fileName);
-        } catch (error) {
-          console.error('Erro ao ler XLSX de vendas:', error);
-          notifyError();
-        }
-      })();
+          } catch (err) {
+            console.error('Erro ao ler CSV de vendas:', err);
+            notifyError(err);
+          }
+        };
+        reader.onerror = () => notifyError();
+        reader.readAsText(file);
+      } else {
+        (async () => {
+          try {
+            const salesData = await parseSalesXLSX(file);
+            await handleParsedSales(salesData.sales, salesData.period, fileName);
+          } catch (error) {
+            console.error('Erro ao ler XLSX de vendas:', error);
+            notifyError(error);
+          }
+        })();
+      }
+
+    e.target.value = '';
+  };
+
+  const handleInventoryUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) {
+      alert('Selecione a filial antes de carregar o estoque.');
+      e.target.value = '';
+      return;
     }
+
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const fileName = file.name;
+    (async () => {
+      try {
+        const records = await parseInventoryXLSX(file);
+        const uploadedAt = new Date().toISOString();
+
+        buildInventoryMaps(records);
+
+        const report: DbPVInventoryReport = {
+          company_id: sessionInfo.companyId,
+          branch: sessionInfo.filial,
+          file_name: fileName,
+          uploaded_at: uploadedAt,
+          records
+        };
+
+        const saved = await upsertPVInventoryReport(report);
+        if (saved) {
+          setInventoryReport(saved);
+          alert(`Estoque atualizado! ${records.length} itens carregados.`);
+        } else {
+          setInventoryReport(report);
+          alert('Estoque carregado, mas não foi possível confirmar o salvamento no banco.');
+        }
+      } catch (error) {
+        console.error('Erro ao carregar estoque:', error);
+        const details = error instanceof Error ? error.message : String(error || '');
+        alert(details ? `Erro ao carregar estoque:\n${details}` : 'Erro ao carregar estoque.');
+      }
+    })();
 
     e.target.value = '';
   };
@@ -1593,6 +1747,17 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           </button>
 
           <label className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-slate-800 text-slate-400 transition-colors group">
+            <Package size={20} className="group-hover:text-amber-400" />
+            <div className="flex-1">
+              <p className="text-sm font-medium leading-none text-amber-400">Estoque (Excel)</p>
+              <p className="text-[10px] mt-1 text-slate-500 font-bold">
+                {inventoryReport?.uploaded_at ? `Último: ${formatUploadTimestamp(inventoryReport.uploaded_at)}` : 'Sem estoque carregado'}
+              </p>
+            </div>
+            <input type="file" className="hidden" accept=".xlsx,.xls" onChange={handleInventoryUpload} />
+          </label>
+
+          <label className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-slate-800 text-slate-400 transition-colors group">
             <TrendingUp size={20} className="group-hover:text-green-400" />
             <div className="flex-1">
               <p className="text-sm font-medium leading-none text-blue-400">Vendas (Excel/CSV)</p>
@@ -1733,6 +1898,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                 currentSalesPeriod={salesPeriod}
                 sessionInfo={sessionInfo}
                 lastUpload={localLastUpload}
+                barcodeByReduced={barcodeByReduced}
+                inventoryCostByBarcode={inventoryCostByBarcode}
+                inventoryStockByBarcode={inventoryStockByBarcode}
+                labByReduced={labByReduced}
                 onUpdatePVSale={handleUpdatePVSale} onFinalizeSale={handleFinalizeSale}
               />
             </div>

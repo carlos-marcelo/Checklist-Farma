@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Product, PVRecord, SessionInfo } from '../../preVencidos/types';
 import ScannerInput from './ScannerInput';
 import { Trash2, Calendar, Hash, FileUp, CheckCircle2, User, Building, Search, FlaskConical, ChevronRight, Info, X } from 'lucide-react';
@@ -120,6 +120,8 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
         id: Math.random().toString(36).substr(2, 9),
         reducedCode: scanningProduct.reducedCode,
         name: scanningProduct.name,
+        barcode: scanningProduct.barcode || '',
+        lab: scanningProduct.lab,
         quantity,
         originBranch,
         sectorResponsible: sectorResponsible.trim(),
@@ -219,6 +221,13 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   const [filterText, setFilterText] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('');
+  const labByReduced = useMemo(() => {
+    const map: Record<string, string> = {};
+    masterProducts.forEach(prod => {
+      if (prod.reducedCode) map[prod.reducedCode] = prod.lab || '';
+    });
+    return map;
+  }, [masterProducts]);
 
   // PDF Export
   const handleExportPDF = () => {
@@ -611,6 +620,9 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                         Descrição (D) {getSortIcon('name')}
                       </div>
                     </th>
+                    <th className="px-4 py-3 text-left w-28">
+                      Laboratório (F)
+                    </th>
                     <th className="px-4 py-3 text-left w-32 cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => handleSort('originBranch')}>
                       <div className="flex items-center">
                         Origem {getSortIcon('originBranch')}
@@ -655,7 +667,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                 <tbody className="divide-y divide-slate-100">
                   {filteredRecords.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-6 py-20 text-center text-slate-400 italic">
+                      <td colSpan={9} className="px-6 py-20 text-center text-slate-400 italic">
                         <div className="flex flex-col items-center gap-3">
                           <Search size={40} className="text-slate-200" />
                           <p className="text-sm">Nenhum item encontrado.</p>
@@ -674,6 +686,9 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                             <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-bold uppercase mt-0.5">
                               <FlaskConical size={8} className="shrink-0 text-blue-400" /> <span className="truncate max-w-[180px]">{rec.dcb}</span>
                             </div>
+                          </td>
+                          <td className="px-4 py-2 text-[10px] font-bold text-slate-600 uppercase">
+                            {rec.lab || labByReduced[rec.reducedCode] || 'N/D'}
                           </td>
                           <td className="px-4 py-2">
                             <select

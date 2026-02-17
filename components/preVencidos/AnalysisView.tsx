@@ -29,6 +29,10 @@ interface AnalysisViewProps {
   currentSalesPeriod: string;
   sessionInfo?: SessionInfo | null;
   lastUpload?: SalesUploadRecord | null;
+  barcodeByReduced?: Record<string, string>;
+  inventoryCostByBarcode?: Record<string, number>;
+  inventoryStockByBarcode?: Record<string, number>;
+  labByReduced?: Record<string, string>;
   onUpdatePVSale: (saleId: string, classification: PVSaleClassification) => void;
   onFinalizeSale: (reducedCode: string, period: string) => void;
 }
@@ -41,6 +45,10 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
   currentSalesPeriod,
   sessionInfo,
   lastUpload,
+  barcodeByReduced = {},
+  inventoryCostByBarcode = {},
+  inventoryStockByBarcode = {},
+  labByReduced = {},
   onUpdatePVSale,
   onFinalizeSale
 }) => {
@@ -55,18 +63,54 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
   const results = useMemo(() => {
     const periodFinalizedList = finalizedREDSByPeriod[currentSalesPeriod] || [];
 
+    const getInventoryCostUnit = (reducedCode?: string): number | null => {
+      if (!reducedCode) return 0;
+      const raw = barcodeByReduced[reducedCode] || '';
+      const normalized = String(raw || '').replace(/\D/g, '');
+      if (!normalized) return null;
+      const noZeros = normalized.replace(/^0+/, '') || normalized;
+      const value = inventoryCostByBarcode[normalized] ?? inventoryCostByBarcode[noZeros];
+      if (value === undefined) return null;
+      return Number(value || 0);
+    };
+    const resolveCostUnit = (reducedCode?: string, fallbackCostUnit?: number, allowFallback = false) => {
+      const inv = getInventoryCostUnit(reducedCode);
+      if (inv !== null) return inv;
+      return allowFallback ? Number(fallbackCostUnit || 0) : 0;
+    };
+    const getInventoryStock = (reducedCode?: string) => {
+      if (!reducedCode) return null;
+      const raw = barcodeByReduced[reducedCode] || '';
+      const normalized = String(raw || '').replace(/\D/g, '');
+      if (!normalized) return null;
+      const noZeros = normalized.replace(/^0+/, '') || normalized;
+      const value = inventoryStockByBarcode[normalized] ?? inventoryStockByBarcode[noZeros];
+      if (value === undefined) return null;
+      return Number(value || 0);
+    };
+
     const enriched = pvRecords.map(pv => {
       const isFinalized = periodFinalizedList.includes(pv.reducedCode);
       const directSales = salesRecords.filter(s => s.reducedCode === pv.reducedCode);
       const directSoldQty = directSales.reduce((acc, s) => acc + s.quantity, 0);
 
-      const directSalesDetails = directSales.map((s, idx) => ({
+      const directSalesDetails = directSales.map((s, idx) => {
+        const resolvedCostUnit = resolveCostUnit(s.reducedCode, s.costUnit, false);
+        return {
         name: s.productName,
         totalSoldInReport: s.quantity,
         seller: s.salesperson,
         code: s.reducedCode,
+        unitPrice: s.unitPrice || 0,
+        totalValue: s.totalValue || 0,
+        costUnit: s.costUnit || 0,
+        costTotal: s.costTotal || 0,
+        inventoryCostUnit: resolvedCostUnit,
+        inventoryCostTotal: resolvedCostUnit * s.quantity,
+        lab: s.lab || 'N/A',
         id: `${currentSalesPeriod}-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
-      }));
+        };
+      });
 
       const isValidDCB = (dcb?: string) => dcb && dcb.trim() !== '' && dcb.toUpperCase() !== 'N/A';
       const similarSales = isValidDCB(pv.dcb)
@@ -74,17 +118,39 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         : [];
       const similarSoldQty = similarSales.reduce((acc, s) => acc + s.quantity, 0);
 
-      const similarSalesDetails = similarSales.map((s, idx) => ({
+      const similarSalesDetails = similarSales.map((s, idx) => {
+        const resolvedCostUnit = resolveCostUnit(s.reducedCode, s.costUnit, false);
+        return {
         name: s.productName,
         qty: s.quantity,
         seller: s.salesperson,
         code: s.reducedCode,
+        unitPrice: s.unitPrice || 0,
+        totalValue: s.totalValue || 0,
+        costUnit: s.costUnit || 0,
+        costTotal: s.costTotal || 0,
+        inventoryCostUnit: resolvedCostUnit,
+        inventoryCostTotal: resolvedCostUnit * s.quantity,
+        lab: s.lab || 'N/A',
         id: `${currentSalesPeriod}-sim-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
-      }));
+        };
+      });
 
       let status: 'sold' | 'replaced' | 'lost' = 'lost';
       if (directSoldQty > 0) status = 'sold';
       else if (similarSoldQty > 0) status = 'replaced';
+
+      const directSalesValue = directSales.reduce((acc, s) => acc + (s.totalValue || 0), 0);
+      const similarSalesValue = similarSales.reduce((acc, s) => acc + (s.totalValue || 0), 0);
+      const pvInventoryCostUnit = resolveCostUnit(pv.reducedCode, undefined, false);
+      const pvInventoryCostTotal = pvInventoryCostUnit * (pv.quantity || 0);
+      const directInventoryCostTotal = directSales.reduce((acc, s) => acc + resolveCostUnit(s.reducedCode, s.costUnit, false) * s.quantity, 0);
+      const similarInventoryCostTotal = similarSales.reduce((acc, s) => acc + resolveCostUnit(s.reducedCode, s.costUnit, false) * s.quantity, 0);
+      const pvInventoryStock = getInventoryStock(pv.reducedCode);
+
+      const pvLab = pv.lab || labByReduced[pv.reducedCode] || 'N/A';
+      const firstDirectLab = directSalesDetails[0]?.lab || '';
+      const firstSimilarLab = similarSalesDetails[0]?.lab || '';
 
       return {
         ...pv,
@@ -92,14 +158,25 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         directSalesDetails,
         similarSoldQty,
         similarSalesDetails,
+        directSalesValue,
+        similarSalesValue,
+        pvInventoryCostUnit,
+        pvInventoryCostTotal,
+        directInventoryCostTotal,
+        similarInventoryCostTotal,
+        pvInventoryStock,
+        pvLab,
+        firstDirectLab,
+        firstSimilarLab,
         status,
         isFinalized,
-        expiryMonthLabel: getExpiryMonthLabel(pv.expiryDate)
+        expiryMonthLabel: getExpiryMonthLabel(pv.expiryDate),
+        lab: directSalesDetails[0]?.lab || similarSalesDetails[0]?.lab || pvLab || 'N/A'
       };
     });
     // Hide "Sem Movimento" items from the analysis list.
     return enriched.filter(item => item.status !== 'lost');
-  }, [pvRecords, salesRecords, finalizedREDSByPeriod, currentSalesPeriod]);
+  }, [pvRecords, salesRecords, finalizedREDSByPeriod, currentSalesPeriod, barcodeByReduced, inventoryCostByBarcode, inventoryStockByBarcode]);
 
   const reportPayload = useMemo(() => {
     const finalizedCodes = finalizedREDSByPeriod[currentSalesPeriod] || [];
@@ -147,7 +224,19 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     return !r.isFinalized && r.status === 'sold';
   });
 
-  const handleClassificationChange = (saleId: string, field: keyof PVSaleClassification, val: number, maxSale: number, reducedCode: string, sellerName: string) => {
+  const formatCurrency = (value: number) => {
+    try {
+      return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0);
+    } catch {
+      return `R$ ${Number(value || 0).toFixed(2)}`;
+    }
+  };
+  const formatStock = (value: number | null | undefined) => {
+    if (value === null || value === undefined) return 'N/D';
+    return Number(value || 0).toLocaleString('pt-BR');
+  };
+
+  const handleClassificationChange = (saleId: string, field: keyof PVSaleClassification, val: number, maxSale: number, reducedCode: string, sellerName: string, unitPrice?: number) => {
     const periodFinalizedList = finalizedREDSByPeriod[currentSalesPeriod] || [];
     if (periodFinalizedList.includes(reducedCode)) return;
 
@@ -184,7 +273,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
       ...updated,
       confirmed: isCategorized,
       sellerName: sellerName,
-      reducedCode: reducedCode
+      reducedCode: reducedCode,
+      unitPrice
     });
   };
 
@@ -280,14 +370,51 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                     )}
                     <span className="text-[10px] font-mono text-slate-400 font-bold">RED: {res.reducedCode}</span>
                   </div>
-                  <h4 className="text-lg font-bold text-slate-900 uppercase">{res.name}</h4>
+                  <h4 className="text-lg font-bold text-slate-900 uppercase flex flex-wrap items-center gap-2">
+                    {res.name}
+                    <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                      • {res.pvLab || 'N/D'}
+                    </span>
+                  </h4>
                   <div className="flex items-center gap-3 mt-2">
                     <div className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 flex items-center gap-1">
                       <FlaskConical size={12} /> {res.dcb}
                     </div>
+                    <div className="text-[10px] font-bold text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-100 flex items-center gap-1">
+                      <Package size={12} /> LAB PV: {res.pvLab || 'N/A'}
+                    </div>
+                    {res.status === 'sold' && res.firstDirectLab && (
+                      <div className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 flex items-center gap-1">
+                        <Package size={12} /> LAB PV VENDIDO: {res.firstDirectLab}
+                      </div>
+                    )}
+                    {res.status === 'replaced' && res.firstSimilarLab && (
+                      <div className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-100 flex items-center gap-1">
+                        <Package size={12} /> LAB SIMILAR: {res.firstSimilarLab}
+                      </div>
+                    )}
                     <div className="space-y-1">
                       <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">PV EM ESTOQUE: {res.quantity}</div>
+                      <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                        ESTOQUE FILIAL (ARQ): {formatStock(res.pvInventoryStock)}
+                      </div>
                       <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">VENCIMENTO: {res.expiryMonthLabel}</div>
+                      <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                        CUSTO PV UNITÁRIO: {formatCurrency(res.pvInventoryCostUnit || 0)}
+                      </div>
+                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                          CUSTO PV (ESTOQUE): {formatCurrency(res.pvInventoryCostTotal || 0)}
+                        </div>
+                        {res.status !== 'replaced' && (
+                          <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                            CUSTO PV VENDIDO: {formatCurrency(res.directInventoryCostTotal || 0)}
+                          </div>
+                        )}
+                        {res.status === 'replaced' && (
+                          <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                            CUSTO SIMILAR (TOTAL): {formatCurrency(res.similarInventoryCostTotal || 0)}
+                          </div>
+                        )}
                     </div>
                   </div>
                 </div>
@@ -322,9 +449,10 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                         <div key={sale.id} className={`p-4 rounded-2xl border flex flex-col md:flex-row justify-between items-center gap-4 ${res.isFinalized ? 'border-green-100 bg-white/50' : 'border-slate-50 bg-slate-50/50'}`}>
                           <div className="flex-1 min-w-0">
                             <p className="text-xs font-bold text-slate-800 uppercase truncate">{sale.name}</p>
-                            <div className="flex items-center gap-2 mt-1">
+                            <div className="flex items-center gap-2 mt-1 flex-wrap">
                               <span className="text-[10px] text-blue-600 font-bold uppercase tracking-tight">Vendedor: {sale.seller}</span>
                               <span className="text-[10px] text-slate-400 font-mono font-bold">RED: {sale.code}</span>
+                              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-tight">Lab: {(sale as any).lab || 'N/D'}</span>
                             </div>
                             <p className="text-[10px] font-black text-slate-800 mt-1 uppercase">TOTAL VENDIDO NESTA NOTA: {max}</p>
                           </div>
@@ -343,7 +471,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                                     type="number" min="0" max={max}
                                     value={data.qtyPV || ''}
                                     disabled={res.isFinalized}
-                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyPV', Number(e.target.value), max, res.reducedCode, sale.seller)}
+                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyPV', Number(e.target.value), max, res.reducedCode, sale.seller, sale.unitPrice)}
                                     className="w-12 h-9 text-center text-xs font-black bg-green-50 text-green-700 rounded-lg outline-none border border-green-100 focus:ring-1 focus:ring-green-400"
                                   />
                                 </div>
@@ -353,7 +481,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                                     type="number" min="0" max={max}
                                     value={data.qtyIgnoredPV || ''}
                                     disabled={res.isFinalized}
-                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyIgnoredPV', Number(e.target.value), max, res.reducedCode, sale.seller)}
+                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyIgnoredPV', Number(e.target.value), max, res.reducedCode, sale.seller, sale.unitPrice)}
                                     className="w-12 h-9 text-center text-xs font-black bg-red-50 text-red-700 rounded-lg outline-none border border-red-100 focus:ring-1 focus:ring-red-400"
                                   />
                                 </div>
@@ -363,7 +491,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                                     type="number" min="0" max={max}
                                     value={data.qtyNeutral || ''}
                                     disabled={res.isFinalized}
-                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyNeutral', Number(e.target.value), max, res.reducedCode, sale.seller)}
+                                    onChange={(e) => handleClassificationChange(sale.id, 'qtyNeutral', Number(e.target.value), max, res.reducedCode, sale.seller, sale.unitPrice)}
                                     className="w-12 h-9 text-center text-xs font-black bg-slate-100 text-slate-600 rounded-lg outline-none border border-slate-200 focus:ring-1 focus:ring-slate-400"
                                   />
                                 </div>
@@ -377,8 +505,16 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                               </p>
                             </div>
                           ) : (
-                            <div className="flex items-center gap-3 px-4 py-2 bg-amber-50 rounded-xl border border-amber-100 text-amber-600 text-[10px] font-bold uppercase">
-                              <Repeat size={16} /> Venda de Similar (Código RED: {sale.code})
+                            <div className="flex flex-col gap-2 px-4 py-3 bg-amber-50 rounded-xl border border-amber-100 text-amber-600 text-[10px] font-bold uppercase">
+                              <div className="flex items-center gap-2">
+                                <Repeat size={16} /> Venda de Similar (Código RED: {sale.code})
+                              </div>
+                              <div className="text-[9px] font-black text-amber-700 uppercase tracking-widest">
+                                CUSTO UNITÁRIO: {formatCurrency((sale as any).inventoryCostUnit || 0)}
+                              </div>
+                              <div className="text-[9px] font-black text-amber-700 uppercase tracking-widest">
+                                CUSTO TOTAL: {formatCurrency((sale as any).inventoryCostTotal || 0)}
+                              </div>
                             </div>
                           )}
                         </div>

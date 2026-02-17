@@ -1,5 +1,5 @@
 
-import { Product, PVRecord, SalesRecord, DCBReportRecord } from './types';
+import { Product, PVRecord, SalesRecord, DCBReportRecord, InventoryCostRecord } from './types';
 
 declare const XLSX: any;
 
@@ -38,20 +38,82 @@ export const parseSystemProductsXLSX = async (file: File): Promise<Product[]> =>
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array' });
+        const workbook = XLSX.read(data, { type: 'array', cellText: true, cellNF: true });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
         const products: Product[] = [];
-        
+
+        const normalizeHeader = (value: any) => (
+          String(value || '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim()
+        );
+        const parseBarcode = (value: any): string => {
+          if (value === null || value === undefined) return '';
+          if (typeof value === 'number') return String(Math.trunc(value));
+          const raw = String(value).trim();
+          if (!raw) return '';
+          if (/e\+?/i.test(raw)) {
+            const num = Number(raw.replace(',', '.'));
+            if (Number.isFinite(num)) return String(Math.trunc(num));
+          }
+          return raw.replace(/\D/g, '');
+        };
+
+        let reducedIdx = 2; // C
+        let nameIdx = 3; // D
+        let labIdx = 5; // F
+        let barcodeIdx = 10; // K
+
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
-          if (!row || row.length < 3) continue;
+          if (!Array.isArray(row) || row.length < 3) continue;
 
-          // Col C (2) = Reduzido, Col D (3) = Descrição, Col K (10) = Barras
-          const reducedCode = normalizeCode(row[2]);
-          const name = String(row[3] || "").trim();
-          const barcode = String(row[10] || "").trim();
+          const lowerRow = row.map(val => normalizeHeader(val));
+          const findIndexSafe = (predicate: (value: string) => boolean) => {
+            for (let idx = 0; idx < lowerRow.length; idx++) {
+              const value = lowerRow[idx] || "";
+              if (predicate(value)) return idx;
+            }
+            return -1;
+          };
+
+          const idxReduced = findIndexSafe(val => val.includes('reduzido') || val.includes('cod reduzido') || val.includes('código reduzido'));
+          const idxName = findIndexSafe(val => val.includes('descri') || val.includes('produto'));
+          const idxLab = findIndexSafe(val => val.includes('laboratório') || val.includes('laboratorio') || val === 'lab');
+          const idxBarcode = findIndexSafe(val =>
+            val.includes('barras') ||
+            val.includes('cod barras') ||
+            val.includes('codigo de barras') ||
+            val.includes('código de barras') ||
+            val.includes('ean') ||
+            val.includes('gtin') ||
+            val.includes('barcode')
+          );
+
+          const isHeaderRow = (idxReduced >= 0 && idxName >= 0) || (idxReduced >= 0 && (idxBarcode >= 0 || idxLab >= 0));
+          if (isHeaderRow) {
+            if (idxReduced >= 0) reducedIdx = idxReduced;
+            if (idxName >= 0) nameIdx = idxName;
+            if (idxLab >= 0) labIdx = idxLab;
+            if (idxBarcode >= 0) barcodeIdx = idxBarcode;
+            continue;
+          }
+
+          // Col C (2) = Reduzido, Col D (3) = Descrição, Col F (5) = Laboratório, Col K (10) = Barras
+          const reducedCode = normalizeCode(row[reducedIdx]);
+          const name = String(row[nameIdx] || "").trim();
+          const lab = String(row[labIdx] || "").trim();
+          let barcode = parseBarcode(row[barcodeIdx]);
+          if (!barcode || barcode.length < 8) {
+            const candidate = row
+              .map(val => parseBarcode(val))
+              .filter(val => val && val.length >= 8)
+              .sort((a, b) => b.length - a.length)[0];
+            if (candidate) barcode = candidate;
+          }
 
           if (reducedCode !== "" && !isNaN(Number(reducedCode))) {
             products.push({
@@ -59,7 +121,8 @@ export const parseSystemProductsXLSX = async (file: File): Promise<Product[]> =>
               name: name || "Produto sem descrição",
               barcode: barcode,
               reducedCode: reducedCode,
-              dcb: "N/A"
+              dcb: "N/A",
+              lab: lab || undefined
             });
           }
         }
@@ -150,63 +213,138 @@ export const parseSalesXLSX = async (file: File): Promise<{sales: SalesRecord[],
     reader.onload = (e) => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: 'array' });
+        const workbook = XLSX.read(data, { type: 'array', cellText: true, cellNF: true });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
         const sales: SalesRecord[] = [];
-        
-        // Período na Linha 5 (index 4), Coluna I (index 8)
+
+        const normalizeHeader = (value: any) => (
+          String(value || '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim()
+        );
+        const parseLocaleNumber = (value: any): number => {
+          if (value === null || value === undefined) return 0;
+          if (typeof value === 'number') return value;
+          const raw = String(value).trim();
+          if (!raw) return 0;
+          const cleaned = raw.replace(/[^\d,.-]/g, '');
+          if (!cleaned) return 0;
+          const hasComma = cleaned.includes(',');
+          const hasDot = cleaned.includes('.');
+          if (hasComma && hasDot) {
+            return parseFloat(cleaned.replace(/\./g, '').replace(',', '.')) || 0;
+          }
+          if (hasComma) {
+            return parseFloat(cleaned.replace(',', '.')) || 0;
+          }
+          return parseFloat(cleaned) || 0;
+        };
+
+        // Período (default: linha 5, coluna I)
         let period = "Não identificado";
         if (rows[4] && rows[4][8]) {
           period = String(rows[4][8]).trim();
+        } else {
+          for (let i = 0; i < Math.min(rows.length, 12); i++) {
+            const row = rows[i];
+            if (!Array.isArray(row)) continue;
+            const matchCell = row.find(cell => {
+              const val = String(cell || '').trim();
+              return /\d{1,2}\/\d{1,2}\/\d{2,4}/.test(val);
+            });
+            if (matchCell) {
+              period = String(matchCell).trim();
+              break;
+            }
+          }
         }
 
         let currentSalesperson = "Vendedor não identificado";
 
+        // Default indices (B, C, E, F, H, I)
+        let codeIdx = 1;
+        let nameIdx = 2;
+        let labIdx = 4;
+        let qtyIdx = 5;
+        let costIdx = 7;
+        let totalIdx = 8;
+        let headerFound = false;
+
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
-          if (!row || row.length < 2) continue;
+          if (!Array.isArray(row) || row.length < 2) continue;
 
-          let foundVendedorMarker = false;
-          let markerIndex = -1;
-          for(let c=0; c<3; c++) {
-            if(String(row[c] || "").toLowerCase().includes("vendedor")) {
-               foundVendedorMarker = true;
-               markerIndex = c;
-               break;
+          const lowerRow = row.map(val => normalizeHeader(val));
+          const findIndexSafe = (predicate: (value: string) => boolean) => {
+            for (let idx = 0; idx < lowerRow.length; idx++) {
+              const value = lowerRow[idx] || "";
+              if (predicate(value)) return idx;
+            }
+            return -1;
+          };
+
+          if (!headerFound) {
+            const idxCode = findIndexSafe(val => val === 'código' || val === 'codigo');
+            const idxName = findIndexSafe(val => val.includes('descri') || val.includes('produto'));
+            const idxLab = findIndexSafe(val => val.includes('laboratório') || val.includes('laboratorio'));
+            const idxQty = findIndexSafe(val => val.includes('quant') || val.includes('qtd'));
+            const idxCost = findIndexSafe(val => val.includes('valor custo') || val.includes('vlr custo') || val === 'custo');
+            const idxTotal = findIndexSafe(val => val.includes('valor vendas') || val.includes('valor venda') || val.includes('vlr vendas') || val.includes('vlr venda'));
+
+            if (idxCode >= 0 && (idxName >= 0 || idxQty >= 0 || idxTotal >= 0)) {
+              headerFound = true;
+              if (idxCode >= 0) codeIdx = idxCode;
+              if (idxName >= 0) nameIdx = idxName;
+              if (idxLab >= 0) labIdx = idxLab;
+              if (idxQty >= 0) qtyIdx = idxQty;
+              if (idxCost >= 0) costIdx = idxCost;
+              if (idxTotal >= 0) totalIdx = idxTotal;
+              continue;
             }
           }
 
-          if (foundVendedorMarker) {
-            const nameCandidates = row.slice(markerIndex + 1)
+          const vendorIndex = lowerRow.findIndex(val => val.includes('vendedor'));
+          if (vendorIndex >= 0) {
+            const nameCandidates = row.slice(vendorIndex + 1)
               .map(val => String(val || "").trim())
               .filter(val => val !== "" && val !== "-" && !val.endsWith("-") && !/^\d+$/.test(val));
-            
             if (nameCandidates.length > 0) {
               currentSalesperson = nameCandidates.join(" ").replace(/\s+/g, ' ').trim();
             }
             continue;
           }
 
-          const colBValue = String(row[1] || "").trim();
-          const isNumericCode = /^\d+$/.test(colBValue) && colBValue !== "";
-          
-          if (isNumericCode) {
-            const productName = String(row[2] || "").trim();
-            const quantity = parseFloat(row[5]) || 0;
+          const reducedRaw = String(row[codeIdx] || "").trim();
+          const reducedCode = normalizeCode(reducedRaw);
+          const isNumericCode = /^\d+$/.test(reducedCode) && reducedCode !== "";
+          if (!isNumericCode) continue;
 
-            if (quantity > 0) {
-              sales.push({ 
-                reducedCode: colBValue, 
-                productName: productName, 
-                quantity: quantity, 
-                salesperson: currentSalesperson,
-                date: period, 
-                dcb: "N/A" 
-              });
-            }
-          }
+          const productName = String(row[nameIdx] || "").trim();
+          const quantity = parseLocaleNumber(row[qtyIdx]);
+          if (quantity <= 0) continue;
+
+          const totalValue = parseLocaleNumber(row[totalIdx]);
+          const unitPrice = quantity > 0 ? totalValue / quantity : 0;
+          const costUnit = parseLocaleNumber(row[costIdx]);
+          const costTotal = costUnit * quantity;
+          const lab = labIdx >= 0 ? String(row[labIdx] || "").trim() : "";
+
+          sales.push({
+            reducedCode,
+            productName: productName || "Produto sem descrição",
+            quantity,
+            salesperson: currentSalesperson,
+            date: period,
+            dcb: "N/A",
+            unitPrice,
+            totalValue,
+            lab,
+            costUnit,
+            costTotal
+          });
         }
         resolve({ sales, period });
       } catch (err) {
@@ -277,4 +415,116 @@ export const parseSalesCSV = (csvText: string): SalesRecord[] => {
     }
   }
   return sales;
+};
+
+export const parseInventoryXLSX = async (file: File): Promise<InventoryCostRecord[]> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array', cellText: true, cellNF: true });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
+
+        const records: InventoryCostRecord[] = [];
+        const normalizeHeader = (value: any) => (
+          String(value || '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim()
+        );
+        const parseBarcode = (value: any): string => {
+          if (value === null || value === undefined) return '';
+          if (typeof value === 'number') {
+            return String(Math.trunc(value));
+          }
+          const raw = String(value).trim();
+          if (!raw) return '';
+          if (/e\+?/i.test(raw)) {
+            const num = Number(raw.replace(',', '.'));
+            if (Number.isFinite(num)) {
+              return String(Math.trunc(num));
+            }
+          }
+          return raw.replace(/\D/g, '');
+        };
+        const parseLocaleNumber = (value: any): number => {
+          if (value === null || value === undefined) return 0;
+          if (typeof value === 'number') return value;
+          const raw = String(value).trim();
+          if (!raw) return 0;
+          const cleaned = raw.replace(/[^\d,.-]/g, '');
+          if (!cleaned) return 0;
+          const hasComma = cleaned.includes(',');
+          const hasDot = cleaned.includes('.');
+          if (hasComma && hasDot) {
+            return parseFloat(cleaned.replace(/\./g, '').replace(',', '.')) || 0;
+          }
+          if (hasComma) {
+            return parseFloat(cleaned.replace(',', '.')) || 0;
+          }
+          return parseFloat(cleaned) || 0;
+        };
+
+        // Colunas fixas conforme padrão da filial
+        let barcodeColIndex = 1; // Coluna B
+        let costColIndex = 9; // Coluna J
+        let stockColIndex = 13; // Coluna N
+        let nameColIndex = -1;
+
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          if (!Array.isArray(row) || row.length < 2) continue;
+
+          const lowerRow = row.map(val => normalizeHeader(val));
+          const findIndexSafe = (predicate: (value: string) => boolean) => {
+            for (let idx = 0; idx < lowerRow.length; idx++) {
+              const value = lowerRow[idx] || "";
+              if (predicate(value)) return idx;
+            }
+            return -1;
+          };
+
+          const idxName = findIndexSafe(val => val.includes("descrição") || val.includes("descricao") || val.includes("produto"));
+
+          const hasHeaderRow = idxName >= 0;
+          if (hasHeaderRow) {
+            if (idxName >= 0) nameColIndex = idxName;
+            continue;
+          }
+
+          let barcode = parseBarcode(row[barcodeColIndex]);
+          if (!barcode || barcode.length < 8) {
+            const candidates = [0, 2]
+              .filter(idx => idx !== barcodeColIndex && idx >= 0 && idx < row.length)
+              .map(idx => parseBarcode(row[idx]))
+              .filter(val => val && val.length >= 8);
+            if (candidates.length > 0) {
+              barcode = candidates[0];
+            }
+          }
+          if (!barcode || barcode.length < 8) continue;
+
+          const cost = parseLocaleNumber(row[costColIndex]);
+          const stock = stockColIndex >= 0 ? parseLocaleNumber(row[stockColIndex]) : undefined;
+          const productName = nameColIndex >= 0 ? String(row[nameColIndex] || "").trim() : undefined;
+
+          records.push({
+            barcode,
+            cost,
+            stock,
+            productName
+          });
+        }
+
+        resolve(records);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    reader.onerror = (err) => reject(err);
+    reader.readAsArrayBuffer(file);
+  });
 };

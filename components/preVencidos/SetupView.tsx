@@ -193,9 +193,9 @@ const SetupView: React.FC<SetupViewProps> = ({
           className={`px-16 py-5 rounded-2xl font-bold text-xl shadow-xl transition-all ${isFormValid ? 'bg-blue-600 text-white hover:bg-blue-700 hover:-translate-y-1' : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
             }`}
         >
-          INICIAR CONFERÊNCIA <ArrowRight className="inline-block ml-2" />
-        </button>
-      </div>
+            INICIAR LANÇAMENTOS <ArrowRight className="inline-block ml-2" />
+          </button>
+        </div>
 
       {uploadHistory && uploadHistory.length > 0 && (
         <div className="mt-12 pt-8 border-t border-slate-200">

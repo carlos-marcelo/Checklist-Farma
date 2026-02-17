@@ -4,6 +4,7 @@ export interface Product {
   barcode: string;
   reducedCode: string;
   dcb: string;
+  lab?: string;
 }
 
 export interface PVRecord {
@@ -18,6 +19,8 @@ export interface PVRecord {
   dcb: string;
   userEmail?: string;
   userName?: string;
+  barcode?: string;
+  lab?: string;
 }
 
 export interface SalesRecord {
@@ -27,6 +30,19 @@ export interface SalesRecord {
   salesperson: string;
   date: string;
   dcb: string;
+  unitPrice?: number;
+  totalValue?: number;
+  lab?: string;
+  costUnit?: number;
+  costTotal?: number;
+  barcode?: string;
+}
+
+export interface InventoryCostRecord {
+  barcode: string;
+  cost: number;
+  stock?: number;
+  productName?: string;
 }
 
 export interface SalesUploadRecord {
@@ -64,6 +80,7 @@ export interface PVSaleClassification {
   qtyIgnoredPV: number;
   sellerName?: string;
   reducedCode?: string;
+  unitPrice?: number;
 }
 
 export enum AppView {

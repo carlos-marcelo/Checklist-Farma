@@ -25,6 +25,11 @@ export interface AnalysisReportDetail {
   code: string;
   totalSoldInReport?: number;
   qty?: number;
+  unitPrice?: number;
+  totalValue?: number;
+  costUnit?: number;
+  costTotal?: number;
+  lab?: string;
 }
 
 export interface AnalysisReportItem {
@@ -36,6 +41,8 @@ export interface AnalysisReportItem {
   expiryMonthLabel: string;
   directSoldQty: number;
   similarSoldQty: number;
+  directSalesValue: number;
+  similarSalesValue: number;
   status: AnalysisItemStatus;
   directSalesDetails: AnalysisReportDetail[];
   similarSalesDetails: AnalysisReportDetail[];
@@ -83,7 +90,12 @@ export const buildAnalysisReportPayload = (params: {
       name: sale.productName,
       seller: sale.salesperson,
       code: sale.reducedCode,
-      totalSoldInReport: sale.quantity
+      totalSoldInReport: sale.quantity,
+      unitPrice: sale.unitPrice || 0,
+      totalValue: sale.totalValue || 0,
+      costUnit: sale.costUnit || 0,
+      costTotal: sale.costTotal || 0,
+      lab: sale.lab || 'N/A'
     }));
 
     const isValidDCB = (dcb?: string) => dcb && dcb.trim() !== '' && dcb.toUpperCase() !== 'N/A';
@@ -96,12 +108,20 @@ export const buildAnalysisReportPayload = (params: {
       name: sale.productName,
       seller: sale.salesperson,
       code: sale.reducedCode,
-      qty: sale.quantity
+      qty: sale.quantity,
+      unitPrice: sale.unitPrice || 0,
+      totalValue: sale.totalValue || 0,
+      costUnit: sale.costUnit || 0,
+      costTotal: sale.costTotal || 0,
+      lab: sale.lab || 'N/A'
     }));
 
     let status: AnalysisItemStatus = 'lost';
     if (directSoldQty > 0) status = 'sold';
     else if (similarSoldQty > 0) status = 'replaced';
+
+    const directSalesValue = directSales.reduce((acc, s) => acc + (s.totalValue || 0), 0);
+    const similarSalesValue = similarSales.reduce((acc, s) => acc + (s.totalValue || 0), 0);
 
     return {
       reducedCode: pv.reducedCode,
@@ -112,6 +132,8 @@ export const buildAnalysisReportPayload = (params: {
       expiryMonthLabel: getExpiryMonthLabel(pv.expiryDate),
       directSoldQty,
       similarSoldQty,
+      directSalesValue,
+      similarSalesValue,
       status,
       directSalesDetails,
       similarSalesDetails
@@ -162,6 +184,15 @@ const formatTimestamp = (value?: string | null) => {
   }
 };
 
+const formatCurrency = (value?: number | null) => {
+  const safeValue = Number(value || 0);
+  try {
+    return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(safeValue);
+  } catch {
+    return `R$ ${safeValue.toFixed(2)}`;
+  }
+};
+
 export const buildAnalysisReportHtml = (
   payload: AnalysisReportPayload,
   options?: { autoPrint?: boolean }
@@ -192,13 +223,13 @@ export const buildAnalysisReportHtml = (
 
     const directDetails = item.directSalesDetails.length
       ? `<ul>${item.directSalesDetails.map(detail => (
-        `<li><strong>${escapeHtml(detail.name)}</strong> · Vendedor: ${escapeHtml(detail.seller)} · Qtde: ${detail.totalSoldInReport ?? 0}</li>`
+        `<li><strong>${escapeHtml(detail.name)}</strong>${detail.lab ? ` · Lab: ${escapeHtml(detail.lab)}` : ''} · Vendedor: ${escapeHtml(detail.seller)} · Qtde: ${detail.totalSoldInReport ?? 0} · Unit: ${formatCurrency(detail.unitPrice)} · Total: ${formatCurrency(detail.totalValue)} · Custo: ${formatCurrency(detail.costTotal)}</li>`
       )).join('')}</ul>`
       : '<p class="muted">Sem vendas diretas.</p>';
 
     const similarDetails = item.similarSalesDetails.length
       ? `<ul>${item.similarSalesDetails.map(detail => (
-        `<li><strong>${escapeHtml(detail.name)}</strong> (RED ${escapeHtml(detail.code)}) · Vendedor: ${escapeHtml(detail.seller)} · Qtde: ${detail.qty ?? 0}</li>`
+        `<li><strong>${escapeHtml(detail.name)}</strong> (RED ${escapeHtml(detail.code)})${detail.lab ? ` · Lab: ${escapeHtml(detail.lab)}` : ''} · Vendedor: ${escapeHtml(detail.seller)} · Qtde: ${detail.qty ?? 0} · Unit: ${formatCurrency(detail.unitPrice)} · Total: ${formatCurrency(detail.totalValue)} · Custo: ${formatCurrency(detail.costTotal)}</li>`
       )).join('')}</ul>`
       : '<p class="muted">Sem similares vendidos.</p>';
 
@@ -208,6 +239,7 @@ export const buildAnalysisReportHtml = (
           <div>
             <h3>${escapeHtml(item.name)}</h3>
             <div class="meta-line">RED: ${escapeHtml(item.reducedCode)} · DCB: ${escapeHtml(item.dcb || 'N/A')} · PV em estoque: ${item.quantity} · Vencimento: ${escapeHtml(item.expiryMonthLabel)}</div>
+            <div class="meta-line">Valor PV: ${formatCurrency(item.directSalesValue)} · Valor Similar: ${formatCurrency(item.similarSalesValue)}</div>
           </div>
           <span class="${statusClass}">${escapeHtml(statusLabel)}</span>
         </div>

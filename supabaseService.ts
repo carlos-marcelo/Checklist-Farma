@@ -1,6 +1,6 @@
 import { supabase } from './supabaseClient';
 import { ChecklistDefinition } from './types';
-import { Product, PVRecord, PVSaleClassification, SalesUploadRecord, SalesRecord } from './preVencidos/types';
+import { Product, PVRecord, PVSaleClassification, SalesUploadRecord, SalesRecord, InventoryCostRecord } from './preVencidos/types';
 import { AnalysisReportPayload } from './preVencidos/analysisReport';
 
 // ==================== TYPES ====================
@@ -136,6 +136,17 @@ export interface DbPVSalesHistory {
 }
 
 export type DbPVSalesUpload = SalesUploadRecord;
+
+export interface DbPVInventoryReport {
+  id?: string;
+  company_id: string;
+  branch: string;
+  file_name?: string | null;
+  uploaded_at?: string | null;
+  records: InventoryCostRecord[];
+  created_at?: string;
+  updated_at?: string;
+}
 
 export interface DbPVSalesAnalysisReport {
   id?: string;
@@ -1244,6 +1255,51 @@ export async function upsertPVSalesAnalysisReport(report: DbPVSalesAnalysisRepor
     return data || null;
   } catch (error) {
     console.error('Error upserting PV sales analysis report:', error);
+    return null;
+  }
+}
+
+export async function fetchPVInventoryReport(companyId: string, branch: string): Promise<DbPVInventoryReport | null> {
+  try {
+    const { data, error } = await supabase
+      .from('pv_inventory_reports')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('branch', branch)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return null;
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    console.error('Error fetching PV inventory report:', error);
+    return null;
+  }
+}
+
+export async function upsertPVInventoryReport(report: DbPVInventoryReport): Promise<DbPVInventoryReport | null> {
+  try {
+    const payload = {
+      company_id: report.company_id,
+      branch: report.branch,
+      file_name: report.file_name ?? null,
+      uploaded_at: report.uploaded_at ?? null,
+      records: report.records,
+      updated_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabase
+      .from('pv_inventory_reports')
+      .upsert(payload, { onConflict: 'company_id,branch' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error upserting PV inventory report:', error);
     return null;
   }
 }
