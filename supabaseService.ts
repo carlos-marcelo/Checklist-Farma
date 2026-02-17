@@ -790,13 +790,19 @@ export async function fetchPVSession(userEmail: string): Promise<DbPVSession | n
   }
 }
 
+export interface DbPVConfirmedSalesMeta {
+  finalized_reds_by_period?: Record<string, string[]>;
+}
+
+export type DbPVConfirmedSalesPayload = Record<string, PVSaleClassification | DbPVConfirmedSalesMeta>;
+
 export interface DbActiveSalesReport {
   id?: string;
   company_id: string;
   branch: string;
   sales_records: SalesRecord[];
   sales_period: string;
-  confirmed_sales?: Record<string, PVSaleClassification>;
+  confirmed_sales?: DbPVConfirmedSalesPayload;
   uploaded_at?: string;
   updated_at?: string;
   user_email?: string;

@@ -17,6 +17,8 @@ import {
   DbCompany,
   DbPVSession,
   DbPVSalesUpload,
+  DbPVConfirmedSalesPayload,
+  DbPVConfirmedSalesMeta,
   fetchPVSession,
   upsertPVSession,
   insertPVBranchRecord,
@@ -53,6 +55,48 @@ interface PreVencidosManagerProps {
   userName?: string;
   companies: DbCompany[];
 }
+
+const CONFIRMED_META_KEY = '__pv_meta__';
+
+const extractConfirmedSalesPayload = (payload?: DbPVConfirmedSalesPayload | null) => {
+  const confirmed: Record<string, PVSaleClassification> = {};
+  let finalized: Record<string, string[]> = {};
+
+  if (!payload) return { confirmed, finalized };
+
+  Object.entries(payload).forEach(([key, value]) => {
+    if (key === CONFIRMED_META_KEY) {
+      const meta = value as DbPVConfirmedSalesMeta | undefined;
+      if (meta?.finalized_reds_by_period) {
+        finalized = meta.finalized_reds_by_period;
+      }
+      return;
+    }
+
+    if (value && typeof value === 'object' && ('qtyPV' in value || 'qtyNeutral' in value || 'qtyIgnoredPV' in value)) {
+      confirmed[key] = value as PVSaleClassification;
+    }
+  });
+
+  return { confirmed, finalized };
+};
+
+const buildConfirmedSalesPayload = (
+  confirmed: Record<string, PVSaleClassification>,
+  finalized: Record<string, string[]>
+): DbPVConfirmedSalesPayload => ({
+  ...confirmed,
+  [CONFIRMED_META_KEY]: { finalized_reds_by_period: finalized || {} }
+});
+
+const mergeFinalizedMaps = (base: Record<string, string[]>, extra: Record<string, string[]>) => {
+  const merged: Record<string, string[]> = { ...base };
+  Object.entries(extra).forEach(([period, codes]) => {
+    const set = new Set([...(merged[period] || []), ...codes]);
+    merged[period] = Array.from(set);
+  });
+  return merged;
+};
 
 const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, userName, companies = [] }) => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.SETUP);
@@ -505,26 +549,30 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       // 3. Fetch Active Sales Report (Persistence)
       fetchActiveSalesReport(sessionInfo.companyId, sessionInfo.filial)
         .then(report => {
-          if (report && report.sales_records && report.sales_records.length > 0) {
+          if (!report) return;
+
+          if (report.sales_records && report.sales_records.length > 0) {
             console.log('✅ [PV Persistence] Relatório ativo restaurado:', report.sales_period);
             setSalesRecords(report.sales_records);
             setSalesPeriod(report.sales_period || '');
-            if (report.confirmed_sales) {
-              setConfirmedPVSales(report.confirmed_sales);
-            }
-            // Restore upload metadata for display
-            if (report.sales_period || report.uploaded_at) {
-              setLocalLastUpload({
-                period_label: report.sales_period,
-                file_name: report.file_name || 'Relatório Ativo',
-                uploaded_at: report.uploaded_at || new Date().toISOString(),
-                user_email: report.user_email || '',
-                company_id: report.company_id,
-                branch: report.branch,
-                period_start: null,
-                period_end: null
-              });
-            }
+          }
+
+          const { confirmed, finalized } = extractConfirmedSalesPayload(report.confirmed_sales || null);
+          setConfirmedPVSales(confirmed);
+          setFinalizedREDSByPeriod(finalized);
+
+          // Restore upload metadata for display
+          if (report.sales_period || report.uploaded_at) {
+            setLocalLastUpload({
+              period_label: report.sales_period,
+              file_name: report.file_name || 'Relatório Ativo',
+              uploaded_at: report.uploaded_at || new Date().toISOString(),
+              user_email: report.user_email || '',
+              company_id: report.company_id,
+              branch: report.branch,
+              period_start: null,
+              period_end: null
+            });
           }
         })
         .catch(err => console.error('Erro carregando relatório de vendas ativo:', err));
@@ -566,6 +614,23 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     return sessionInfo?.filial ? [sessionInfo.filial] : [];
   }, [companies, sessionInfo?.companyId, sessionInfo?.filial]);
 
+  const historyFinalizedByPeriod = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    historyRecords.forEach(rec => {
+      const period = rec.sale_period || '';
+      const code = rec.reduced_code || '';
+      if (!period || !code) return;
+      if (!map[period]) map[period] = [];
+      if (!map[period].includes(code)) map[period].push(code);
+    });
+    return map;
+  }, [historyRecords]);
+
+  const effectiveFinalizedByPeriod = useMemo(
+    () => mergeFinalizedMaps(finalizedREDSByPeriod, historyFinalizedByPeriod),
+    [finalizedREDSByPeriod, historyFinalizedByPeriod]
+  );
+
   const handleUpdatePVSale = (saleId: string, classification: PVSaleClassification) => {
     setConfirmedPVSales(prev => {
       const newState = { ...prev, [saleId]: classification };
@@ -577,7 +642,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           branch: sessionInfo.filial,
           sales_records: salesRecords,
           sales_period: salesPeriod,
-          confirmed_sales: newState,
+          confirmed_sales: buildConfirmedSalesPayload(newState, effectiveFinalizedByPeriod),
           user_email: userEmail
         }).catch(err => console.error('Erro ao salvar classificação:', err));
       }
@@ -691,13 +756,25 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       }
     }
 
-    setFinalizedREDSByPeriod(prev => {
-      const currentPeriodFinalized = prev[period] || [];
-      return {
-        ...prev,
-        [period]: [...new Set([...currentPeriodFinalized, reducedCode])]
-      };
-    });
+    const currentPeriodFinalized = finalizedREDSByPeriod[period] || [];
+    const nextFinalized = {
+      ...finalizedREDSByPeriod,
+      [period]: [...new Set([...currentPeriodFinalized, reducedCode])]
+    };
+
+    setFinalizedREDSByPeriod(nextFinalized);
+
+    if (sessionInfo?.companyId && sessionInfo?.filial) {
+      const finalizedForPersist = mergeFinalizedMaps(nextFinalized, historyFinalizedByPeriod);
+      upsertActiveSalesReport({
+        company_id: sessionInfo.companyId,
+        branch: sessionInfo.filial,
+        sales_records: salesRecords,
+        sales_period: salesPeriod || period,
+        confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedForPersist),
+        user_email: userEmail
+      }).catch(err => console.error('Erro ao persistir finalização:', err));
+    }
   };
 
   type PeriodRange = {
@@ -881,7 +958,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         branch: sessionInfo.filial,
         sales_records: enrichedSales,
         sales_period: cleanedPeriod,
-        confirmed_sales: {}, // Reset confirmed sales on new report? Or keep? Usually new report = new analysis.
+        confirmed_sales: buildConfirmedSalesPayload({}, {}), // Reset confirmed sales + metadata on new report
         user_email: userEmail,
         file_name: fileName
       }).then(ok => {
@@ -1154,9 +1231,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       // Better: we know 'finalizedREDSByPeriod' keys are Periods.
       // We can check if any finalized array contains a code that matches this key.
 
-      const isFinalized = Object.keys(finalizedREDSByPeriod).some(periodKey => {
+      const isFinalized = Object.keys(effectiveFinalizedByPeriod).some(periodKey => {
         if (key.startsWith(periodKey)) {
-          const list = finalizedREDSByPeriod[periodKey];
+          const list = effectiveFinalizedByPeriod[periodKey];
           // Check if key contains any of the finalized codes
           return list.some(code => key.includes(`-${code}-`));
         }
@@ -1204,7 +1281,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const efficiency = totalPotentialSales > 0 ? (totalRecovered / totalPotentialSales) * 100 : 0;
 
     return { ranking, totalRecovered, totalIgnored, efficiency, pvInRegistry, sortedStockByMonth };
-  }, [pvRecords, confirmedPVSales, historyRecords, finalizedREDSByPeriod]);
+  }, [pvRecords, confirmedPVSales, historyRecords, effectiveFinalizedByPeriod]);
 
   const historyDetailItems = useMemo(() => {
     if (!historyDetail) return [];
@@ -1413,7 +1490,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
               )}
               <AnalysisView
                 pvRecords={pvRecords} salesRecords={salesRecords} confirmedPVSales={confirmedPVSales}
-                finalizedREDSByPeriod={finalizedREDSByPeriod}
+                finalizedREDSByPeriod={effectiveFinalizedByPeriod}
                 currentSalesPeriod={salesPeriod}
                 onUpdatePVSale={handleUpdatePVSale} onFinalizeSale={handleFinalizeSale}
               />
