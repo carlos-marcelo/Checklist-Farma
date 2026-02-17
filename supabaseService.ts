@@ -1,6 +1,7 @@
 import { supabase } from './supabaseClient';
 import { ChecklistDefinition } from './types';
 import { Product, PVRecord, PVSaleClassification, SalesUploadRecord } from './preVencidos/types';
+import { AnalysisReportPayload } from './preVencidos/analysisReport';
 
 // ==================== TYPES ====================
 
@@ -135,6 +136,20 @@ export interface DbPVSalesHistory {
 }
 
 export type DbPVSalesUpload = SalesUploadRecord;
+
+export interface DbPVSalesAnalysisReport {
+  id?: string;
+  company_id: string;
+  branch: string;
+  period_label: string;
+  period_start?: string | null;
+  period_end?: string | null;
+  file_name?: string | null;
+  uploaded_at?: string | null;
+  analysis_payload: AnalysisReportPayload;
+  created_at?: string;
+  updated_at?: string;
+}
 
 export interface DbPVSessionData {
   master_products?: Product[];
@@ -1083,6 +1098,51 @@ export async function insertPVSalesUpload(upload: DbPVSalesUpload): Promise<DbPV
     return data || null;
   } catch (error) {
     console.error('Error inserting PV sales upload:', error);
+    return null;
+  }
+}
+
+export async function fetchPVSalesAnalysisReports(companyId: string, branch: string): Promise<DbPVSalesAnalysisReport[]> {
+  try {
+    const { data, error } = await supabase
+      .from('pv_sales_analysis_reports')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('branch', branch)
+      .order('uploaded_at', { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching PV sales analysis reports:', error);
+    return [];
+  }
+}
+
+export async function upsertPVSalesAnalysisReport(report: DbPVSalesAnalysisReport): Promise<DbPVSalesAnalysisReport | null> {
+  try {
+    const payload = {
+      company_id: report.company_id,
+      branch: report.branch,
+      period_label: report.period_label,
+      period_start: report.period_start ?? null,
+      period_end: report.period_end ?? null,
+      file_name: report.file_name ?? null,
+      uploaded_at: report.uploaded_at ?? null,
+      analysis_payload: report.analysis_payload,
+      updated_at: new Date().toISOString()
+    };
+
+    const { data, error } = await supabase
+      .from('pv_sales_analysis_reports')
+      .upsert(payload, { onConflict: 'company_id,branch,period_label' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error upserting PV sales analysis report:', error);
     return null;
   }
 }

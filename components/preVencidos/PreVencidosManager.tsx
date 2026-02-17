@@ -19,6 +19,7 @@ import {
   DbPVSalesUpload,
   DbPVConfirmedSalesPayload,
   DbPVConfirmedSalesMeta,
+  DbPVSalesAnalysisReport,
   fetchPVSession,
   upsertPVSession,
   insertPVBranchRecord,
@@ -36,7 +37,9 @@ import {
   upsertPVReport,
   deletePVReports,
   fetchActiveSalesReport,
-  upsertActiveSalesReport
+  upsertActiveSalesReport,
+  fetchPVSalesAnalysisReports,
+  upsertPVSalesAnalysisReport
 } from '../../supabaseService';
 import {
   loadLocalPVSession,
@@ -49,6 +52,7 @@ import {
   saveLastSalesUpload,
   clearLastSalesUpload
 } from '../../preVencidos/storage';
+import { AnalysisReportPayload, buildAnalysisReportPayload } from '../../preVencidos/analysisReport';
 
 interface PreVencidosManagerProps {
   userEmail?: string;
@@ -118,6 +122,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [isInitialSyncDone, setIsInitialSyncDone] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const [salesUploads, setSalesUploads] = useState<DbPVSalesUpload[]>([]);
+  const [analysisReports, setAnalysisReports] = useState<Record<string, AnalysisReportPayload>>({});
   const [localLastUpload, setLocalLastUpload] = useState<SalesUploadRecord | null>(null);
   const [historyDetail, setHistoryDetail] = useState<{ type: 'seller' | 'recovered' | 'ignored'; seller?: string } | null>(null);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -199,6 +204,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       setHistoryRecords([]);
       setPvSessionId(null);
       setSalesUploads([]);
+      setAnalysisReports({});
 
       clearLocalPVSession(userEmail || '');
       if (userEmail) {
@@ -604,6 +610,35 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     };
   }, [sessionInfo?.companyId, sessionInfo?.filial]);
 
+  useEffect(() => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) {
+      setAnalysisReports({});
+      return;
+    }
+
+    let cancelled = false;
+    fetchPVSalesAnalysisReports(sessionInfo.companyId, sessionInfo.filial)
+      .then(reports => {
+        if (cancelled) return;
+        const map: Record<string, AnalysisReportPayload> = {};
+        reports.forEach(report => {
+          const label = (report.period_label || '').trim();
+          if (label && report.analysis_payload) {
+            map[label] = report.analysis_payload;
+          }
+        });
+        setAnalysisReports(map);
+      })
+      .catch(err => {
+        if (cancelled) return;
+        console.error('Erro carregando relatórios de análise de vendas:', err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionInfo?.companyId, sessionInfo?.filial]);
+
   const originBranches = useMemo(() => {
     const byId = companies.find(c => c.id === sessionInfo?.companyId);
     const fallback = byId ? null : companies.find(c => (c.name || '').toLowerCase().includes('drogaria cidade'));
@@ -630,6 +665,111 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     () => mergeFinalizedMaps(finalizedREDSByPeriod, historyFinalizedByPeriod),
     [finalizedREDSByPeriod, historyFinalizedByPeriod]
   );
+
+  const currentAnalysisReport = useMemo(() => {
+    const normalizedPeriod = (salesPeriod || '').trim();
+    if (!normalizedPeriod || salesRecords.length === 0 || pvRecords.length === 0) return null;
+    const finalizedCodes = effectiveFinalizedByPeriod[normalizedPeriod] || [];
+    const { fileName, uploadedAt, range } = resolveUploadMetaForPeriod(normalizedPeriod);
+
+    return buildAnalysisReportPayload({
+      pvRecords,
+      salesRecords,
+      periodLabel: normalizedPeriod,
+      finalizedCodes,
+      meta: {
+        company: sessionInfo?.company,
+        branch: sessionInfo?.filial,
+        area: sessionInfo?.area,
+        file_name: fileName || localLastUpload?.file_name || null,
+        uploaded_at: uploadedAt || localLastUpload?.uploaded_at || null,
+        period_start: range.start ? range.start.toISOString() : null,
+        period_end: range.end ? range.end.toISOString() : null
+      }
+    });
+  }, [
+    salesPeriod,
+    salesRecords,
+    pvRecords,
+    effectiveFinalizedByPeriod,
+    sessionInfo?.company,
+    sessionInfo?.filial,
+    sessionInfo?.area,
+    localLastUpload,
+    salesUploads
+  ]);
+
+  const pendingLaunchCount = useMemo(() => {
+    if (!currentAnalysisReport) return 0;
+    const finalized = new Set(currentAnalysisReport.finalized_codes || []);
+    return currentAnalysisReport.items.filter(item => item.status === 'sold' && !finalized.has(item.reducedCode)).length;
+  }, [currentAnalysisReport]);
+
+  useEffect(() => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
+    if (!currentAnalysisReport) return;
+    const periodLabel = (currentAnalysisReport.period_label || '').trim();
+    if (!periodLabel) return;
+    if (analysisReports[periodLabel]) return;
+
+    const { range, fileName, uploadedAt } = resolveUploadMetaForPeriod(periodLabel);
+    persistAnalysisReport(salesRecords, periodLabel, range, fileName, uploadedAt)
+      .catch(err => console.error('Erro ao persistir relatório de análise atual:', err));
+  }, [
+    currentAnalysisReport,
+    analysisReports,
+    salesRecords,
+    sessionInfo?.companyId,
+    sessionInfo?.filial
+  ]);
+
+  const persistAnalysisReport = async (
+    sales: SalesRecord[],
+    periodLabel: string,
+    range: PeriodRange,
+    fileName?: string,
+    uploadedAt?: string
+  ) => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
+    const normalizedPeriod = (periodLabel || '').trim() || 'Período não identificado';
+    if (!sales.length || !pvRecords.length) return;
+    if (!normalizedPeriod) return;
+    const finalizedCodes = effectiveFinalizedByPeriod[normalizedPeriod] || [];
+
+    const payload: AnalysisReportPayload = buildAnalysisReportPayload({
+      pvRecords,
+      salesRecords: sales,
+      periodLabel: normalizedPeriod,
+      finalizedCodes,
+      meta: {
+        company: sessionInfo.company,
+        branch: sessionInfo.filial,
+        area: sessionInfo.area,
+        file_name: fileName || null,
+        uploaded_at: uploadedAt || new Date().toISOString(),
+        period_start: range.start ? range.start.toISOString() : null,
+        period_end: range.end ? range.end.toISOString() : null
+      }
+    });
+
+    setAnalysisReports(prev => ({
+      ...prev,
+      [normalizedPeriod]: payload
+    }));
+
+    const record: DbPVSalesAnalysisReport = {
+      company_id: sessionInfo.companyId,
+      branch: sessionInfo.filial,
+      period_label: normalizedPeriod,
+      period_start: payload.meta?.period_start ?? null,
+      period_end: payload.meta?.period_end ?? null,
+      file_name: payload.meta?.file_name ?? null,
+      uploaded_at: payload.meta?.uploaded_at ?? null,
+      analysis_payload: payload
+    };
+
+    await upsertPVSalesAnalysisReport(record);
+  };
 
   const handleUpdatePVSale = (saleId: string, classification: PVSaleClassification) => {
     setConfirmedPVSales(prev => {
@@ -775,6 +915,61 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         user_email: userEmail
       }).catch(err => console.error('Erro ao persistir finalização:', err));
     }
+
+    const normalizedPeriod = (period || salesPeriod || '').trim() || 'Período não identificado';
+    const existingReport = analysisReports[normalizedPeriod];
+    const updatedFinalizedCodes = nextFinalized[normalizedPeriod] || [];
+
+    if (existingReport) {
+      const updatedPayload: AnalysisReportPayload = {
+        ...existingReport,
+        finalized_codes: updatedFinalizedCodes
+      };
+      setAnalysisReports(prev => ({
+        ...prev,
+        [normalizedPeriod]: updatedPayload
+      }));
+      if (sessionInfo?.companyId && sessionInfo?.filial) {
+        upsertPVSalesAnalysisReport({
+          company_id: sessionInfo.companyId,
+          branch: sessionInfo.filial,
+          period_label: normalizedPeriod,
+          period_start: existingReport.meta?.period_start ?? null,
+          period_end: existingReport.meta?.period_end ?? null,
+          file_name: existingReport.meta?.file_name ?? null,
+          uploaded_at: existingReport.meta?.uploaded_at ?? null,
+          analysis_payload: updatedPayload
+        }).catch(err => console.error('Erro ao atualizar relatório de análise:', err));
+      }
+    } else if (salesRecords.length > 0 && sessionInfo?.companyId && sessionInfo?.filial) {
+      const fallbackPayload = buildAnalysisReportPayload({
+        pvRecords,
+        salesRecords,
+        periodLabel: normalizedPeriod,
+        finalizedCodes: updatedFinalizedCodes,
+        meta: {
+          company: sessionInfo.company,
+          branch: sessionInfo.filial,
+          area: sessionInfo.area,
+          file_name: localLastUpload?.file_name || null,
+          uploaded_at: localLastUpload?.uploaded_at || new Date().toISOString()
+        }
+      });
+      setAnalysisReports(prev => ({
+        ...prev,
+        [normalizedPeriod]: fallbackPayload
+      }));
+      upsertPVSalesAnalysisReport({
+        company_id: sessionInfo.companyId,
+        branch: sessionInfo.filial,
+        period_label: normalizedPeriod,
+        period_start: fallbackPayload.meta?.period_start ?? null,
+        period_end: fallbackPayload.meta?.period_end ?? null,
+        file_name: fallbackPayload.meta?.file_name ?? null,
+        uploaded_at: fallbackPayload.meta?.uploaded_at ?? null,
+        analysis_payload: fallbackPayload
+      }).catch(err => console.error('Erro ao salvar relatório de análise (fallback):', err));
+    }
   };
 
   type PeriodRange = {
@@ -782,7 +977,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     end: Date | null;
   };
 
-  const parsePeriodRange = (label?: string): PeriodRange => {
+  function parsePeriodRange(label?: string): PeriodRange {
     if (!label) return { start: null, end: null };
     const regex = /(\d{1,2})\/(\d{1,2})\/(\d{2,4})/g;
     const matches = Array.from(label.matchAll(regex));
@@ -799,15 +994,15 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const start = matches.length > 0 ? toDate(matches[0]) : null;
     const end = matches.length > 1 ? toDate(matches[1]) : start;
     return { start, end };
-  };
+  }
 
-  const rangesOverlap = (a: PeriodRange, b: PeriodRange) => {
+  function rangesOverlap(a: PeriodRange, b: PeriodRange) {
     if (!a.start || !a.end || !b.start || !b.end) return false;
     // Compare times
     return a.start.getTime() <= b.end.getTime() && b.start.getTime() <= a.end.getTime();
-  };
+  }
 
-  const parseDBDate = (dateStr?: string | null) => {
+  function parseDBDate(dateStr?: string | null) {
     if (!dateStr) return null;
     // Accessing YYYY-MM-DD safely
     // If it's a full ISO string (with T), split by T first
@@ -815,12 +1010,41 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const [y, m, d] = cleanDate.split('-').map(Number);
     // Set to NOON (12:00:00) to match parsePeriodRange
     return new Date(y, m - 1, d, 12, 0, 0);
-  };
+  }
 
-  const buildRecordRange = (record?: SalesUploadRecord): PeriodRange => ({
-    start: parseDBDate(record?.period_start),
-    end: parseDBDate(record?.period_end)
-  });
+  function buildRecordRange(record?: SalesUploadRecord): PeriodRange {
+    return {
+      start: parseDBDate(record?.period_start),
+      end: parseDBDate(record?.period_end)
+    };
+  }
+
+  function resolveUploadMetaForPeriod(label: string) {
+    const normalizedLabel = (label || '').trim();
+    const fallbackRange = parsePeriodRange(normalizedLabel);
+
+    const matchInHistory = salesUploads.find(report => (report.period_label || '').trim() === normalizedLabel);
+    const match = matchInHistory
+      || (localLastUpload && (localLastUpload.period_label || '').trim() === normalizedLabel ? localLastUpload : undefined);
+
+    if (!match) {
+      return {
+        range: fallbackRange,
+        fileName: undefined,
+        uploadedAt: undefined
+      };
+    }
+
+    const recordRange = buildRecordRange(match);
+    return {
+      range: {
+        start: recordRange.start || fallbackRange.start,
+        end: recordRange.end || fallbackRange.end
+      },
+      fileName: match.file_name || undefined,
+      uploadedAt: match.uploaded_at || undefined
+    };
+  }
 
   const matchesContext = (record?: SalesUploadRecord) => {
     if (!record || !sessionInfo?.companyId || !sessionInfo?.filial) return false;
@@ -881,9 +1105,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     }
   };
 
-  const persistSalesUploadRecord = async (label: string, range: PeriodRange, fileName: string) => {
+  const persistSalesUploadRecord = async (label: string, range: PeriodRange, fileName: string, uploadedAt?: string) => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
-    const timestamp = new Date().toISOString();
+    const timestamp = uploadedAt || new Date().toISOString();
     const baseRecord: SalesUploadRecord = {
       user_email: userEmail || '',
       company_id: sessionInfo.companyId,
@@ -922,7 +1146,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     }
   };
 
-  const processAndSetSales = (sales: SalesRecord[], period: string, fileName?: string) => {
+  const processAndSetSales = (sales: SalesRecord[], period: string, fileName?: string, range?: PeriodRange, uploadedAt?: string) => {
     const cleanedPeriod = (period || '').trim() || 'Período não identificado';
     const enrichedSales = sales.map(s => {
       const product = masterProducts.find(p => p.reducedCode === s.reducedCode);
@@ -942,7 +1166,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       setLocalLastUpload({
         period_label: cleanedPeriod,
         file_name: fileName || 'Upload Manual',
-        uploaded_at: new Date().toISOString(),
+        uploaded_at: uploadedAt || new Date().toISOString(),
         user_email: userEmail || '',
         company_id: sessionInfo.companyId,
         branch: sessionInfo.filial,
@@ -965,9 +1189,18 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         if (ok) console.log('✅ [PV Persistence] Relatório de vendas salvo no banco.');
       });
     }
+
+    if (range) {
+      persistAnalysisReport(enrichedSales, cleanedPeriod, range, fileName, uploadedAt)
+        .catch(err => console.error('Erro ao salvar relatório de análise:', err));
+    }
   };
 
   const handleParsedSales = async (sales: SalesRecord[], rawPeriodLabel: string | undefined, fileName: string) => {
+    if (pendingLaunchCount > 0) {
+      alert(`Ainda existem ${pendingLaunchCount} itens com "Falta Lançar no Período".\n\nFinalize todos os lançamentos pendentes antes de carregar um novo arquivo de vendas.`);
+      return;
+    }
     const normalizedLabel = (rawPeriodLabel || '').trim() || 'Período não identificado';
     const parsedRange = parsePeriodRange(normalizedLabel);
     const conflict = findConflictingUpload(parsedRange, normalizedLabel);
@@ -995,11 +1228,17 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       return;
     }
 
-    processAndSetSales(sales, normalizedLabel, fileName);
-    await persistSalesUploadRecord(normalizedLabel, parsedRange, fileName);
+    const uploadedAt = new Date().toISOString();
+    processAndSetSales(sales, normalizedLabel, fileName, parsedRange, uploadedAt);
+    await persistSalesUploadRecord(normalizedLabel, parsedRange, fileName, uploadedAt);
   };
 
   const handleSalesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (pendingLaunchCount > 0) {
+      alert(`Ainda existem ${pendingLaunchCount} itens com "Falta Lançar no Período".\n\nFinalize todos os lançamentos pendentes antes de carregar um novo arquivo de vendas.`);
+      e.target.value = '';
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
     const fileName = file.name;
@@ -1702,6 +1941,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         isOpen={showHistoryModal}
         onClose={() => setShowHistoryModal(false)}
         history={salesUploads}
+        analysisReports={{
+          ...analysisReports,
+          ...(currentAnalysisReport && currentAnalysisReport.period_label
+            ? { [currentAnalysisReport.period_label.trim()]: currentAnalysisReport }
+            : {})
+        }}
       />
     </div>
   );
