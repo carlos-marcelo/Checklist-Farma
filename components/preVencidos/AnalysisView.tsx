@@ -1,6 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { PVRecord, SalesRecord, PVSaleClassification, SalesUploadRecord, SessionInfo } from '../../preVencidos/types';
+import { buildAnalysisReportHtml, buildAnalysisReportPayload } from '../../preVencidos/analysisReport';
 import { FileSearch, Users, ShoppingCart, TrendingUp, AlertCircle, CheckCircle, FlaskConical, Repeat, Search, Package, Trophy, CheckSquare, XCircle, Save, MinusCircle, HelpCircle, Lock, Printer } from 'lucide-react';
 
 const MONTH_NAMES_PT_BR = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
@@ -100,148 +101,25 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     return enriched.filter(item => item.status !== 'lost');
   }, [pvRecords, salesRecords, finalizedREDSByPeriod, currentSalesPeriod]);
 
-  const formatTimestamp = (value?: string) => {
-    if (!value) return '';
-    try {
-      return new Intl.DateTimeFormat('pt-BR', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
-        second: '2-digit',
-        hour12: false
-      }).format(new Date(value));
-    } catch {
-      return value;
-    }
-  };
-
-  const escapeHtml = (input: string) => (
-    input
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;')
-  );
-
-  const buildPrintHtml = () => {
-    const totalItens = results.length;
-    const totalSimilar = results.filter(r => r.status === 'replaced').length;
-    const totalDireto = results.filter(r => r.status === 'sold').length;
-    const headerLines = [
-      currentSalesPeriod ? `Período: ${currentSalesPeriod}` : '',
-      sessionInfo?.company ? `Empresa: ${sessionInfo.company}` : '',
-      sessionInfo?.filial ? `Filial: ${sessionInfo.filial}` : '',
-      sessionInfo?.area ? `Área: ${sessionInfo.area}` : '',
-      lastUpload?.file_name ? `Arquivo: ${lastUpload.file_name}` : '',
-      lastUpload?.uploaded_at ? `Carregado em: ${formatTimestamp(lastUpload.uploaded_at)}` : ''
-    ].filter(Boolean);
-
-    const itemsHtml = results.map(item => {
-      const statusLabel = item.isFinalized
-        ? 'Finalizado no período'
-        : item.status === 'replaced'
-          ? 'Similar vendido'
-          : 'Vendeu PV';
-
-      const statusClass = item.isFinalized
-        ? 'badge badge-finalized'
-        : item.status === 'replaced'
-          ? 'badge badge-similar'
-          : 'badge badge-sold';
-
-      const directDetails = item.directSalesDetails.length
-        ? `<ul>${item.directSalesDetails.map(detail => (
-          `<li><strong>${escapeHtml(detail.name)}</strong> · Vendedor: ${escapeHtml(detail.seller)} · Qtde: ${detail.totalSoldInReport}</li>`
-        )).join('')}</ul>`
-        : '<p class="muted">Sem vendas diretas.</p>';
-
-      const similarDetails = item.similarSalesDetails.length
-        ? `<ul>${item.similarSalesDetails.map(detail => (
-          `<li><strong>${escapeHtml(detail.name)}</strong> (RED ${escapeHtml(detail.code)}) · Vendedor: ${escapeHtml(detail.seller)} · Qtde: ${detail.qty}</li>`
-        )).join('')}</ul>`
-        : '<p class="muted">Sem similares vendidos.</p>';
-
-      return `
-        <div class="item">
-          <div class="item-head">
-            <div>
-              <h3>${escapeHtml(item.name)}</h3>
-              <div class="meta-line">RED: ${escapeHtml(item.reducedCode)} · DCB: ${escapeHtml(item.dcb || 'N/A')} · PV em estoque: ${item.quantity} · Vencimento: ${escapeHtml(item.expiryMonthLabel)}</div>
-            </div>
-            <span class="${statusClass}">${escapeHtml(statusLabel)}</span>
-          </div>
-          <div class="columns">
-            <div>
-              <h4>Venda Direta (SKU)</h4>
-              ${directDetails}
-            </div>
-            <div>
-              <h4>Similar Vendido</h4>
-              ${similarDetails}
-            </div>
-          </div>
-        </div>
-      `;
-    }).join('');
-
-    return `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <meta charset="utf-8" />
-          <title>Análise de Vendas - Pré-Vencidos</title>
-          <style>
-            * { box-sizing: border-box; }
-            body { font-family: Arial, sans-serif; color: #0f172a; padding: 24px; }
-            h1 { font-size: 20px; margin: 0 0 8px; }
-            h2 { font-size: 14px; margin: 0 0 16px; color: #334155; }
-            h3 { font-size: 16px; margin: 0 0 4px; }
-            h4 { font-size: 12px; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; }
-            .meta { font-size: 11px; color: #475569; margin-bottom: 16px; }
-            .meta-line { font-size: 11px; color: #64748b; margin-top: 4px; }
-            .summary { display: flex; gap: 12px; margin: 16px 0 24px; flex-wrap: wrap; }
-            .card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 14px; min-width: 160px; }
-            .card strong { display: block; font-size: 18px; margin-top: 4px; }
-            .item { border: 1px solid #e2e8f0; border-radius: 12px; padding: 14px 16px; margin-bottom: 16px; }
-            .item-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
-            .columns { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; margin-top: 12px; }
-            ul { padding-left: 16px; margin: 6px 0 0; }
-            li { font-size: 12px; color: #0f172a; margin-bottom: 4px; }
-            .muted { font-size: 12px; color: #94a3b8; }
-            .badge { display: inline-block; padding: 4px 8px; border-radius: 999px; font-size: 10px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.08em; }
-            .badge-sold { background: #2563eb; color: #fff; }
-            .badge-similar { background: #f59e0b; color: #fff; }
-            .badge-finalized { background: #16a34a; color: #fff; }
-            .footer { margin-top: 20px; font-size: 10px; color: #94a3b8; }
-            .no-print { margin-bottom: 16px; }
-            .no-print button { background: #2563eb; color: #fff; border: none; padding: 8px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; }
-            @media print { .no-print { display: none; } }
-          </style>
-        </head>
-        <body>
-          <div class="no-print">
-            <button onclick="window.print()">Imprimir</button>
-          </div>
-          <h1>Análise de Vendas - Pré-Vencidos</h1>
-          <h2>Detalhamento por SKU e Similar Vendido</h2>
-          ${headerLines.length ? `<div class="meta">${headerLines.map(line => `<div>${escapeHtml(line)}</div>`).join('')}</div>` : ''}
-          <div class="summary">
-            <div class="card">Itens com venda direta<strong>${totalDireto}</strong></div>
-            <div class="card">Itens com similar vendido<strong>${totalSimilar}</strong></div>
-            <div class="card">Total de itens analisados<strong>${totalItens}</strong></div>
-          </div>
-          ${itemsHtml || '<p class="muted">Nenhum item encontrado para este período.</p>'}
-          <div class="footer">Gerado em ${formatTimestamp(new Date().toISOString())}</div>
-        </body>
-      </html>
-    `;
-  };
+  const reportPayload = useMemo(() => {
+    const finalizedCodes = finalizedREDSByPeriod[currentSalesPeriod] || [];
+    return buildAnalysisReportPayload({
+      pvRecords,
+      salesRecords,
+      periodLabel: currentSalesPeriod || 'Período não identificado',
+      finalizedCodes,
+      meta: {
+        company: sessionInfo?.company,
+        branch: sessionInfo?.filial,
+        area: sessionInfo?.area,
+        file_name: lastUpload?.file_name || null,
+        uploaded_at: lastUpload?.uploaded_at || null
+      }
+    });
+  }, [pvRecords, salesRecords, currentSalesPeriod, finalizedREDSByPeriod, sessionInfo, lastUpload]);
 
   const handlePrint = () => {
-    if (!results.length) {
+    if (!reportPayload.items.length) {
       alert('Nenhum item para imprimir nesta análise.');
       return;
     }
@@ -251,7 +129,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
       return;
     }
     printWindow.document.open();
-    printWindow.document.write(buildPrintHtml());
+    printWindow.document.write(buildAnalysisReportHtml(reportPayload));
     printWindow.document.close();
   };
 
@@ -324,25 +202,40 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                 type="button"
                 onClick={() => handleFilterClick('pending')}
                 aria-pressed={activeFilter === 'pending'}
-                className={`flex items-center gap-1.5 px-2 py-1 rounded-full border transition ${activeFilter === 'pending' ? 'text-slate-700 border-slate-300 bg-white shadow-sm' : 'text-slate-300 border-slate-100 bg-slate-50 opacity-70'}`}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${
+                  activeFilter === 'pending'
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-200 scale-[1.02]'
+                    : 'bg-white text-slate-400 border-slate-200 hover:text-blue-600 hover:border-blue-200 hover:shadow-sm'
+                }`}
               >
-                <div className="w-2 h-2 rounded-full bg-blue-500"></div> Falta Lançar no Período
+                <div className={`w-2.5 h-2.5 rounded-full ${activeFilter === 'pending' ? 'bg-white' : 'bg-blue-500'}`}></div>
+                Falta Lançar no Período
               </button>
               <button
                 type="button"
                 onClick={() => handleFilterClick('finalized')}
                 aria-pressed={activeFilter === 'finalized'}
-                className={`flex items-center gap-1.5 px-2 py-1 rounded-full border transition ${activeFilter === 'finalized' ? 'text-slate-700 border-slate-300 bg-white shadow-sm' : 'text-slate-300 border-slate-100 bg-slate-50 opacity-70'}`}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${
+                  activeFilter === 'finalized'
+                    ? 'bg-green-600 text-white border-green-500 shadow-lg shadow-green-200 scale-[1.02]'
+                    : 'bg-white text-slate-400 border-slate-200 hover:text-green-600 hover:border-green-200 hover:shadow-sm'
+                }`}
               >
-                <div className="w-2 h-2 rounded-full bg-green-500"></div> Lançamento Finalizado
+                <div className={`w-2.5 h-2.5 rounded-full ${activeFilter === 'finalized' ? 'bg-white' : 'bg-green-500'}`}></div>
+                Lançamento Finalizado
               </button>
               <button
                 type="button"
                 onClick={() => handleFilterClick('similar')}
                 aria-pressed={activeFilter === 'similar'}
-                className={`flex items-center gap-1.5 px-2 py-1 rounded-full border transition ${activeFilter === 'similar' ? 'text-slate-700 border-slate-300 bg-white shadow-sm' : 'text-slate-300 border-slate-100 bg-slate-50 opacity-70'}`}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${
+                  activeFilter === 'similar'
+                    ? 'bg-amber-500 text-white border-amber-400 shadow-lg shadow-amber-200 scale-[1.02]'
+                    : 'bg-white text-slate-400 border-slate-200 hover:text-amber-600 hover:border-amber-200 hover:shadow-sm'
+                }`}
               >
-                <div className="w-2 h-2 rounded-full bg-amber-500"></div> Similar Vendido
+                <div className={`w-2.5 h-2.5 rounded-full ${activeFilter === 'similar' ? 'bg-white' : 'bg-amber-500'}`}></div>
+                Similar Vendido
               </button>
             </div>
           </div>
