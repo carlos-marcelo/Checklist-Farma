@@ -8,6 +8,7 @@ export interface Product {
     code: string;
     name: string;
     quantity: number;
+    cost?: number; // Preço de custo unitário
 }
 
 export interface Category {
@@ -16,6 +17,7 @@ export interface Category {
     name: string;
     itemsCount: number;
     totalQuantity: number;
+    totalCost: number; // Preço de custo total (quantidade * custo)
     status: AuditStatus;
     products: Product[];
 }

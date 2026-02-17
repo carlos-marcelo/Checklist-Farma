@@ -110,6 +110,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         setNextAuditNumber(latest.audit_number);
                         setDbSessionId(latest.id);
                         if (latest.data) {
+                            // REPAIR LOGIC: If totalCost is missing (old sessions), recalculate it
+                            if (latest.data.groups) {
+                                latest.data.groups.forEach((g: any) => {
+                                    g.departments.forEach((d: any) => {
+                                        d.categories.forEach((c: any) => {
+                                            if (c.totalCost === undefined || c.totalCost === null || (c.totalCost === 0 && c.totalQuantity > 0)) {
+                                                let catCost = 0;
+                                                c.products.forEach((p: any) => {
+                                                    catCost += (p.quantity * (p.cost || 0));
+                                                });
+                                                c.totalCost = catCost;
+                                            }
+                                        });
+                                    });
+                                });
+                            }
                             setData(latest.data);
                             setDbSessionId(latest.id);
 
@@ -376,12 +392,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             if (isUpdatingStock && data) {
                 // Lógica de MERGE de estoque
                 const rowsStock = await readExcel(fileStock!);
-                const stockMap: Record<string, number> = {};
+                const stockMap: Record<string, { q: number; c: number }> = {};
                 rowsStock.forEach(row => {
                     if (!row || row.length < 14) return;
                     const b = normalizeBarcode(row[1]);
                     const q = parseFloat(row[13]?.toString() || "0");
-                    if (b) stockMap[b] = q;
+                    const c = parseFloat(row[9]?.toString() || "0"); // Coluna J
+                    if (b) stockMap[b] = { q, c };
                 });
 
                 const newData = { ...data };
@@ -390,10 +407,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         d.categories.forEach(c => {
                             if (c.status !== AuditStatus.DONE) {
                                 c.totalQuantity = 0;
+                                c.totalCost = 0;
                                 c.products.forEach(p => {
-                                    const newQty = stockMap[p.code] || 0;
-                                    p.quantity = newQty;
-                                    c.totalQuantity += newQty;
+                                    const entry = stockMap[p.code] || { q: 0, c: 0 };
+                                    p.quantity = entry.q;
+                                    p.cost = entry.c;
+                                    c.totalQuantity += entry.q;
+                                    c.totalCost += (entry.q * entry.c);
                                 });
                             }
                         });
@@ -469,6 +489,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 const barcode = normalizeBarcode(row[1]);
                 const productName = row[4]?.toString() || "Sem Descrição";
                 const stockQty = parseFloat(row[13]?.toString() || "0");
+                const stockCost = parseFloat(row[9]?.toString() || "0"); // Coluna J
 
                 if (barcode && stockQty > 0) {
                     const productInfo = productsLookup[barcode];
@@ -495,6 +516,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 name: productInfo.catName,
                                 itemsCount: 0,
                                 totalQuantity: 0,
+                                totalCost: 0,
                                 status: AuditStatus.TODO,
                                 products: []
                             };
@@ -503,7 +525,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                         cat.itemsCount++;
                         cat.totalQuantity += stockQty;
-                        cat.products.push({ code: barcode, name: productName, quantity: stockQty });
+                        cat.totalCost += (stockQty * stockCost);
+                        cat.products.push({ code: barcode, name: productName, quantity: stockQty, cost: stockCost });
                     }
                 }
             });
@@ -589,26 +612,30 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     };
 
     const branchMetrics = useMemo(() => {
-        if (!data) return { skus: 0, units: 0, doneSkus: 0, doneUnits: 0, progress: 0, pendingUnits: 0, pendingSkus: 0, totalCategories: 0, doneCategories: 0 };
-        let skus = 0, units = 0, doneSkus = 0, doneUnits = 0, totalCats = 0, doneCats = 0;
+        if (!data) return { skus: 0, units: 0, cost: 0, doneSkus: 0, doneUnits: 0, doneCost: 0, progress: 0, pendingUnits: 0, pendingSkus: 0, pendingCost: 0, totalCategories: 0, doneCategories: 0 };
+        let skus = 0, units = 0, cost = 0, doneSkus = 0, doneUnits = 0, doneCost = 0, totalCats = 0, doneCats = 0;
         data.groups.forEach(g => g.departments.forEach(d => d.categories.forEach(c => {
             skus += c.itemsCount;
             units += c.totalQuantity;
+            cost += (c.totalCost || 0);
             totalCats++;
             if (c.status === AuditStatus.DONE) {
                 doneSkus += c.itemsCount;
                 doneUnits += c.totalQuantity;
+                doneCost += (c.totalCost || 0);
                 doneCats++;
             }
         })));
         return {
-            skus, units, doneSkus, doneUnits,
+            skus, units, cost, doneSkus, doneUnits, doneCost,
             pendingUnits: units - doneUnits,
             pendingSkus: skus - doneSkus,
+            pendingCost: cost - doneCost,
             totalCategories: totalCats,
             doneCategories: doneCats,
             progress: skus > 0 ? (doneSkus / skus) * 100 : 0,
-            progressUnits: units > 0 ? (doneUnits / units) * 100 : 0
+            progressUnits: units > 0 ? (doneUnits / units) * 100 : 0,
+            progressCost: cost > 0 ? (doneCost / cost) * 100 : 0
         };
     }, [data]);
 
@@ -623,22 +650,26 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     }, [data, branchMetrics.doneUnits, branchMetrics.pendingUnits, sessionStartTime, initialDoneUnits]);
 
     const calcScopeMetrics = (scope: Group | Department) => {
-        let skus = 0, units = 0, doneSkus = 0, doneUnits = 0;
+        let skus = 0, units = 0, cost = 0, doneSkus = 0, doneUnits = 0, doneCost = 0;
         const cats = 'departments' in scope ? scope.departments.flatMap(d => d.categories) : scope.categories;
         cats.forEach(c => {
             skus += c.itemsCount;
             units += c.totalQuantity;
+            cost += (c.totalCost || 0);
             if (c.status === AuditStatus.DONE) {
                 doneSkus += c.itemsCount;
                 doneUnits += c.totalQuantity;
+                doneCost += (c.totalCost || 0);
             }
         });
         return {
-            skus, units, doneSkus, doneUnits,
+            skus, units, cost, doneSkus, doneUnits, doneCost,
             pendingUnits: units - doneUnits,
             pendingSkus: skus - doneSkus,
+            pendingCost: cost - doneCost,
             progress: skus > 0 ? (doneSkus / skus) * 100 : 0,
-            progressUnits: units > 0 ? (doneUnits / units) * 100 : 0
+            progressUnits: units > 0 ? (doneUnits / units) * 100 : 0,
+            progressCost: cost > 0 ? (doneCost / cost) * 100 : 0
         };
     };
 
@@ -694,7 +725,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         let cat: Category | undefined;
         let departments: Department[] = [];
         let categories: Category[] = [];
-        const products: { groupName: string; deptName: string; catName: string; code: string; name: string; quantity: number }[] = [];
+        const products: { groupName: string; deptName: string; catName: string; code: string; name: string; quantity: number; cost: number }[] = [];
 
         if (scope.type === 'group') {
             departments = group.departments;
@@ -702,7 +733,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             group.departments.forEach(d => {
                 d.categories.forEach(c => {
                     c.products.forEach(p => {
-                        products.push({ groupName: group.name, deptName: d.name, catName: c.name, code: p.code, name: p.name, quantity: p.quantity });
+                        products.push({ groupName: group.name, deptName: d.name, catName: c.name, code: p.code, name: p.name, quantity: p.quantity, cost: p.cost || 0 });
                     });
                 });
             });
@@ -713,7 +744,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 categories = dept.categories;
                 dept.categories.forEach(c => {
                     c.products.forEach(p => {
-                        products.push({ groupName: group.name, deptName: dept!.name, catName: c.name, code: p.code, name: p.name, quantity: p.quantity });
+                        products.push({ groupName: group.name, deptName: dept!.name, catName: c.name, code: p.code, name: p.name, quantity: p.quantity, cost: p.cost || 0 });
                     });
                 });
             }
@@ -724,7 +755,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 departments = [dept];
                 categories = [cat];
                 cat.products.forEach(p => {
-                    products.push({ groupName: group.name, deptName: dept!.name, catName: cat!.name, code: p.code, name: p.name, quantity: p.quantity });
+                    products.push({ groupName: group.name, deptName: dept!.name, catName: cat!.name, code: p.code, name: p.name, quantity: p.quantity, cost: p.cost || 0 });
                 });
             }
         }
@@ -844,17 +875,26 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             p.catName,
             p.code,
             p.name,
-            Math.round(p.quantity).toLocaleString()
+            Math.round(p.quantity).toLocaleString(),
+            `R$ ${(p.cost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            `R$ ${((p.cost || 0) * p.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
         ]);
 
         // @ts-ignore
         doc.autoTable({
             startY: afterSignY,
-            head: [['Grupo', 'Departamento', 'Categoria', 'Código', 'Produto', 'Qtd']],
+            head: [['Grupo', 'Departamento', 'Categoria', 'Código', 'Produto', 'Qtd', 'Custo Unit', 'Custo Total']],
             body: productRows,
+            foot: [[
+                { content: 'TOTAIS DOS ITENS CONFERIDOS', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } },
+                Math.round(scopeInfo.products.reduce((acc, p) => acc + p.quantity, 0)).toLocaleString(),
+                '',
+                `R$ ${scopeInfo.products.reduce((acc, p) => acc + (p.quantity * (p.cost || 0)), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            ]],
             theme: 'striped',
             styles: { fontSize: 7, cellPadding: 1.5 },
-            headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] }
+            headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] },
+            footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' }
         });
 
         const safeName = scopeInfo.group.name.replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 30);
@@ -957,7 +997,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             ["PREVISÃO DE TÉRMINO", `${Math.ceil(productivity.etaDays)} dias restantes`, "CONFERÊNCIA (SKUs)", `${Math.round(branchMetrics.progress)}%`],
             ["SKUs TOTAIS (Relatório)", branchMetrics.skus.toLocaleString(), "UNIDADES TOTAIS (Relatório)", Math.round(branchMetrics.units).toLocaleString()],
             ["SKUs CONFERIDOS", branchMetrics.doneSkus.toLocaleString(), "UNIDADES CONFERIDAS", Math.round(branchMetrics.doneUnits).toLocaleString()],
-            ["SKUs FALTANTES", branchMetrics.pendingSkus.toLocaleString(), "UNIDADES FALTANTES", Math.round(branchMetrics.pendingUnits).toLocaleString()]
+            ["SKUs FALTANTES", branchMetrics.pendingSkus.toLocaleString(), "UNIDADES FALTANTES", Math.round(branchMetrics.pendingUnits).toLocaleString()],
+            ["VALOR TOTAL (Custo)", `R$ ${branchMetrics.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, "VALOR CONFERIDO", `R$ ${branchMetrics.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`]
         ];
 
         if ((doc as any).autoTable) {
@@ -973,24 +1014,27 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const gm = calcScopeMetrics(g);
             hierarchyRows.push([
                 { content: `GRUPO: ${g.name} (ID ${g.id})`, styles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold' } },
-                gm.skus, gm.doneSkus, gm.pendingSkus, `${Math.round(gm.progress)}%`,
-                Math.round(gm.units).toLocaleString(), Math.round(gm.doneUnits).toLocaleString(), Math.round(gm.pendingUnits).toLocaleString(), `${Math.round(gm.progressUnits)}%`
+                gm.skus, gm.doneSkus, `${Math.round(gm.progress)}%`,
+                Math.round(gm.units).toLocaleString(), Math.round(gm.doneUnits).toLocaleString(), `${Math.round(gm.progressUnits)}%`,
+                `R$ ${gm.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, `R$ ${gm.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
             ]);
 
             g.departments.forEach(d => {
                 const dm = calcScopeMetrics(d);
                 hierarchyRows.push([
                     { content: `  > DEPARTAMENTO: ${d.name} (${d.numericId || '--'})`, styles: { fillColor: [241, 245, 249], fontStyle: 'bold' } },
-                    dm.skus, dm.doneSkus, dm.pendingSkus, `${Math.round(dm.progress)}%`,
-                    Math.round(dm.units).toLocaleString(), Math.round(dm.doneUnits).toLocaleString(), Math.round(dm.pendingUnits).toLocaleString(), `${Math.round(dm.progressUnits)}%`
+                    dm.skus, dm.doneSkus, `${Math.round(dm.progress)}%`,
+                    Math.round(dm.units).toLocaleString(), Math.round(dm.doneUnits).toLocaleString(), `${Math.round(dm.progressUnits)}%`,
+                    `R$ ${dm.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, `R$ ${dm.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
                 ]);
 
                 d.categories.forEach(c => {
                     const isDone = c.status === AuditStatus.DONE;
                     hierarchyRows.push([
                         `      - ${c.name} (${c.numericId || "--"})`,
-                        c.itemsCount, isDone ? c.itemsCount : 0, isDone ? 0 : c.itemsCount, isDone ? "100%" : "0%",
-                        c.totalQuantity.toLocaleString(), isDone ? c.totalQuantity.toLocaleString() : "0", isDone ? "0" : c.totalQuantity.toLocaleString(), isDone ? "100%" : "0%"
+                        c.itemsCount, isDone ? c.itemsCount : 0, isDone ? "100%" : "0%",
+                        c.totalQuantity.toLocaleString(), isDone ? c.totalQuantity.toLocaleString() : "0", isDone ? "100%" : "0%",
+                        `R$ ${c.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, isDone ? `R$ ${c.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "R$ 0,00"
                     ]);
                 });
             });
@@ -998,10 +1042,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         if ((doc as any).autoTable) {
             (doc as any).autoTable({
-                startY: 25,
-                head: [['ESTRUTURA', 'MIX TOT', 'MIX AUD', 'MIX FALT', '% MIX', 'UNID TOT', 'UNID AUD', 'UNID FALT', '% UNID']],
+                startY: 30,
+                head: [['Hierarquia de Inventário (Grupo > Depto > Cat)', 'Mix Total', 'Mix Conf.', 'Prog Mix', 'Unid Total', 'Unid Conf.', 'Prog Unid', 'Custo Total', 'Custo Conf.']],
                 body: hierarchyRows,
-                theme: 'striped',
+                theme: 'grid',
                 styles: { fontSize: 7, cellPadding: 1.5 },
                 headStyles: { fillColor: [15, 23, 42] }
             });
@@ -1154,6 +1198,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     </div>
 
                     <div className="flex flex-col items-center border-l border-slate-100 px-2">
+                        <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Valor em Custo</span>
+                        <div className="flex items-center gap-2 mt-1">
+                            <span className="text-xl font-black text-emerald-700 tabular-nums">R$ {branchMetrics.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            <span className="text-slate-200 text-sm">/</span>
+                            <span className="text-lg font-black text-slate-300 tabular-nums">{branchMetrics.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        </div>
+                        <span className="text-[8px] font-bold text-emerald-300 uppercase mt-1 tracking-tighter">CONFERIDO / TOTAL</span>
+                    </div>
+
+                    <div className="flex flex-col items-center border-l border-slate-100 px-2">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Mix Auditado</span>
                         <div className="flex items-center gap-2 mt-1">
                             <span className="text-xl font-black text-emerald-600 tabular-nums">{branchMetrics.doneSkus.toLocaleString()}</span>
@@ -1230,6 +1284,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             </div>
                                         </div>
                                     </div>
+                                    <div className="grid grid-cols-1 gap-1 mb-6 pt-4 border-t border-slate-50">
+                                        <p className="text-[8px] font-black text-slate-400 uppercase italic">Valor Total (Custo)</p>
+                                        <div className="flex justify-between text-sm font-black">
+                                            <span className="text-slate-400">R$ {m.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                            <span className="text-emerald-600">R$ {m.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} Aud.</span>
+                                        </div>
+                                    </div>
                                     <ProgressBar percentage={m.progress} size="md" label={`Progresso do Grupo`} />
                                 </div>
                             </div>
@@ -1271,11 +1332,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             </button>
                                         </div>
                                     </div>
-                                    <div className="grid grid-cols-4 gap-8 mb-6">
+                                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6 mb-6">
                                         <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Mix Total</span><span className="text-lg font-black text-slate-400">{m.skus}</span></div>
-                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Mix Auditado</span><span className="text-xl font-black text-emerald-600 tabular-nums">{m.doneSkus}</span></div>
+                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Mix Aud.</span><span className="text-xl font-black text-emerald-600 tabular-nums">{m.doneSkus}</span></div>
                                         <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Unid Totais</span><span className="text-lg font-black text-slate-400">{Math.round(m.units).toLocaleString()}</span></div>
-                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Unid Auditadas</span><span className="text-xl font-black text-indigo-600 tabular-nums">{Math.round(m.doneUnits).toLocaleString()}</span></div>
+                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Unid Aud.</span><span className="text-xl font-black text-indigo-600 tabular-nums">{Math.round(m.doneUnits).toLocaleString()}</span></div>
+                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Custo Total</span><span className="text-lg font-black text-slate-400">R$ {m.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
+                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Custo Aud.</span><span className="text-xl font-black text-emerald-600 tabular-nums">R$ {m.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
                                     </div>
                                     <ProgressBar percentage={m.progress} size="md" label={`Status do Departamento`} />
                                 </div>
@@ -1296,6 +1359,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic">SKUs Importados</span><span className="text-md font-black text-slate-800 tabular-nums">{cat.itemsCount} Mix</span></div>
                                         <div className="w-px h-6 bg-slate-100"></div>
                                         <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic">Estoque Físico</span><span className="text-md font-black text-indigo-600 tabular-nums">{cat.totalQuantity.toLocaleString()} Unid.</span></div>
+                                        <div className="w-px h-6 bg-slate-100"></div>
+                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic">Valor em Custo</span><span className="text-md font-black text-emerald-600 tabular-nums">R$ {cat.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
                                     </div>
                                 </div>
                             </div>
@@ -1363,14 +1428,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         <tr className="border-b border-slate-100">
                                             <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 tracking-widest italic">Cód. de Barras</th>
                                             <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 tracking-widest italic">Descrição Analítica do Item</th>
+                                            <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic font-mono">Custo Unit</th>
+                                            <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic font-mono">Custo Total</th>
                                             <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic">Saldo Importado</th>
                                         </tr>
                                     </thead>
                                     <tbody>{selectedCat.products.map((p, i) => (
-                                        <tr key={i} className="border-b border-slate-50 hover:bg-indigo-50/50 transition-colors group">
-                                            <td className="px-12 py-4 text-sm font-bold text-slate-500 tabular-nums">{p.code}</td>
-                                            <td className="px-12 py-4 text-sm font-black uppercase italic leading-tight text-slate-800 group-hover:text-indigo-600 transition-colors">{p.name}</td>
-                                            <td className="px-12 py-4 text-3xl font-black text-right tabular-nums group-hover:scale-105 transition-transform">{p.quantity.toLocaleString()}</td>
+                                        <tr key={i} className="border-b border-slate-50 hover:bg-indigo-50/50 transition-colors group text-xs">
+                                            <td className="px-12 py-4 text-slate-500 tabular-nums">{p.code}</td>
+                                            <td className="px-12 py-4 font-black uppercase italic leading-tight text-slate-800 group-hover:text-indigo-600 transition-colors">{p.name}</td>
+                                            <td className="px-12 py-4 text-right tabular-nums text-slate-400 italic">R$ {(p.cost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                                            <td className="px-12 py-4 text-right tabular-nums font-bold text-slate-600">R$ {((p.cost || 0) * p.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                                            <td className="px-12 py-4 text-2xl font-black text-right tabular-nums group-hover:scale-105 transition-transform">{p.quantity.toLocaleString()}</td>
                                         </tr>))}
                                     </tbody>
                                 </table>
