@@ -174,6 +174,19 @@ export interface DbPVDashboardReport {
   created_at?: string;
 }
 
+export interface DbPVBranchRecordEvent {
+  id?: string;
+  company_id: string;
+  branch: string;
+  record_id?: string | null;
+  reduced_code?: string | null;
+  event_type: 'UPDATED' | 'DELETED';
+  previous_quantity?: number | null;
+  new_quantity?: number | null;
+  user_email?: string | null;
+  created_at?: string;
+}
+
 export interface DbPVSessionData {
   master_products?: Product[];
   system_products?: Product[];
@@ -1267,6 +1280,57 @@ export async function upsertPVSalesAnalysisReport(report: DbPVSalesAnalysisRepor
     return data || null;
   } catch (error) {
     console.error('Error upserting PV sales analysis report:', error);
+    return null;
+  }
+}
+
+export async function fetchPVBranchRecordEvents(companyId: string, branch: string, sinceISO?: string): Promise<DbPVBranchRecordEvent[]> {
+  try {
+    if (!branch) return [];
+    let query = supabase
+      .from('pv_branch_record_events')
+      .select('*')
+      .eq('branch', branch)
+      .order('created_at', { ascending: false });
+
+    if (companyId) {
+      query = query.eq('company_id', companyId);
+    }
+    if (sinceISO) {
+      query = query.gte('created_at', sinceISO);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching PV branch record events:', error);
+    return [];
+  }
+}
+
+export async function insertPVBranchRecordEvent(event: DbPVBranchRecordEvent): Promise<DbPVBranchRecordEvent | null> {
+  try {
+    const payload = {
+      company_id: event.company_id,
+      branch: event.branch,
+      record_id: event.record_id ?? null,
+      reduced_code: event.reduced_code ?? null,
+      event_type: event.event_type,
+      previous_quantity: event.previous_quantity ?? null,
+      new_quantity: event.new_quantity ?? null,
+      user_email: event.user_email ?? null
+    };
+    const { data, error } = await supabase
+      .from('pv_branch_record_events')
+      .insert(payload)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error inserting PV branch record event:', error);
     return null;
   }
 }

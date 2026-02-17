@@ -23,6 +23,7 @@ import {
   DbPVConfirmedSalesMeta,
   DbPVSalesAnalysisReport,
   DbPVDashboardReport,
+  DbPVBranchRecordEvent,
   DbPVInventoryReport,
   fetchPVSession,
   upsertPVSession,
@@ -46,6 +47,8 @@ import {
   upsertPVSalesAnalysisReport,
   fetchPVDashboardReports,
   insertPVDashboardReport,
+  fetchPVBranchRecordEvents,
+  insertPVBranchRecordEvent,
   fetchPVInventoryReport,
   upsertPVInventoryReport
 } from '../../supabaseService';
@@ -162,6 +165,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const [salesUploads, setSalesUploads] = useState<DbPVSalesUpload[]>([]);
   const [analysisReports, setAnalysisReports] = useState<Record<string, AnalysisReportPayload>>({});
+  const [pvRecordEvents, setPvRecordEvents] = useState<DbPVBranchRecordEvent[]>([]);
   const [inventoryReport, setInventoryReport] = useState<DbPVInventoryReport | null>(null);
   const [inventoryCostByBarcode, setInventoryCostByBarcode] = useState<Record<string, number>>({});
   const [inventoryStockByBarcode, setInventoryStockByBarcode] = useState<Record<string, number>>({});
@@ -174,6 +178,28 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const isMaster = userRole === 'MASTER';
+  const filterRecentPVEvents = (events: DbPVBranchRecordEvent[]) => {
+    const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    return events.filter(ev => {
+      const ts = ev.created_at ? new Date(ev.created_at).getTime() : NaN;
+      return Number.isFinite(ts) && ts >= since;
+    });
+  };
+
+  const upsertLocalPVEvent = (event: DbPVBranchRecordEvent) => {
+    setPvRecordEvents(prev => {
+      const filtered = prev.filter(existing => {
+        if (!event.created_at || !existing.created_at) return true;
+        return !(
+          existing.created_at === event.created_at &&
+          existing.event_type === event.event_type &&
+          existing.record_id === event.record_id &&
+          existing.reduced_code === event.reduced_code
+        );
+      });
+      return filterRecentPVEvents([event, ...filtered]);
+    });
+  };
 
   const buildInventoryMaps = useCallback((records: { barcode: string; cost: number; stock?: number }[]) => {
     const costMap: Record<string, number> = {};
@@ -219,6 +245,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       if (!cancelled) {
         setLastDashboardReport(reports[0] || null);
       }
+    })();
+    return () => { cancelled = true; };
+  }, [sessionInfo?.companyId, sessionInfo?.filial]);
+
+  useEffect(() => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) {
+      setPvRecordEvents([]);
+      return;
+    }
+    const now = new Date();
+    const since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    let cancelled = false;
+    (async () => {
+      const events = await fetchPVBranchRecordEvents(sessionInfo.companyId, sessionInfo.filial, since);
+      if (!cancelled) setPvRecordEvents(filterRecentPVEvents(events));
     })();
     return () => { cancelled = true; };
   }, [sessionInfo?.companyId, sessionInfo?.filial]);
@@ -1034,6 +1075,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const handleUpdatePVRecord = async (id: string, updates: Partial<PVRecord>) => {
     if (!id) return;
 
+    const existing = pvRecords.find(rec => rec.id === id);
     setPvRecords(prev => prev.map(rec => (rec.id === id ? { ...rec, ...updates } : rec)));
 
     if (id.startsWith('db-')) return;
@@ -1048,6 +1090,31 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const ok = await updatePVBranchRecordDetails(id, payload);
     if (!ok) {
       console.error('Falha ao atualizar PV no banco:', { id, payload });
+    }
+
+    if (
+      updates.quantity !== undefined &&
+      sessionInfo?.companyId &&
+      sessionInfo?.filial &&
+      existing &&
+      updates.quantity !== existing.quantity
+    ) {
+      const localEvent: DbPVBranchRecordEvent = {
+        company_id: sessionInfo.companyId,
+        branch: sessionInfo.filial,
+        record_id: existing.id,
+        reduced_code: existing.reducedCode,
+        event_type: 'UPDATED',
+        previous_quantity: existing.quantity,
+        new_quantity: updates.quantity,
+        user_email: userEmail || null,
+        created_at: new Date().toISOString()
+      };
+      upsertLocalPVEvent(localEvent);
+      const saved = await insertPVBranchRecordEvent(localEvent);
+      if (saved) {
+        upsertLocalPVEvent(saved);
+      }
     }
   };
 
@@ -2048,6 +2115,25 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     return 'bg-white text-slate-300 border';
   };
 
+  const pvEventSummary = useMemo(() => {
+    if (!pvRecordEvents.length) {
+      return { edited: 0, deleted: 0, lastUpdatedAt: null as string | null };
+    }
+    const edited = pvRecordEvents.filter(e => e.event_type === 'UPDATED').length;
+    const deleted = pvRecordEvents.filter(e => e.event_type === 'DELETED').length;
+    const last = pvRecordEvents
+      .map(e => e.created_at)
+      .filter(Boolean)
+      .map(date => new Date(date as string))
+      .filter(d => !Number.isNaN(d.getTime()))
+      .sort((a, b) => b.getTime() - a.getTime())[0];
+    return {
+      edited,
+      deleted,
+      lastUpdatedAt: last ? last.toISOString() : null
+    };
+  }, [pvRecordEvents]);
+
   return (
     <div className="flex h-full w-full overflow-hidden text-slate-900">
       <aside className={`w-64 bg-slate-900 text-white flex flex-col shrink-0 transition-all duration-300 ${currentView === AppView.SETUP ? '-ml-64' : ''}`}>
@@ -2176,6 +2262,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           {currentView === AppView.REGISTRATION && (
             <PVRegistration
               masterProducts={masterProducts} pvRecords={pvRecords} sessionInfo={sessionInfo}
+              pvEventSummary={pvEventSummary}
               originBranches={originBranches}
               onRefresh={handleRefresh}
               onUpdatePV={handleUpdatePVRecord}
@@ -2216,8 +2303,27 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                 setPvRecords(prev => [recordWithUser, ...prev]);
               }}
               onRemovePV={async (id) => {
+                const target = pvRecords.find(r => r.id === id);
                 setPvRecords(prev => prev.filter(r => r.id !== id));
                 await deletePVBranchRecord(id);
+                if (target && sessionInfo?.companyId && sessionInfo?.filial) {
+                  const localEvent: DbPVBranchRecordEvent = {
+                    company_id: sessionInfo.companyId,
+                    branch: sessionInfo.filial,
+                    record_id: target.id,
+                    reduced_code: target.reducedCode,
+                    event_type: 'DELETED',
+                    previous_quantity: target.quantity,
+                    new_quantity: null,
+                    user_email: userEmail || null,
+                    created_at: new Date().toISOString()
+                  };
+                  upsertLocalPVEvent(localEvent);
+                  const saved = await insertPVBranchRecordEvent(localEvent);
+                  if (saved) {
+                    upsertLocalPVEvent(saved);
+                  }
+                }
               }}
             />
           )}

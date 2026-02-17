@@ -8,6 +8,11 @@ interface PVRegistrationProps {
   masterProducts: Product[];
   pvRecords: PVRecord[];
   sessionInfo: SessionInfo | null;
+  pvEventSummary?: {
+    edited: number;
+    deleted: number;
+    lastUpdatedAt: string | null;
+  };
   originBranches?: string[];
   onUpdatePV?: (id: string, updates: Partial<PVRecord>) => void;
   onAddPV: (record: PVRecord) => void;
@@ -19,6 +24,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   masterProducts,
   pvRecords,
   sessionInfo,
+  pvEventSummary,
   originBranches = [],
   onUpdatePV,
   onAddPV,
@@ -372,6 +378,27 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     });
   }
 
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const validLaunchDates = pvRecords
+    .map(rec => ({ rec, date: new Date(rec.entryDate) }))
+    .filter(item => !Number.isNaN(item.date.getTime()));
+  const launchesLast30 = validLaunchDates.filter(item => item.date >= thirtyDaysAgo).length;
+  const lastLaunchDate = validLaunchDates.reduce<Date | null>((latest, item) => {
+    if (!latest || item.date > latest) return item.date;
+    return latest;
+  }, null);
+  const lastLaunchLabel = lastLaunchDate
+    ? `${lastLaunchDate.toLocaleDateString('pt-BR')} ${lastLaunchDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+    : 'Sem lançamentos';
+
+  const lastEditDate = pvEventSummary?.lastUpdatedAt ? new Date(pvEventSummary.lastUpdatedAt) : null;
+  const lastEditLabel = lastEditDate && !Number.isNaN(lastEditDate.getTime())
+    ? `${lastEditDate.toLocaleDateString('pt-BR')} ${lastEditDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+    : 'Sem alterações';
+  const editedCount = pvEventSummary?.edited || 0;
+  const deletedCount = pvEventSummary?.deleted || 0;
+
   return (
     <div className="space-y-6">
       <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -388,16 +415,27 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="w-40 h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200 shadow-inner">
-            <div
-              className="h-full bg-blue-500 transition-all duration-500 shadow-lg shadow-blue-200"
-              style={{ width: `${Math.min((pvRecords.length / 50) * 100, 100)}%` }}
-            ></div>
-          </div>
-          <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
-            LANÇADOS: {pvRecords.length}
-          </span>
+          <div className="flex items-center gap-3">
+            <div className="w-40 h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200 shadow-inner">
+              <div
+                className="h-full bg-blue-500 transition-all duration-500 shadow-lg shadow-blue-200"
+                style={{ width: `${Math.min((launchesLast30 / 50) * 100, 100)}%` }}
+              ></div>
+            </div>
+            <div className="flex flex-col items-end">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                LANÇADOS (30 DIAS): {launchesLast30}
+              </span>
+              <span className="text-[9px] text-slate-400 font-bold">
+                Último lançamento: {lastLaunchLabel}
+              </span>
+              <span className="text-[9px] text-slate-400 font-bold">
+                Editados/Excluídos (30 dias): {editedCount + deletedCount} (E:{editedCount} | X:{deletedCount})
+              </span>
+              <span className="text-[9px] text-slate-400 font-bold">
+                Última atualização: {lastEditLabel}
+              </span>
+            </div>
         </div>
       </div>
 
@@ -823,8 +861,8 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                       <div
                         key={date}
                         onClick={() => setFilterMonth(isActive ? '' : date)}
-                        className={`p-2 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center hover:bg-slate-50 ${isActive
-                          ? 'border-blue-500 bg-blue-50/50 shadow-sm ring-1 ring-blue-100'
+                        className={`p-2 rounded-xl border-2 transition-all cursor-pointer flex justify-between items-center ${isActive
+                          ? 'border-amber-400 bg-amber-100/60 shadow-sm ring-1 ring-amber-200 hover:bg-amber-100/60'
                           : `${status.bg} border-transparent`
                           }`}
                       >
