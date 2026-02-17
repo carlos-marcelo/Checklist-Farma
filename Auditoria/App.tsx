@@ -3,6 +3,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { AuditData, ViewState, AuditStatus, Group, Department, Category, Product } from './types';
 import ProgressBar from './components/ProgressBar';
 import Breadcrumbs from './components/Breadcrumbs';
+import { fetchLatestAudit, upsertAuditSession, fetchAuditSession } from '../supabaseService';
 
 const ALLOWED_IDS = [66, 67, 2000, 3000, 4000, 8000, 10000];
 const FILIAIS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18];
@@ -55,34 +56,90 @@ const App: React.FC = () => {
   const [termModal, setTermModal] = useState<TermScope | null>(null);
   const [termForm, setTermForm] = useState<TermForm | null>(null);
   const [termDrafts, setTermDrafts] = useState<Record<string, TermForm>>({});
-  
+
   const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
   const [selectedFilial, setSelectedFilial] = useState("");
-  
+  const [auditNumber, setAuditNumber] = useState<number>(1);
+  const [dbSessionId, setDbSessionId] = useState<string | undefined>(undefined);
+
   const [fileGroups, setFileGroups] = useState<File | null>(null);
   const [fileStock, setFileStock] = useState<File | null>(null);
   const [fileDeptIds, setFileDeptIds] = useState<File | null>(null);
   const [fileCatIds, setFileCatIds] = useState<File | null>(null);
 
+  // Carregar dados iniciais ao selecionar filial
   useEffect(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved) {
+    if (!selectedFilial) return;
+
+    const loadSession = async () => {
+      setIsProcessing(true);
       try {
-        const parsed = JSON.parse(saved);
-        if (parsed && parsed.groups) {
-          setData(parsed);
-          if (parsed.filial) setSelectedFilial(parsed.filial);
-          let done = 0;
-          parsed.groups.forEach((g: any) => g.departments.forEach((d: any) => d.categories.forEach((c: any) => {
-            if (c.status === AuditStatus.DONE) done += c.totalQuantity;
-          })));
-          setInitialDoneUnits(done);
+        const latest = await fetchLatestAudit(selectedFilial);
+        if (latest) {
+          if (latest.status === 'open') {
+            // Retomar
+            const parsed = latest.data;
+            setData({ ...parsed, sessionId: latest.id, auditNumber: latest.audit_number });
+            setAuditNumber(latest.audit_number);
+            setDbSessionId(latest.id);
+
+            let done = 0;
+            if (parsed && parsed.groups) {
+              parsed.groups.forEach((g: any) => g.departments.forEach((d: any) => d.categories.forEach((c: any) => {
+                if (c.status === AuditStatus.DONE) done += c.totalQuantity;
+              })));
+            }
+            setInitialDoneUnits(done);
+            alert(`Auditoria Nº ${latest.audit_number} em aberto encontrada e carregada.`);
+          } else {
+            // Auditoria anterior fechada -> Próxima
+            setAuditNumber(latest.audit_number + 1);
+            alert(`Última auditoria (Nº ${latest.audit_number}) finalizada em ${new Date(latest.updated_at!).toLocaleDateString()}. Preparando Auditoria Nº ${latest.audit_number + 1}.`);
+            setData(null);
+          }
+        } else {
+          // Nenhuma auditoria
+          setAuditNumber(1);
+          setData(null);
         }
-      } catch (e) { 
-        localStorage.removeItem(STORAGE_KEY); 
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setIsProcessing(false);
       }
-    }
-  }, []);
+    };
+    loadSession();
+  }, [selectedFilial]);
+
+  // Remover localStorage effect antigo
+  // useEffect(() => { ... }, []); 
+
+  // Auto-save no Supabase
+  useEffect(() => {
+    if (!data || !selectedFilial) return;
+
+    const timer = setTimeout(async () => {
+      // Calcular progresso
+      let skus = 0, doneSkus = 0;
+      data.groups.forEach(g => g.departments.forEach(d => d.categories.forEach(c => {
+        skus += c.itemsCount;
+        if (c.status === AuditStatus.DONE) doneSkus += c.itemsCount;
+      })));
+      const progress = skus > 0 ? (doneSkus / skus) * 100 : 0;
+
+      await upsertAuditSession({
+        id: dbSessionId,
+        branch: selectedFilial,
+        audit_number: auditNumber,
+        status: progress >= 100 ? 'completed' : 'open', // Atenção: só marca completed se o usuário finalizar explicitamente? Por enquanto automático ou status 'open' e usuário clica check
+        data: data,
+        progress: progress
+      });
+      // console.log("Auto-saved to Supabase");
+    }, 2000); // 2s debounce
+
+    return () => clearTimeout(timer);
+  }, [data, selectedFilial, auditNumber, dbSessionId]);
 
   useEffect(() => {
     if (data) {
@@ -112,7 +169,7 @@ const App: React.FC = () => {
     if (val === null || val === undefined) return "";
     let s = val.toString().trim();
     if (s.includes('E+') || s.includes('e+')) {
-      s = Number(val).toLocaleString('fullwide', {useGrouping:false});
+      s = Number(val).toLocaleString('fullwide', { useGrouping: false });
     }
     return s.replace(/\D/g, "").replace(/^0+/, "");
   };
@@ -141,10 +198,22 @@ const App: React.FC = () => {
   };
 
   const handleStartAudit = async () => {
-    if (!fileGroups || !fileStock || !fileDeptIds || !fileCatIds || !selectedFilial) {
-      alert("Por favor, carregue todos os arquivos e selecione a filial.");
+    if (!selectedFilial) {
+      alert("Selecione a filial.");
       return;
     }
+
+    // Se já temos dados carregados do banco (retomada), não precisamos dos arquivos
+    if (data && data.groups.length > 0) {
+      // Já carregado no useEffect
+      return;
+    }
+
+    if (!fileGroups || !fileStock || !fileDeptIds || !fileCatIds) {
+      alert("Por favor, carregue todos os arquivos para iniciar uma nova auditoria.");
+      return;
+    }
+
     setIsProcessing(true);
     try {
       const rowsGroups = await readExcel(fileGroups);
@@ -218,22 +287,22 @@ const App: React.FC = () => {
             const finalGroupName = isMargemZero ? "Genérico + Similar sem margem" : productInfo.groupName;
 
             if (!groupsMap[finalGroupId]) groupsMap[finalGroupId] = { id: finalGroupId, name: finalGroupName, departments: [] };
-            
+
             let dept = groupsMap[finalGroupId].departments.find(d => d.name === productInfo.deptName);
             const resolvedDeptId = deptIdMaps.barcodeToId[barcode] || deptIdMaps.nameToId[cleanDescription(productInfo.deptName)] || "";
             if (!dept) {
               dept = { id: productInfo.deptName, numericId: resolvedDeptId, name: productInfo.deptName, categories: [] };
               groupsMap[finalGroupId].departments.push(dept);
             } else if (!dept.numericId && resolvedDeptId) dept.numericId = resolvedDeptId;
-            
+
             let cat = dept.categories.find(c => c.name === productInfo.catName);
             const resolvedCatId = catIdMaps.barcodeToId[barcode] || catIdMaps.nameToId[cleanDescription(productInfo.catName)] || "";
             if (!cat) {
-              cat = { 
-                id: `${finalGroupId}-${productInfo.deptName}-${productInfo.catName}`, 
+              cat = {
+                id: `${finalGroupId}-${productInfo.deptName}-${productInfo.catName}`,
                 numericId: resolvedCatId,
-                name: productInfo.catName, 
-                itemsCount: 0, 
+                name: productInfo.catName,
+                itemsCount: 0,
                 totalQuantity: 0,
                 status: AuditStatus.TODO,
                 products: []
@@ -248,11 +317,28 @@ const App: React.FC = () => {
         }
       });
 
-      setData({ 
+      const newData: AuditData = {
         groups: Object.values(groupsMap).sort((a, b) => parseInt(a.id.split('+')[0]) - parseInt(b.id.split('+')[0])),
-        empresa: selectedEmpresa, 
-        filial: selectedFilial 
+        empresa: selectedEmpresa,
+        filial: selectedFilial,
+        auditNumber: auditNumber
+      };
+
+      // Salvar inicial no banco para gerar ID
+      const savedSession = await upsertAuditSession({
+        branch: selectedFilial,
+        audit_number: auditNumber,
+        status: 'open',
+        data: newData,
+        progress: 0
       });
+
+      if (savedSession && savedSession.id) {
+        setDbSessionId(savedSession.id);
+        newData.sessionId = savedSession.id;
+      }
+
+      setData(newData);
       setView({ level: 'groups' });
     } catch (err) { alert("Erro ao processar arquivos."); console.error(err); }
     finally { setIsProcessing(false); }
@@ -336,9 +422,9 @@ const App: React.FC = () => {
         doneCats++;
       }
     })));
-    return { 
-      skus, units, doneSkus, doneUnits, 
-      pendingUnits: units - doneUnits, 
+    return {
+      skus, units, doneSkus, doneUnits,
+      pendingUnits: units - doneUnits,
       pendingSkus: skus - doneSkus,
       totalCategories: totalCats,
       doneCategories: doneCats,
@@ -353,7 +439,7 @@ const App: React.FC = () => {
     const elapsedHours = (Date.now() - sessionStartTime) / (1000 * 60 * 60);
     const speed = countedThisSession / Math.max(0.05, elapsedHours);
     const remainingHours = branchMetrics.pendingUnits / Math.max(1, speed);
-    const etaDays = remainingHours / 8; 
+    const etaDays = remainingHours / 8;
     return { speed, etaDays: isFinite(etaDays) ? etaDays : 0, countedThisSession };
   }, [data, branchMetrics.doneUnits, branchMetrics.pendingUnits, sessionStartTime, initialDoneUnits]);
 
@@ -368,8 +454,8 @@ const App: React.FC = () => {
         doneUnits += c.totalQuantity;
       }
     });
-    return { 
-      skus, units, doneSkus, doneUnits, 
+    return {
+      skus, units, doneSkus, doneUnits,
       pendingUnits: units - doneUnits,
       pendingSkus: skus - doneSkus,
       progress: skus > 0 ? (doneSkus / skus) * 100 : 0,
@@ -595,7 +681,7 @@ const App: React.FC = () => {
     if (!data) return;
     // @ts-ignore
     const { jsPDF } = window.jspdf;
-    const doc = new jsPDF('l', 'mm', 'a4'); 
+    const doc = new jsPDF('l', 'mm', 'a4');
     const ts = new Date().toLocaleString('pt-BR');
 
     doc.setFontSize(22); doc.setTextColor(15, 23, 42);
@@ -616,45 +702,45 @@ const App: React.FC = () => {
     doc.addPage();
     doc.setFontSize(16); doc.setTextColor(15, 23, 42);
     doc.text("BALANÇO ANALÍTICO HIERÁRQUICO (TOTAL vs CONFERIDO)", 14, 20);
-    
+
     const hierarchyRows: any[] = [];
     data.groups.forEach(g => {
-        const gm = calcScopeMetrics(g);
+      const gm = calcScopeMetrics(g);
+      hierarchyRows.push([
+        { content: `GRUPO: ${g.name} (ID ${g.id})`, styles: { fillColor: [79, 70, 229], textColor: [255, 255, 255], fontStyle: 'bold' } },
+        gm.skus, gm.doneSkus, gm.pendingSkus, `${Math.round(gm.progress)}%`,
+        Math.round(gm.units).toLocaleString(), Math.round(gm.doneUnits).toLocaleString(), Math.round(gm.pendingUnits).toLocaleString(), `${Math.round(gm.progressUnits)}%`
+      ]);
+
+      g.departments.forEach(d => {
+        const dm = calcScopeMetrics(d);
         hierarchyRows.push([
-            { content: `GRUPO: ${g.name} (ID ${g.id})`, styles: { fillColor: [79, 70, 229], textColor: [255,255,255], fontStyle: 'bold' } },
-            gm.skus, gm.doneSkus, gm.pendingSkus, `${Math.round(gm.progress)}%`,
-            Math.round(gm.units).toLocaleString(), Math.round(gm.doneUnits).toLocaleString(), Math.round(gm.pendingUnits).toLocaleString(), `${Math.round(gm.progressUnits)}%`
+          { content: `  > DEPARTAMENTO: ${d.name} (${d.numericId || '--'})`, styles: { fillColor: [241, 245, 249], fontStyle: 'bold' } },
+          dm.skus, dm.doneSkus, dm.pendingSkus, `${Math.round(dm.progress)}%`,
+          Math.round(dm.units).toLocaleString(), Math.round(dm.doneUnits).toLocaleString(), Math.round(dm.pendingUnits).toLocaleString(), `${Math.round(dm.progressUnits)}%`
         ]);
-        
-        g.departments.forEach(d => {
-            const dm = calcScopeMetrics(d);
-            hierarchyRows.push([
-                { content: `  > DEPARTAMENTO: ${d.name} (${d.numericId || '--'})`, styles: { fillColor: [241, 245, 249], fontStyle: 'bold' } },
-                dm.skus, dm.doneSkus, dm.pendingSkus, `${Math.round(dm.progress)}%`,
-                Math.round(dm.units).toLocaleString(), Math.round(dm.doneUnits).toLocaleString(), Math.round(dm.pendingUnits).toLocaleString(), `${Math.round(dm.progressUnits)}%`
-            ]);
-            
-            d.categories.forEach(c => {
-                const isDone = c.status === AuditStatus.DONE;
-                hierarchyRows.push([
-                    `      - ${c.name} (${c.numericId || "--"})`,
-                    c.itemsCount, isDone ? c.itemsCount : 0, isDone ? 0 : c.itemsCount, isDone ? "100%" : "0%",
-                    c.totalQuantity.toLocaleString(), isDone ? c.totalQuantity.toLocaleString() : "0", isDone ? "0" : c.totalQuantity.toLocaleString(), isDone ? "100%" : "0%"
-                ]);
-            });
+
+        d.categories.forEach(c => {
+          const isDone = c.status === AuditStatus.DONE;
+          hierarchyRows.push([
+            `      - ${c.name} (${c.numericId || "--"})`,
+            c.itemsCount, isDone ? c.itemsCount : 0, isDone ? 0 : c.itemsCount, isDone ? "100%" : "0%",
+            c.totalQuantity.toLocaleString(), isDone ? c.totalQuantity.toLocaleString() : "0", isDone ? "0" : c.totalQuantity.toLocaleString(), isDone ? "100%" : "0%"
+          ]);
         });
+      });
     });
 
     // @ts-ignore
-    doc.autoTable({ 
-      startY: 25, 
-      head: [['ESTRUTURA', 'MIX TOT', 'MIX AUD', 'MIX FALT', '% MIX', 'UNID TOT', 'UNID AUD', 'UNID FALT', '% UNID']], 
-      body: hierarchyRows, 
-      theme: 'striped', 
+    doc.autoTable({
+      startY: 25,
+      head: [['ESTRUTURA', 'MIX TOT', 'MIX AUD', 'MIX FALT', '% MIX', 'UNID TOT', 'UNID AUD', 'UNID FALT', '% UNID']],
+      body: hierarchyRows,
+      theme: 'striped',
       styles: { fontSize: 7, cellPadding: 1.5 },
       headStyles: { fillColor: [15, 23, 42] }
     });
-    
+
     doc.save(`Auditoria_F${data.filial}_Analitica.pdf`);
   };
 
@@ -676,8 +762,13 @@ const App: React.FC = () => {
               <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-400">Empresa</label><select className="w-full bg-slate-50 border-2 rounded-xl px-4 py-3 font-bold border-slate-100" value={selectedEmpresa} onChange={e => setSelectedEmpresa(e.target.value)}><option>Drogaria Cidade</option></select></div>
               <div className="space-y-1"><label className="text-[10px] font-black uppercase text-slate-400">Selecione a Filial</label><select className="w-full bg-slate-50 border-2 rounded-xl px-4 py-3 font-bold border-slate-100" value={selectedFilial} onChange={e => setSelectedFilial(e.target.value)}><option value="">Selecione...</option>{FILIAIS.map(f => <option key={f} value={f.toString()}>Filial {f}</option>)}</select></div>
             </div>
+<<<<<<< Updated upstream
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               {[ { f: fileGroups, set: setFileGroups, label: 'Estrutura' }, { f: fileStock, set: setFileStock, label: 'Saldos' }, { f: fileDeptIds, set: setFileDeptIds, label: 'IDs Depto' }, { f: fileCatIds, set: setFileCatIds, label: 'IDs Cat' } ].map((item, i) => (
+=======
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[{ f: fileGroups, set: setFileGroups, label: 'Estrutura' }, { f: fileStock, set: setFileStock, label: 'Saldos' }, { f: fileDeptIds, set: setFileDeptIds, label: 'IDs Depto' }, { f: fileCatIds, set: setFileCatIds, label: 'IDs Cat' }].map((item, i) => (
+>>>>>>> Stashed changes
                 <label key={i} className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${item.f ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
                   <input type="file" className="hidden" onChange={e => item.set(e.target.files?.[0] || null)} />
                   <i className={`fa-solid fa-file-excel text-xl mb-1 ${item.f ? 'text-emerald-500' : 'text-slate-300'}`}></i>
@@ -720,78 +811,80 @@ const App: React.FC = () => {
           {/* Badge Vistoso da Filial */}
           <div className="flex items-center bg-gradient-to-r from-indigo-600 via-indigo-700 to-indigo-900 px-8 py-2.5 rounded-2xl border-2 border-indigo-400/50 shadow-[0_8px_25px_rgba(79,70,229,0.5)] transform hover:scale-105 transition-transform duration-300">
             <div className="flex flex-col">
-                <span className="text-[9px] font-black uppercase tracking-[0.3em] text-indigo-300 leading-none mb-1">AUDITANDO AGORA</span>
-                <span className="text-2xl font-black italic tracking-tighter leading-tight text-white drop-shadow-md">FILIAL UNIDADE F{data.filial}</span>
+              <span className="text-[9px] font-black uppercase tracking-[0.3em] text-indigo-300 leading-none mb-1">AUDITANDO AGORA</span>
+              <span className="text-2xl font-black italic tracking-tighter leading-tight text-white drop-shadow-md">
+                FILIAL UNIDADE F{data.filial} <span className="text-sm text-indigo-300 ml-2 not-italic">#{data.auditNumber || auditNumber}</span>
+              </span>
             </div>
             <div className="ml-6 flex flex-col items-center">
-                <div className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_10px_#34d399]"></div>
-                <span className="text-[8px] font-bold text-emerald-400 mt-1 uppercase">LIVE</span>
+              <div className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_10px_#34d399]"></div>
+              <span className="text-[8px] font-bold text-emerald-400 mt-1 uppercase">LIVE</span>
             </div>
           </div>
         </div>
         <div className="flex gap-3">
-            <button onClick={handleExportPDF} className="bg-white/10 hover:bg-white/20 px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all border border-white/10"><i className="fa-solid fa-file-export"></i> PDF ANALÍTICO</button>
-            <button onClick={handleReset} className="w-10 h-10 rounded-xl bg-red-600/20 text-red-500 border border-red-500/30 flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-lg active:scale-90"><i className="fa-solid fa-power-off"></i></button>
+          <button onClick={handleExportPDF} className="bg-white/10 hover:bg-white/20 px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all border border-white/10"><i className="fa-solid fa-file-export"></i> PDF ANALÍTICO</button>
+          <button onClick={handleReset} className="w-10 h-10 rounded-xl bg-red-600/20 text-red-500 border border-red-500/30 flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-lg active:scale-90"><i className="fa-solid fa-power-off"></i></button>
         </div>
       </header>
 
       {/* Dashboard de Comando Superior v7.1 */}
       <div className="sticky top-[76px] z-[1001] bg-white/90 backdrop-blur-xl border-b border-slate-200 shadow-lg px-8 py-5">
         <div className="max-w-[1400px] mx-auto grid grid-cols-1 md:grid-cols-6 gap-6 items-center">
-            <div className="md:col-span-2">
-                <div className="flex justify-between items-end mb-2">
-                    <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic leading-none">Conferência Global da Filial</span>
-                    <span className="text-2xl font-black text-indigo-600 leading-none">{Math.round(branchMetrics.progress)}%</span>
-                </div>
-                <div className="w-full h-4 bg-slate-100 rounded-full overflow-hidden shadow-inner border border-slate-200 p-0.5">
-                    <div className="h-full bg-indigo-500 rounded-full transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(79,70,229,0.3)]" style={{ width: `${branchMetrics.progress}%` }}></div>
-                </div>
+          <div className="md:col-span-2">
+            <div className="flex justify-between items-end mb-2">
+              <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest italic leading-none">Conferência Global da Filial</span>
+              <span className="text-2xl font-black text-indigo-600 leading-none">{Math.round(branchMetrics.progress)}%</span>
             </div>
-            
-            {/* SKUs TOTAIS */}
-            <div className="flex flex-col items-center border-l border-slate-100 px-2">
-                <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">SKUs Totais</span>
-                <span className="text-2xl font-black text-slate-900 tabular-nums leading-none mt-1">{branchMetrics.skus.toLocaleString()}</span>
-                <span className="text-[8px] font-bold text-slate-400 uppercase mt-1 tracking-tighter">MIX IMPORTADO</span>
+            <div className="w-full h-4 bg-slate-100 rounded-full overflow-hidden shadow-inner border border-slate-200 p-0.5">
+              <div className="h-full bg-indigo-500 rounded-full transition-all duration-1000 ease-out shadow-[0_0_15px_rgba(79,70,229,0.3)]" style={{ width: `${branchMetrics.progress}%` }}></div>
             </div>
+          </div>
 
-            {/* UNIDADES TOTAIS - ATUALIZADO COM CONFERIDO */}
-            <div className="flex flex-col items-center border-l border-slate-100 px-2">
-                <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Unidades Totais</span>
-                <div className="flex items-center gap-2 mt-1">
-                    <span className="text-xl font-black text-indigo-700 tabular-nums">{Math.round(branchMetrics.doneUnits).toLocaleString()}</span> 
-                    <span className="text-slate-200 text-sm">/</span> 
-                    <span className="text-lg font-black text-slate-300 tabular-nums">{Math.round(branchMetrics.units).toLocaleString()}</span>
-                </div>
-                <span className="text-[8px] font-bold text-indigo-300 uppercase mt-1 tracking-tighter">CONFERIDAS / TOTAIS</span>
-            </div>
+          {/* SKUs TOTAIS */}
+          <div className="flex flex-col items-center border-l border-slate-100 px-2">
+            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">SKUs Totais</span>
+            <span className="text-2xl font-black text-slate-900 tabular-nums leading-none mt-1">{branchMetrics.skus.toLocaleString()}</span>
+            <span className="text-[8px] font-bold text-slate-400 uppercase mt-1 tracking-tighter">MIX IMPORTADO</span>
+          </div>
 
-            {/* MIX AUDITADO */}
-            <div className="flex flex-col items-center border-l border-slate-100 px-2">
-                <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Mix Auditado</span>
-                <div className="flex items-center gap-2 mt-1">
-                    <span className="text-xl font-black text-emerald-600 tabular-nums">{branchMetrics.doneSkus.toLocaleString()}</span> 
-                    <span className="text-slate-200 text-sm">/</span> 
-                    <span className="text-lg font-black text-slate-300 tabular-nums">{branchMetrics.pendingSkus.toLocaleString()}</span>
-                </div>
-                <span className="text-[8px] font-bold text-emerald-500 uppercase mt-1 tracking-tighter">CONFERIDOS / PENDENTES</span>
+          {/* UNIDADES TOTAIS - ATUALIZADO COM CONFERIDO */}
+          <div className="flex flex-col items-center border-l border-slate-100 px-2">
+            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Unidades Totais</span>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xl font-black text-indigo-700 tabular-nums">{Math.round(branchMetrics.doneUnits).toLocaleString()}</span>
+              <span className="text-slate-200 text-sm">/</span>
+              <span className="text-lg font-black text-slate-300 tabular-nums">{Math.round(branchMetrics.units).toLocaleString()}</span>
             </div>
+            <span className="text-[8px] font-bold text-indigo-300 uppercase mt-1 tracking-tighter">CONFERIDAS / TOTAIS</span>
+          </div>
 
-            {/* PREVISÃO FINAL */}
-            <div className="flex flex-col items-center border-l border-indigo-100 bg-indigo-50/50 rounded-2xl py-2 px-4 shadow-sm">
-                <span className="text-[9px] font-black text-indigo-400 uppercase tracking-widest italic text-center">Dias Restantes</span>
-                <span className="text-2xl font-black text-indigo-600 tabular-nums leading-none mt-1">{Math.ceil(productivity.etaDays)} <span className="text-[10px] uppercase font-bold text-indigo-400">Dias</span></span>
-                <span className="text-[8px] font-bold text-indigo-300 uppercase mt-1 tracking-tighter">PREVISÃO FINAL</span>
+          {/* MIX AUDITADO */}
+          <div className="flex flex-col items-center border-l border-slate-100 px-2">
+            <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Mix Auditado</span>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xl font-black text-emerald-600 tabular-nums">{branchMetrics.doneSkus.toLocaleString()}</span>
+              <span className="text-slate-200 text-sm">/</span>
+              <span className="text-lg font-black text-slate-300 tabular-nums">{branchMetrics.pendingSkus.toLocaleString()}</span>
             </div>
+            <span className="text-[8px] font-bold text-emerald-500 uppercase mt-1 tracking-tighter">CONFERIDOS / PENDENTES</span>
+          </div>
+
+          {/* PREVISÃO FINAL */}
+          <div className="flex flex-col items-center border-l border-indigo-100 bg-indigo-50/50 rounded-2xl py-2 px-4 shadow-sm">
+            <span className="text-[9px] font-black text-indigo-400 uppercase tracking-widest italic text-center">Dias Restantes</span>
+            <span className="text-2xl font-black text-indigo-600 tabular-nums leading-none mt-1">{Math.ceil(productivity.etaDays)} <span className="text-[10px] uppercase font-bold text-indigo-400">Dias</span></span>
+            <span className="text-[8px] font-bold text-indigo-300 uppercase mt-1 tracking-tighter">PREVISÃO FINAL</span>
+          </div>
         </div>
       </div>
 
       <main className="max-w-[1400px] mx-auto px-8 mt-8">
-        <Breadcrumbs 
-          view={view} 
-          onNavigate={l => setView(prev => ({ ...prev, level: l as any }))} 
-          groupName={selectedGroup?.name} 
-          deptName={selectedDept?.name} 
+        <Breadcrumbs
+          view={view}
+          onNavigate={l => setView(prev => ({ ...prev, level: l as any }))}
+          groupName={selectedGroup?.name}
+          deptName={selectedDept?.name}
         />
 
         <div className={`grid gap-6 ${view.level === 'groups' ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}>
@@ -804,44 +897,43 @@ const App: React.FC = () => {
               <div key={group.id} className="bg-white rounded-[2.5rem] p-8 border border-slate-200 shadow-sm hover:shadow-xl transition-all group flex flex-col relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-full -mr-16 -mt-16 group-hover:bg-indigo-100 transition-colors z-0"></div>
                 <div className="relative z-10">
-                    <div className="flex justify-between items-start mb-6">
-                        <span className="text-xl font-black text-indigo-600 bg-indigo-50 px-5 py-2.5 rounded-2xl border border-indigo-100 shadow-sm">ID {group.id}</span>
-                        <div className="flex gap-2">
-                            <button
-                              onClick={(e) => { e.stopPropagation(); if (isComplete) openTermModal({ type: 'group', groupId: group.id }); }}
-                              disabled={!isComplete}
-                              className={`px-3 h-10 rounded-xl border flex items-center justify-center gap-1 transition-all shadow-sm text-[10px] font-black uppercase ${
-                                isComplete
-                                  ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-600 hover:text-white'
-                                  : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
-                              }`}
-                              title={isComplete ? 'Assinar e imprimir termo' : 'Conclua 100% para liberar'}
-                            >
-                              <i className="fa-solid fa-file-signature text-[11px]"></i>
-                              Termo
-                            </button>
-                            <button onClick={(e) => { e.stopPropagation(); toggleScopeStatus(group.id); }} className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center hover:bg-emerald-600 hover:text-white transition-all shadow-sm"><i className="fa-solid fa-check-double text-sm"></i></button>
-                            <button onClick={() => setView({ level: 'departments', selectedGroupId: group.id })} className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center hover:bg-indigo-600 transition-all shadow-md"><i className="fa-solid fa-chevron-right text-sm"></i></button>
-                        </div>
+                  <div className="flex justify-between items-start mb-6">
+                    <span className="text-xl font-black text-indigo-600 bg-indigo-50 px-5 py-2.5 rounded-2xl border border-indigo-100 shadow-sm">ID {group.id}</span>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); if (isComplete) openTermModal({ type: 'group', groupId: group.id }); }}
+                        disabled={!isComplete}
+                        className={`px-3 h-10 rounded-xl border flex items-center justify-center gap-1 transition-all shadow-sm text-[10px] font-black uppercase ${isComplete
+                            ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-600 hover:text-white'
+                            : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                          }`}
+                        title={isComplete ? 'Assinar e imprimir termo' : 'Conclua 100% para liberar'}
+                      >
+                        <i className="fa-solid fa-file-signature text-[11px]"></i>
+                        Termo
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); toggleScopeStatus(group.id); }} className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 flex items-center justify-center hover:bg-emerald-600 hover:text-white transition-all shadow-sm"><i className="fa-solid fa-check-double text-sm"></i></button>
+                      <button onClick={() => setView({ level: 'departments', selectedGroupId: group.id })} className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center hover:bg-indigo-600 transition-all shadow-md"><i className="fa-solid fa-chevron-right text-sm"></i></button>
                     </div>
-                    <h2 onClick={() => setView({ level: 'departments', selectedGroupId: group.id })} className="text-xl font-black text-slate-900 uppercase italic mb-6 cursor-pointer group-hover:text-indigo-600 flex-1 leading-tight tracking-tight">{group.name}</h2>
-                    <div className="grid grid-cols-2 gap-6 pt-6 border-t border-slate-50 mb-6">
-                        <div>
-                            <p className="text-[8px] font-black text-slate-400 uppercase italic mb-1">Carga de Mix</p>
-                            <div className="flex justify-between text-xs font-bold items-center">
-                                <span className="text-slate-400">Total: {m.skus}</span>
-                                <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-md text-[9px]">{m.doneSkus} Conf.</span>
-                            </div>
-                        </div>
-                        <div className="border-l border-slate-100 pl-6">
-                            <p className="text-[8px] font-black text-slate-400 uppercase italic mb-1">Volume de Unid.</p>
-                            <div className="flex justify-between text-xs font-bold items-center">
-                                <span className="text-slate-400">Total: {Math.round(m.units).toLocaleString()}</span>
-                                <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md text-[9px]">{Math.round(m.doneUnits).toLocaleString()} Aud.</span>
-                            </div>
-                        </div>
+                  </div>
+                  <h2 onClick={() => setView({ level: 'departments', selectedGroupId: group.id })} className="text-xl font-black text-slate-900 uppercase italic mb-6 cursor-pointer group-hover:text-indigo-600 flex-1 leading-tight tracking-tight">{group.name}</h2>
+                  <div className="grid grid-cols-2 gap-6 pt-6 border-t border-slate-50 mb-6">
+                    <div>
+                      <p className="text-[8px] font-black text-slate-400 uppercase italic mb-1">Carga de Mix</p>
+                      <div className="flex justify-between text-xs font-bold items-center">
+                        <span className="text-slate-400">Total: {m.skus}</span>
+                        <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-md text-[9px]">{m.doneSkus} Conf.</span>
+                      </div>
                     </div>
-                    <ProgressBar percentage={m.progress} size="md" label={`Progresso do Grupo`} />
+                    <div className="border-l border-slate-100 pl-6">
+                      <p className="text-[8px] font-black text-slate-400 uppercase italic mb-1">Volume de Unid.</p>
+                      <div className="flex justify-between text-xs font-bold items-center">
+                        <span className="text-slate-400">Total: {Math.round(m.units).toLocaleString()}</span>
+                        <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md text-[9px]">{Math.round(m.doneUnits).toLocaleString()} Aud.</span>
+                      </div>
+                    </div>
+                  </div>
+                  <ProgressBar percentage={m.progress} size="md" label={`Progresso do Grupo`} />
                 </div>
               </div>
             );
@@ -855,36 +947,35 @@ const App: React.FC = () => {
             return (
               <div key={dept.id} className="bg-white rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-all p-8 flex items-center gap-10 group">
                 <div className="flex flex-col items-center justify-center bg-slate-50 rounded-[2rem] p-6 min-w-[160px] border border-slate-100 shadow-inner">
-                    <span className="text-[9px] font-black text-slate-400 uppercase mb-2 italic">SISTEMA ID</span>
-                    <span className="text-5xl font-black text-indigo-700 leading-none tracking-tighter">{dept.numericId || '--'}</span>
+                  <span className="text-[9px] font-black text-slate-400 uppercase mb-2 italic">SISTEMA ID</span>
+                  <span className="text-5xl font-black text-indigo-700 leading-none tracking-tighter">{dept.numericId || '--'}</span>
                 </div>
                 <div className="flex-1">
-                    <div className="flex justify-between items-start mb-6">
-                        <h2 onClick={() => setView(prev => ({ ...prev, level: 'categories', selectedDeptId: dept.id }))} className="text-3xl font-black text-slate-900 uppercase italic leading-none group-hover:text-indigo-600 cursor-pointer tracking-tighter">{dept.name}</h2>
-                        <div className="flex gap-2">
-                             <button
-                               onClick={() => { if (isComplete) openTermModal({ type: 'department', groupId: selectedGroup!.id, deptId: dept.id }); }}
-                               disabled={!isComplete}
-                               className={`px-4 py-2 min-w-[76px] rounded-xl text-[10px] font-black uppercase transition-all shadow-sm ${
-                                 isComplete
-                                   ? 'bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white'
-                                   : 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed'
-                               }`}
-                               title={isComplete ? 'Assinar e imprimir termo' : 'Conclua 100% para liberar'}
-                             >
-                               Termo
-                             </button>
-                             <button onClick={() => toggleScopeStatus(selectedGroup?.id, dept.id)} className="px-4 py-2 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 text-[10px] font-black uppercase hover:bg-emerald-600 hover:text-white transition-all shadow-sm">Alternar Tudo</button>
-                             <button onClick={() => setView(prev => ({ ...prev, level: 'categories', selectedDeptId: dept.id }))} className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center hover:bg-indigo-600 transition-all shadow-lg"><i className="fa-solid fa-chevron-right text-sm"></i></button>
-                        </div>
+                  <div className="flex justify-between items-start mb-6">
+                    <h2 onClick={() => setView(prev => ({ ...prev, level: 'categories', selectedDeptId: dept.id }))} className="text-3xl font-black text-slate-900 uppercase italic leading-none group-hover:text-indigo-600 cursor-pointer tracking-tighter">{dept.name}</h2>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { if (isComplete) openTermModal({ type: 'department', groupId: selectedGroup!.id, deptId: dept.id }); }}
+                        disabled={!isComplete}
+                        className={`px-4 py-2 min-w-[76px] rounded-xl text-[10px] font-black uppercase transition-all shadow-sm ${isComplete
+                            ? 'bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white'
+                            : 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed'
+                          }`}
+                        title={isComplete ? 'Assinar e imprimir termo' : 'Conclua 100% para liberar'}
+                      >
+                        Termo
+                      </button>
+                      <button onClick={() => toggleScopeStatus(selectedGroup?.id, dept.id)} className="px-4 py-2 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100 text-[10px] font-black uppercase hover:bg-emerald-600 hover:text-white transition-all shadow-sm">Alternar Tudo</button>
+                      <button onClick={() => setView(prev => ({ ...prev, level: 'categories', selectedDeptId: dept.id }))} className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center hover:bg-indigo-600 transition-all shadow-lg"><i className="fa-solid fa-chevron-right text-sm"></i></button>
                     </div>
-                    <div className="grid grid-cols-4 gap-8 mb-6">
-                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Mix Total</span><span className="text-lg font-black text-slate-400">{m.skus}</span></div>
-                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Mix Auditado</span><span className="text-xl font-black text-emerald-600 tabular-nums">{m.doneSkus}</span></div>
-                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Unid Totais</span><span className="text-lg font-black text-slate-400">{Math.round(m.units).toLocaleString()}</span></div>
-                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Unid Auditadas</span><span className="text-xl font-black text-indigo-600 tabular-nums">{Math.round(m.doneUnits).toLocaleString()}</span></div>
-                    </div>
-                    <ProgressBar percentage={m.progress} size="md" label={`Status do Departamento`} />
+                  </div>
+                  <div className="grid grid-cols-4 gap-8 mb-6">
+                    <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Mix Total</span><span className="text-lg font-black text-slate-400">{m.skus}</span></div>
+                    <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Mix Auditado</span><span className="text-xl font-black text-emerald-600 tabular-nums">{m.doneSkus}</span></div>
+                    <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Unid Totais</span><span className="text-lg font-black text-slate-400">{Math.round(m.units).toLocaleString()}</span></div>
+                    <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Unid Auditadas</span><span className="text-xl font-black text-indigo-600 tabular-nums">{Math.round(m.doneUnits).toLocaleString()}</span></div>
+                  </div>
+                  <ProgressBar percentage={m.progress} size="md" label={`Status do Departamento`} />
                 </div>
               </div>
             );
@@ -892,35 +983,34 @@ const App: React.FC = () => {
 
           {view.level === 'categories' && selectedDept?.categories.map(cat => (
             <div key={cat.id} className={`p-6 rounded-[2rem] border-2 flex items-center justify-between gap-8 transition-all hover:shadow-lg group ${cat.status === AuditStatus.DONE ? 'border-emerald-500/20 bg-emerald-50/50' : 'border-slate-50 bg-white'}`}>
-                <div className="flex items-center gap-8 flex-1">
-                    <div className="flex flex-col items-center justify-center bg-white border border-slate-200 rounded-2xl p-5 min-w-[120px] shadow-sm">
-                        <span className="text-[9px] font-black text-slate-400 uppercase mb-1 italic">ID CAT</span>
-                        <span className={`text-4xl font-black leading-none ${cat.status === AuditStatus.DONE ? 'text-emerald-700' : 'text-indigo-700'}`}>{cat.numericId || '--'}</span>
-                    </div>
-                    <div>
-                        <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-2xl uppercase italic leading-none cursor-pointer hover:underline transition-all ${cat.status === AuditStatus.DONE ? 'text-emerald-900' : 'text-slate-900'} tracking-tighter`}>{cat.name}</h3>
-                        <div className="flex gap-10 mt-3 items-center">
-                            <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic">SKUs Importados</span><span className="text-md font-black text-slate-800 tabular-nums">{cat.itemsCount} Mix</span></div>
-                            <div className="w-px h-6 bg-slate-100"></div>
-                            <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic">Estoque Físico</span><span className="text-md font-black text-indigo-600 tabular-nums">{cat.totalQuantity.toLocaleString()} Unid.</span></div>
-                        </div>
-                    </div>
+              <div className="flex items-center gap-8 flex-1">
+                <div className="flex flex-col items-center justify-center bg-white border border-slate-200 rounded-2xl p-5 min-w-[120px] shadow-sm">
+                  <span className="text-[9px] font-black text-slate-400 uppercase mb-1 italic">ID CAT</span>
+                  <span className={`text-4xl font-black leading-none ${cat.status === AuditStatus.DONE ? 'text-emerald-700' : 'text-indigo-700'}`}>{cat.numericId || '--'}</span>
                 </div>
-                <div className="flex gap-4">
-                    <button
-                      onClick={() => { if (cat.status === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id }); }}
-                      disabled={cat.status !== AuditStatus.DONE}
-                      className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${
-                        cat.status === AuditStatus.DONE
-                          ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:text-white hover:bg-indigo-600'
-                          : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
-                      }`}
-                    >
-                      Termo
-                    </button>
-                    <button onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className="px-6 py-4 rounded-xl bg-slate-50 text-slate-400 text-[10px] font-black uppercase hover:text-indigo-600 hover:bg-white transition-all border border-transparent hover:border-indigo-100 shadow-sm">Detalhar</button>
-                    <button onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, cat.id)} className={`px-10 py-4 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-md active:scale-95 ${cat.status === AuditStatus.DONE ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}>{cat.status === AuditStatus.DONE ? 'CONCLUÍDO' : 'FINALIZAR'}</button>
+                <div>
+                  <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-2xl uppercase italic leading-none cursor-pointer hover:underline transition-all ${cat.status === AuditStatus.DONE ? 'text-emerald-900' : 'text-slate-900'} tracking-tighter`}>{cat.name}</h3>
+                  <div className="flex gap-10 mt-3 items-center">
+                    <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic">SKUs Importados</span><span className="text-md font-black text-slate-800 tabular-nums">{cat.itemsCount} Mix</span></div>
+                    <div className="w-px h-6 bg-slate-100"></div>
+                    <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic">Estoque Físico</span><span className="text-md font-black text-indigo-600 tabular-nums">{cat.totalQuantity.toLocaleString()} Unid.</span></div>
+                  </div>
                 </div>
+              </div>
+              <div className="flex gap-4">
+                <button
+                  onClick={() => { if (cat.status === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id }); }}
+                  disabled={cat.status !== AuditStatus.DONE}
+                  className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${cat.status === AuditStatus.DONE
+                      ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:text-white hover:bg-indigo-600'
+                      : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                    }`}
+                >
+                  Termo
+                </button>
+                <button onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className="px-6 py-4 rounded-xl bg-slate-50 text-slate-400 text-[10px] font-black uppercase hover:text-indigo-600 hover:bg-white transition-all border border-transparent hover:border-indigo-100 shadow-sm">Detalhar</button>
+                <button onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, cat.id)} className={`px-10 py-4 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-md active:scale-95 ${cat.status === AuditStatus.DONE ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}>{cat.status === AuditStatus.DONE ? 'CONCLUÍDO' : 'FINALIZAR'}</button>
+              </div>
             </div>
           ))}
 
@@ -928,38 +1018,37 @@ const App: React.FC = () => {
             <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-slate-200">
               <div className="bg-slate-900 p-10 text-white flex justify-between items-center relative">
                 <div className="absolute top-0 right-0 p-4 opacity-5 pointer-events-none">
-                    <i className="fa-solid fa-boxes-stacked text-8xl"></i>
+                  <i className="fa-solid fa-boxes-stacked text-8xl"></i>
                 </div>
                 <div className="relative z-10">
                   <h2 className="text-4xl font-black uppercase italic leading-none mb-3 tracking-tighter">{selectedCat.name}</h2>
                   <div className="flex items-center gap-6">
-                      <span className="text-5xl font-black text-indigo-400 leading-none drop-shadow-sm">ID: {selectedCat.numericId || '--'}</span>
-                      <div className="w-px h-10 bg-white/20"></div>
-                      <div className="flex flex-col">
-                        <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest italic">{selectedGroup?.name}</p>
-                        <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest italic">{selectedDept?.name}</p>
-                      </div>
+                    <span className="text-5xl font-black text-indigo-400 leading-none drop-shadow-sm">ID: {selectedCat.numericId || '--'}</span>
+                    <div className="w-px h-10 bg-white/20"></div>
+                    <div className="flex flex-col">
+                      <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest italic">{selectedGroup?.name}</p>
+                      <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest italic">{selectedDept?.name}</p>
+                    </div>
                   </div>
                 </div>
                 <div className="flex gap-6 items-center relative z-10">
-                    <div className="text-right mr-6 hidden lg:block">
-                        <p className="text-[10px] font-black text-slate-500 uppercase italic mb-1">Resumo de Carga</p>
-                        <p className="text-2xl font-black leading-none">{selectedCat.itemsCount} SKUs <span className="text-indigo-400 mx-2">|</span> {selectedCat.totalQuantity.toLocaleString()} Unid.</p>
-                    </div>
-                    <button
-                      onClick={() => { if (selectedCat.status === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: selectedCat.id }); }}
-                      disabled={selectedCat.status !== AuditStatus.DONE}
-                      className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${
-                        selectedCat.status === AuditStatus.DONE
-                          ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-600 hover:text-white'
-                          : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                  <div className="text-right mr-6 hidden lg:block">
+                    <p className="text-[10px] font-black text-slate-500 uppercase italic mb-1">Resumo de Carga</p>
+                    <p className="text-2xl font-black leading-none">{selectedCat.itemsCount} SKUs <span className="text-indigo-400 mx-2">|</span> {selectedCat.totalQuantity.toLocaleString()} Unid.</p>
+                  </div>
+                  <button
+                    onClick={() => { if (selectedCat.status === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: selectedCat.id }); }}
+                    disabled={selectedCat.status !== AuditStatus.DONE}
+                    className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${selectedCat.status === AuditStatus.DONE
+                        ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-600 hover:text-white'
+                        : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                       }`}
-                    >
-                      Imprimir Termo
-                    </button>
-                    <button onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, selectedCat.id)} className={`px-10 py-5 rounded-2xl font-black text-[12px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95 border-b-4 ${selectedCat.status === AuditStatus.DONE ? 'bg-emerald-600 border-emerald-800' : 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500'}`}>
+                  >
+                    Imprimir Termo
+                  </button>
+                  <button onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, selectedCat.id)} className={`px-10 py-5 rounded-2xl font-black text-[12px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95 border-b-4 ${selectedCat.status === AuditStatus.DONE ? 'bg-emerald-600 border-emerald-800' : 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500'}`}>
                     {selectedCat.status === AuditStatus.DONE ? 'REABRIR CATEGORIA' : 'CONCLUIR AUDITORIA'}
-                    </button>
+                  </button>
                 </div>
               </div>
               <div className="max-h-[650px] overflow-y-auto custom-scrollbar">

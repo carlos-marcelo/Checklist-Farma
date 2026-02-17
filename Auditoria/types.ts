@@ -37,6 +37,8 @@ export interface AuditData {
   groups: Group[];
   empresa: string;
   filial: string;
+  sessionId?: string; // ID do banco de dados
+  auditNumber?: number; // Número sequencial da auditoria (1, 2, 3...)
 }
 
 export interface ViewState {

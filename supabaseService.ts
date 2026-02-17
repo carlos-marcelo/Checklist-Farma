@@ -1,6 +1,6 @@
 import { supabase } from './supabaseClient';
 import { ChecklistDefinition } from './types';
-import { Product, PVRecord, PVSaleClassification, SalesUploadRecord } from './preVencidos/types';
+import { Product, PVRecord, PVSaleClassification, SalesUploadRecord, SalesRecord } from './preVencidos/types';
 
 // ==================== TYPES ====================
 
@@ -804,10 +804,95 @@ export interface DbActiveSalesReport {
   sales_period: string;
   confirmed_sales?: DbPVConfirmedSalesPayload;
   uploaded_at?: string;
-  updated_at?: string;
+  status: 'pending' | 'processed';
   user_email?: string;
   file_name?: string;
+  updated_at?: string;
 }
+
+// ==================== AUDITORIA ====================
+
+export interface DbAuditSession {
+  id?: string;
+  branch: string;
+  audit_number: number;
+  status: 'open' | 'completed';
+  data: any; // Full AuditData JSON
+  progress: number;
+  user_email?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export async function fetchAuditSession(branch: string, auditNumber: number): Promise<DbAuditSession | null> {
+  try {
+    const { data, error } = await supabase
+      .from('audit_sessions')
+      .select('*')
+      .eq('branch', branch)
+      .eq('audit_number', auditNumber)
+      .single();
+
+    if (error) {
+      if (error.code === 'PGRST116') return null; // Not found
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    console.error('Error fetching audit session:', error);
+    return null;
+  }
+}
+
+export async function fetchLatestAudit(branch: string): Promise<DbAuditSession | null> {
+  try {
+    const { data, error } = await supabase
+      .from('audit_sessions')
+      .select('*')
+      .eq('branch', branch)
+      .order('audit_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error fetching latest audit:', error);
+    return null;
+  }
+}
+
+export async function upsertAuditSession(session: DbAuditSession): Promise<DbAuditSession | null> {
+  try {
+    const payload: any = {
+      branch: session.branch,
+      audit_number: session.audit_number,
+      status: session.status,
+      data: session.data,
+      progress: session.progress,
+      user_email: session.user_email,
+      updated_at: new Date().toISOString()
+    };
+
+    if (session.id) {
+      payload.id = session.id;
+    }
+
+    const { data, error } = await supabase
+      .from('audit_sessions')
+      .upsert(payload, { onConflict: 'branch,audit_number' })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error upserting audit session:', error);
+    return null;
+  }
+}
+
+
 
 export async function fetchActiveSalesReport(companyId: string, branch: string): Promise<DbActiveSalesReport | null> {
   try {
