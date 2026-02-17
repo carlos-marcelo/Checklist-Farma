@@ -162,6 +162,18 @@ export interface DbPVSalesAnalysisReport {
   updated_at?: string;
 }
 
+export interface DbPVDashboardReport {
+  id?: string;
+  company_id: string;
+  branch: string;
+  report_type: 'FINAL' | 'PREVIEW';
+  period_label?: string | null;
+  user_email?: string | null;
+  file_name?: string | null;
+  pdf_base64: string;
+  created_at?: string;
+}
+
 export interface DbPVSessionData {
   master_products?: Product[];
   system_products?: Product[];
@@ -1255,6 +1267,49 @@ export async function upsertPVSalesAnalysisReport(report: DbPVSalesAnalysisRepor
     return data || null;
   } catch (error) {
     console.error('Error upserting PV sales analysis report:', error);
+    return null;
+  }
+}
+
+export async function fetchPVDashboardReports(companyId: string, branch: string, limit = 5): Promise<DbPVDashboardReport[]> {
+  try {
+    const { data, error } = await supabase
+      .from('pv_dashboard_reports')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('branch', branch)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching PV dashboard reports:', error);
+    return [];
+  }
+}
+
+export async function insertPVDashboardReport(report: DbPVDashboardReport): Promise<DbPVDashboardReport | null> {
+  try {
+    const payload = {
+      company_id: report.company_id,
+      branch: report.branch,
+      report_type: report.report_type,
+      period_label: report.period_label ?? null,
+      user_email: report.user_email ?? null,
+      file_name: report.file_name ?? null,
+      pdf_base64: report.pdf_base64
+    };
+    const { data, error } = await supabase
+      .from('pv_dashboard_reports')
+      .insert(payload)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error inserting PV dashboard report:', error);
     return null;
   }
 }

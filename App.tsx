@@ -3054,6 +3054,7 @@ const App: React.FC = () => {
                             <PreVencidosManager
                                 userEmail={currentUser?.email || ''}
                                 userName={currentUser?.name || ''}
+                                userRole={currentUser?.role || 'USER'}
                                 companies={companies}
                             />
                         </div>

@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Product, PVRecord, SalesRecord, AppView, SessionInfo, PVSaleClassification, SalesUploadRecord } from '../../preVencidos/types';
+import type { UserRole } from '../../types';
 import {
   parseSystemProductsXLSX,
   parseDCBProductsXLSX,
@@ -12,7 +13,7 @@ import PVRegistration from './PVRegistration';
 import AnalysisView from './AnalysisView';
 import SetupView from './SetupView';
 import { NAV_ITEMS } from '../../preVencidos/constants';
-import { Package, AlertTriangle, LogOut, Settings, Trophy, TrendingUp, MinusCircle, CheckCircle, Calendar, Info, Trash2, X, Clock } from 'lucide-react';
+import { Package, AlertTriangle, LogOut, Trophy, TrendingUp, MinusCircle, CheckCircle, Calendar, Info, Trash2, X, Clock } from 'lucide-react';
 import SalesHistoryModal from './SalesHistoryModal';
 import {
   DbCompany,
@@ -21,6 +22,7 @@ import {
   DbPVConfirmedSalesPayload,
   DbPVConfirmedSalesMeta,
   DbPVSalesAnalysisReport,
+  DbPVDashboardReport,
   DbPVInventoryReport,
   fetchPVSession,
   upsertPVSession,
@@ -42,6 +44,8 @@ import {
   upsertActiveSalesReport,
   fetchPVSalesAnalysisReports,
   upsertPVSalesAnalysisReport,
+  fetchPVDashboardReports,
+  insertPVDashboardReport,
   fetchPVInventoryReport,
   upsertPVInventoryReport
 } from '../../supabaseService';
@@ -61,10 +65,29 @@ import { AnalysisReportPayload, buildAnalysisReportPayload } from '../../preVenc
 interface PreVencidosManagerProps {
   userEmail?: string;
   userName?: string;
+  userRole?: UserRole;
   companies: DbCompany[];
 }
 
 const CONFIRMED_META_KEY = '__pv_meta__';
+
+type DashboardMetrics = {
+  ranking: Array<{
+    name: string;
+    score: number;
+    positive: number;
+    neutral: number;
+    negative: number;
+    positiveCost: number;
+    negativeCost: number;
+  }>;
+  totalRecovered: number;
+  totalIgnored: number;
+  totalRecoveredCost: number;
+  totalIgnoredCost: number;
+  efficiency: number;
+  pvInRegistry: number;
+};
 
 const extractConfirmedSalesPayload = (payload?: DbPVConfirmedSalesPayload | null) => {
   const confirmed: Record<string, PVSaleClassification> = {};
@@ -118,7 +141,7 @@ const normalizeBarcode = (value?: string) => {
   return raw.replace(/\D/g, '');
 };
 
-const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, userName, companies = [] }) => {
+const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, userName, userRole, companies = [] }) => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.SETUP);
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
   const [hasCompletedSetup, setHasCompletedSetup] = useState(false);
@@ -143,10 +166,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [inventoryCostByBarcode, setInventoryCostByBarcode] = useState<Record<string, number>>({});
   const [inventoryStockByBarcode, setInventoryStockByBarcode] = useState<Record<string, number>>({});
   const [localLastUpload, setLocalLastUpload] = useState<SalesUploadRecord | null>(null);
+  const [lastDashboardReport, setLastDashboardReport] = useState<DbPVDashboardReport | null>(null);
+  const [isGeneratingDashboardReport, setIsGeneratingDashboardReport] = useState(false);
+  const [pdfPreview, setPdfPreview] = useState<{ url: string; fileName: string } | null>(null);
   const [historyDetail, setHistoryDetail] = useState<{ type: 'seller' | 'recovered' | 'ignored'; seller?: string } | null>(null);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
   const [showHistoryModal, setShowHistoryModal] = useState(false);
+  const isMaster = userRole === 'MASTER';
 
   const buildInventoryMaps = useCallback((records: { barcode: string; cost: number; stock?: number }[]) => {
     const costMap: Record<string, number> = {};
@@ -180,6 +207,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
   }, [userEmail]);
+
+  useEffect(() => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) {
+      setLastDashboardReport(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const reports = await fetchPVDashboardReports(sessionInfo.companyId, sessionInfo.filial, 1);
+      if (!cancelled) {
+        setLastDashboardReport(reports[0] || null);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sessionInfo?.companyId, sessionInfo?.filial]);
 
   useEffect(() => {
     if (!userEmail) {
@@ -222,36 +264,6 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       };
       // @ts-ignore
       saveLocalPVSession(userEmail || '', tempSession);
-    }
-  };
-
-  const handleReconfigure = () => {
-    if (confirm('Tem certeza que deseja reconfigurar? Isso fechará a sessão atual.')) {
-      setHasCompletedSetup(false);
-      setCurrentView(AppView.SETUP);
-      setSessionInfo(null);
-
-      // Clear all data states
-      setSystemProducts([]);
-      setDcbBaseProducts([]);
-      setMasterProducts([]);
-      setPvRecords([]);
-      setSalesRecords([]);
-      setConfirmedPVSales({});
-      setFinalizedREDSByPeriod({});
-      setSalesPeriod('');
-      setHistoryRecords([]);
-      setPvSessionId(null);
-      setSalesUploads([]);
-      setAnalysisReports({});
-
-      clearLocalPVSession(userEmail || '');
-      if (userEmail) {
-        clearLocalPVReports(userEmail).catch(() => { });
-        deletePVReports(userEmail).catch(() => { });
-        clearLastSalesUpload(userEmail);
-      }
-      setLocalLastUpload(null);
     }
   };
 
@@ -773,6 +785,35 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     } catch {
       return `R$ ${Number(value || 0).toFixed(2)}`;
     }
+  };
+
+  const formatDateOnly = (date: Date) => date.toLocaleDateString('pt-BR');
+
+  const resolveRankingPeriodLabel = () => {
+    const uploads = salesUploads
+      .map(upload => ({
+        ...upload,
+        date: upload.uploaded_at ? new Date(upload.uploaded_at) : null
+      }))
+      .filter(item => item.date && !Number.isNaN(item.date.getTime())) as Array<DbPVSalesUpload & { date: Date }>;
+
+    if (uploads.length === 0) {
+      return salesPeriod || historyRecords[0]?.sale_period || 'Período atual';
+    }
+
+    const latest = uploads.reduce((acc, cur) => (cur.date > acc.date ? cur : acc));
+    const month = latest.date.getMonth();
+    const year = latest.date.getFullYear();
+
+    const sameMonth = uploads.filter(item => item.date.getMonth() === month && item.date.getFullYear() === year);
+    if (sameMonth.length === 0) {
+      return salesPeriod || historyRecords[0]?.sale_period || 'Período atual';
+    }
+
+    const first = sameMonth.reduce((acc, cur) => (cur.date < acc.date ? cur : acc));
+    const last = sameMonth.reduce((acc, cur) => (cur.date > acc.date ? cur : acc));
+
+    return `${formatDateOnly(first.date)} a ${formatDateOnly(last.date)}`;
   };
 
   const getSalesUnitPrice = (seller: string, reducedCode: string, quantityHint?: number) => {
@@ -1423,6 +1464,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   };
 
   const handleInventoryUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isMaster) {
+      alert('Apenas usuário master pode carregar o estoque.');
+      e.target.value = '';
+      return;
+    }
     if (!sessionInfo?.companyId || !sessionInfo?.filial) {
       alert('Selecione a filial antes de carregar o estoque.');
       e.target.value = '';
@@ -1466,61 +1512,206 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     e.target.value = '';
   };
 
-  const generateClosingReportPDF = (records: DbPVSalesHistory[]) => {
+  const blobToBase64 = (blob: Blob) => new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      const base64 = result.includes(',') ? result.split(',')[1] : result;
+      resolve(base64 || '');
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+
+  const base64ToBlob = (base64: string) => {
+    const byteChars = atob(base64 || '');
+    const byteNumbers = new Array(byteChars.length);
+    for (let i = 0; i < byteChars.length; i += 1) {
+      byteNumbers[i] = byteChars.charCodeAt(i);
+    }
+    return new Blob([new Uint8Array(byteNumbers)], { type: 'application/pdf' });
+  };
+
+  const openPdfPreview = (blob: Blob, fileName: string) => {
+    const url = URL.createObjectURL(blob);
+    setPdfPreview(prev => {
+      if (prev?.url) URL.revokeObjectURL(prev.url);
+      return { url, fileName };
+    });
+  };
+
+  const closePdfPreview = () => {
+    if (pdfPreview?.url) URL.revokeObjectURL(pdfPreview.url);
+    setPdfPreview(null);
+  };
+
+  const openPdfBlob = (blob: Blob, fileName: string, mode: 'download' | 'preview') => {
+    if (mode === 'preview') {
+      openPdfPreview(blob, fileName);
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  };
+
+  const buildDashboardReportFileName = (prefix: string) => {
+    const safeBranch = (sessionInfo?.filial || 'filial').replace(/\s+/g, '_').replace(/[^\w-]/g, '');
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    return `${prefix}_pv_${safeBranch}_${dateStamp}.pdf`;
+  };
+
+  const drawSummaryCard = (doc: any, x: number, y: number, w: number, h: number, title: string, value: string, subtitle: string, accent: [number, number, number]) => {
+    doc.setFillColor(255, 255, 255);
+    doc.setDrawColor(226, 232, 240);
+    doc.roundedRect(x, y, w, h, 10, 10, 'FD');
+    doc.setFontSize(10);
+    doc.setTextColor(100, 116, 139);
+    doc.text(title, x + 14, y + 18);
+    doc.setFontSize(20);
+    doc.setTextColor(...accent);
+    doc.text(value, x + 14, y + 40);
+    doc.setFontSize(9);
+    doc.setTextColor(100, 116, 139);
+    doc.text(subtitle, x + 14, y + 58);
+  };
+
+  const buildClosingReportPDF = async (records: DbPVSalesHistory[], metrics: DashboardMetrics, prefix: 'final' | 'preview', periodLabel: string) => {
     const jsPDF = (window as any).jspdf?.jsPDF;
     if (!jsPDF) {
       alert('Biblioteca de PDF não carregada. O relatório não pôde ser gerado.');
-      return false;
+      return null;
     }
 
     try {
-      const doc = new jsPDF();
-      doc.setFontSize(16);
-      doc.text('Relatório de Fechamento de Vendas PV', 14, 20);
-      doc.setFontSize(10);
-      doc.text(`Filial: ${sessionInfo?.filial || 'N/A'} - Gerado em: ${new Date().toLocaleString()}`, 14, 28);
+      const doc = new jsPDF({ unit: 'pt', format: 'a4' });
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const margin = 32;
+      const headerHeight = 62;
 
-      if (sessionInfo?.pharmacist) {
-        doc.text(`Farmacêutico: ${sessionInfo.pharmacist}`, 14, 34);
-      }
+      doc.setFillColor(37, 99, 235);
+      doc.rect(0, 0, pageWidth, headerHeight, 'F');
+      doc.setFontSize(18);
+      doc.setTextColor(255, 255, 255);
+      doc.text('RANKING MENSAL - PRÉ-VENCIDOS', margin, 38);
+      doc.setFontSize(9);
+      doc.setTextColor(219, 234, 254);
+      doc.text(`Filial: ${sessionInfo?.filial || 'N/A'} • Período: ${periodLabel}`, margin, 54);
 
-      const tableColumn = ['Vendedor', 'Produto', 'Reduzido', 'Qtd Vendida', 'Qtd Ignorada', 'Período'];
-      const tableRows: any[] = [];
+      doc.setFontSize(9);
+      doc.setTextColor(148, 163, 184);
+      doc.text(`Gerado em ${new Date().toLocaleString()}`, pageWidth - margin - 160, 54);
 
-      let totalSold = 0;
-      let totalIgnored = 0;
+      const cardWidth = (pageWidth - margin * 2 - 16) / 2;
+      const cardHeight = 78;
+      const cardStartY = headerHeight + 18;
+      const rowGap = 12;
 
-      records.forEach(rec => {
-        tableRows.push([
-          rec.seller_name || '-',
-          rec.product_name,
-          rec.reduced_code,
-          rec.qty_sold_pv || 0,
-          rec.qty_ignored || 0,
-          rec.sale_period || '-'
-        ]);
-        totalSold += Number(rec.qty_sold_pv || 0);
-        totalIgnored += Number(rec.qty_ignored || 0);
-      });
+      drawSummaryCard(
+        doc,
+        margin,
+        cardStartY,
+        cardWidth,
+        cardHeight,
+        'RECUPERADO PV (FILIAL)',
+        String(metrics.totalRecovered),
+        formatCurrency(metrics.totalRecoveredCost || 0),
+        [22, 163, 74]
+      );
+
+      drawSummaryCard(
+        doc,
+        margin + cardWidth + 16,
+        cardStartY,
+        cardWidth,
+        cardHeight,
+        'IGNOROU PV (FILIAL)',
+        String(metrics.totalIgnored),
+        formatCurrency(metrics.totalIgnoredCost || 0),
+        [239, 68, 68]
+      );
+
+      drawSummaryCard(
+        doc,
+        margin,
+        cardStartY + cardHeight + rowGap,
+        cardWidth,
+        cardHeight,
+        'EFICIÊNCIA GERAL',
+        `${metrics.efficiency.toFixed(1)}%`,
+        'Meta de conversão',
+        [15, 23, 42]
+      );
+
+      drawSummaryCard(
+        doc,
+        margin + cardWidth + 16,
+        cardStartY + cardHeight + rowGap,
+        cardWidth,
+        cardHeight,
+        'ESTOQUE RESTANTE PV',
+        String(metrics.pvInRegistry),
+        'Produtos cadastrados',
+        [30, 64, 175]
+      );
+
+      const rankingStartY = cardStartY + (cardHeight * 2) + rowGap + 20;
+      doc.setFontSize(13);
+      doc.setTextColor(15, 23, 42);
+      doc.text('RANKING DE EFICIÊNCIA POR VENDEDOR', margin, rankingStartY);
+
+      const rankingRows = metrics.ranking.slice(0, 10).map((item, idx) => ([
+        `${idx + 1}º`,
+        item.name,
+        `+${item.positive} PV`,
+        `${item.neutral} N`,
+        `-${item.negative} IGNOROU`,
+        `Custo: ${formatCurrency(item.positiveCost || 0)} / ${formatCurrency(item.negativeCost || 0)}`
+      ]));
 
       (doc as any).autoTable({
-        startY: 40,
-        head: [tableColumn],
-        body: tableRows,
+        startY: rankingStartY + 12,
+        head: [['Pos.', 'Vendedor', '+PV', 'N', 'Ignorou', 'Custo (+/-)']],
+        body: rankingRows,
         theme: 'grid',
-        styles: { fontSize: 8 },
-        foot: [['TOTAIS', '', '', totalSold, totalIgnored, '']]
+        styles: { fontSize: 8, cellPadding: 4, valign: 'middle' },
+        headStyles: { fillColor: [241, 245, 249], textColor: [51, 65, 85], fontStyle: 'bold' },
+        alternateRowStyles: { fillColor: [248, 250, 252] },
+        didParseCell: (data: any) => {
+          if (data.section === 'body' && data.row.index === 0) {
+            data.cell.styles.fillColor = [252, 211, 77]; // ouro
+            data.cell.styles.textColor = [120, 53, 15];
+          }
+          if (data.section === 'body' && data.row.index === 1) {
+            data.cell.styles.fillColor = [226, 232, 240]; // prata
+            data.cell.styles.textColor = [71, 85, 105];
+          }
+          if (data.section === 'body' && data.row.index === 2) {
+            data.cell.styles.fillColor = [253, 186, 116]; // bronze
+            data.cell.styles.textColor = [124, 45, 18];
+          }
+        }
       });
 
-      doc.save(`fechamento_pv_${sessionInfo?.filial || 'filial'}_${new Date().toISOString().slice(0, 10)}.pdf`);
-      return true;
+      const fileName = buildDashboardReportFileName(prefix === 'final' ? 'ranking_final' : 'ranking_simulacao');
+      const blob = doc.output('blob');
+      const base64 = await blobToBase64(blob);
+
+      return { blob, base64, fileName };
     } catch (e) {
-      console.error("Erro gerando PDF de fechamento:", e);
-      return false;
+      console.error('Erro gerando PDF de fechamento:', e);
+      return null;
     }
   };
 
   const handleClearDashboard = async () => {
+    if (!isMaster) {
+      alert('Apenas usuário master pode limpar o dashboard.');
+      return;
+    }
     if (!sessionInfo?.companyId || !sessionInfo?.filial) {
       alert('Selecione a filial antes de limpar o dashboard.');
       return;
@@ -1535,9 +1726,30 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
     // Generate PDF Report BEFORE clearing
     if (historyRecords.length > 0) {
-      const pdfSuccess = generateClosingReportPDF(historyRecords);
-      if (!pdfSuccess) {
+      setIsGeneratingDashboardReport(true);
+      const rankingPeriod = resolveRankingPeriodLabel();
+      const pdfData = await buildClosingReportPDF(historyRecords, dashboardMetrics, 'final', rankingPeriod);
+      setIsGeneratingDashboardReport(false);
+      if (!pdfData) {
         if (!confirm('Falha ao gerar o relatório PDF. Deseja continuar com a limpeza mesmo assim? (Os dados serão perdidos)')) return;
+      } else {
+        const periodLabel = rankingPeriod || null;
+        const reportPayload: DbPVDashboardReport = {
+          company_id: sessionInfo.companyId,
+          branch: sessionInfo.filial,
+          report_type: 'FINAL',
+          period_label: periodLabel,
+          user_email: userEmail || null,
+          file_name: pdfData.fileName,
+          pdf_base64: pdfData.base64
+        };
+        const saved = await insertPVDashboardReport(reportPayload);
+        if (saved) {
+          setLastDashboardReport(saved);
+        } else {
+          alert('Relatório gerado, mas não foi possível salvar no banco.');
+        }
+        openPdfBlob(pdfData.blob, pdfData.fileName, 'preview');
       }
     }
 
@@ -1558,6 +1770,50 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     } finally {
       setIsClearingDashboard(false);
     }
+  };
+
+  const handleSimulateDashboard = async () => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) {
+      alert('Selecione a filial antes de simular o ranking.');
+      return;
+    }
+    if (isGeneratingDashboardReport) return;
+
+    if (historyRecords.length === 0) {
+      if (lastDashboardReport?.pdf_base64) {
+        const blob = base64ToBlob(lastDashboardReport.pdf_base64);
+        openPdfBlob(blob, lastDashboardReport.file_name || 'ranking_mensal.pdf', 'preview');
+        return;
+      }
+      alert('Não há dados para simular o ranking mensal.');
+      return;
+    }
+
+    setIsGeneratingDashboardReport(true);
+    const rankingPeriod = resolveRankingPeriodLabel();
+    const pdfData = await buildClosingReportPDF(historyRecords, dashboardMetrics, 'preview', rankingPeriod);
+    setIsGeneratingDashboardReport(false);
+    if (!pdfData) {
+      alert('Não foi possível gerar o PDF de simulação.');
+      return;
+    }
+
+    const periodLabel = rankingPeriod || null;
+    const reportPayload: DbPVDashboardReport = {
+      company_id: sessionInfo.companyId,
+      branch: sessionInfo.filial,
+      report_type: 'PREVIEW',
+      period_label: periodLabel,
+      user_email: userEmail || null,
+      file_name: pdfData.fileName,
+      pdf_base64: pdfData.base64
+    };
+    const saved = await insertPVDashboardReport(reportPayload);
+    if (saved) {
+      setLastDashboardReport(saved);
+    }
+
+    openPdfBlob(pdfData.blob, pdfData.fileName, 'preview');
   };
 
   const persistPVSession = useCallback(async () => {
@@ -1618,8 +1874,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       if (persistTimeoutRef.current) {
         clearTimeout(persistTimeoutRef.current);
       }
+      if (pdfPreview?.url) {
+        URL.revokeObjectURL(pdfPreview.url);
+      }
     };
-  }, []);
+  }, [pdfPreview]);
 
   const dashboardMetrics = useMemo(() => {
     const sellerStats: Record<string, { positive: number, neutral: number, negative: number, positiveCost: number, negativeCost: number }> = {};
@@ -1638,7 +1897,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         const neutralQty = Number(rec.qty_neutral || 0);
 
         sellerStats[seller].positive += soldQty > 0 ? soldQty : 0;
-        sellerStats[seller].neutral += neutralQty;
+        if (neutralQty > 0) {
+          sellerStats[seller].neutral += neutralQty;
+        }
         sellerStats[seller].negative += ignoredQty > 0 ? ignoredQty : 0;
 
         const unitCost = getInventoryCostUnitByReduced(rec.reduced_code);
@@ -1702,7 +1963,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       const ignoredCost = data.qtyIgnoredPV > 0 ? data.qtyIgnoredPV * unitCost : 0;
 
       sellerStats[seller].positive += data.qtyPV > 0 ? data.qtyPV : 0;
-      sellerStats[seller].neutral += data.qtyNeutral;
+      if (data.qtyNeutral > 0) {
+        sellerStats[seller].neutral += data.qtyNeutral;
+      }
       sellerStats[seller].negative += data.qtyIgnoredPV > 0 ? data.qtyIgnoredPV : 0;
       sellerStats[seller].positiveCost += soldCost;
       sellerStats[seller].negativeCost += ignoredCost;
@@ -1776,6 +2039,15 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     }
   };
 
+  const canSimulateDashboard = historyRecords.length > 0 || !!lastDashboardReport;
+
+  const getRankBadgeClasses = (index: number) => {
+    if (index === 0) return 'bg-yellow-200 text-amber-700 shadow-sm';
+    if (index === 1) return 'bg-slate-200 text-slate-600 shadow-sm';
+    if (index === 2) return 'bg-orange-200 text-orange-700 shadow-sm';
+    return 'bg-white text-slate-300 border';
+  };
+
   return (
     <div className="flex h-full w-full overflow-hidden text-slate-900">
       <aside className={`w-64 bg-slate-900 text-white flex flex-col shrink-0 transition-all duration-300 ${currentView === AppView.SETUP ? '-ml-64' : ''}`}>
@@ -1789,7 +2061,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           </div>
         </div>
 
-        <nav className="flex-1 p-4 space-y-2 mt-4">
+        <nav className="p-4 space-y-2 mt-4">
           {NAV_ITEMS.map((item) => {
             const targetView = item.id as AppView;
             const disabled = !canSwitchToView(targetView);
@@ -1805,42 +2077,51 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
               </button>
             );
           })}
+          <div className="pt-2 space-y-2">
+            {isMaster ? (
+              <label className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-slate-800 text-slate-400 transition-colors group">
+                <Package size={20} className="group-hover:text-amber-400" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium leading-none text-amber-400">Estoque (Excel)</p>
+                  <p className="text-[10px] mt-1 text-slate-500 font-bold">
+                    {inventoryReport?.uploaded_at ? `Último: ${formatUploadTimestamp(inventoryReport.uploaded_at)}` : 'Sem estoque carregado'}
+                  </p>
+                </div>
+                <input type="file" className="hidden" accept=".xlsx,.xls" onChange={handleInventoryUpload} />
+              </label>
+            ) : (
+              <div
+                className="flex items-center gap-3 p-3 rounded-xl text-slate-500/80 opacity-70 cursor-not-allowed"
+                title="Apenas usuário master pode carregar estoque."
+              >
+                <Package size={20} />
+                <div className="flex-1">
+                  <p className="text-sm font-medium leading-none text-slate-400">Estoque (Excel)</p>
+                  <p className="text-[10px] mt-1 text-slate-500 font-bold">
+                    {inventoryReport?.uploaded_at ? `Último: ${formatUploadTimestamp(inventoryReport.uploaded_at)}` : 'Sem estoque carregado'}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <label className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-slate-800 text-slate-400 transition-colors group">
+              <TrendingUp size={20} className="group-hover:text-green-400" />
+              <div className="flex-1">
+                <p className="text-sm font-medium leading-none text-blue-400">Vendas (Excel/CSV)</p>
+                <p className="text-[10px] mt-1 text-slate-500 font-bold">{salesRecords.length} registros</p>
+              </div>
+              <input type="file" className="hidden" accept=".xlsx,.xls,.csv,.txt" onChange={handleSalesUpload} />
+            </label>
+
+            <button
+              onClick={() => setShowHistoryModal(true)}
+              className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-800 text-slate-400 transition-colors text-left"
+            >
+              <Clock size={20} />
+              <span className="text-sm font-medium">Histórico de Uploads</span>
+            </button>
+          </div>
         </nav>
-
-        <div className="p-4 border-t border-slate-800 space-y-3">
-          <button onClick={handleReconfigure} className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-800 text-slate-400 transition-colors">
-            <Settings size={20} />
-            <span className="text-sm font-medium">Reconfigurar</span>
-          </button>
-
-          <label className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-slate-800 text-slate-400 transition-colors group">
-            <Package size={20} className="group-hover:text-amber-400" />
-            <div className="flex-1">
-              <p className="text-sm font-medium leading-none text-amber-400">Estoque (Excel)</p>
-              <p className="text-[10px] mt-1 text-slate-500 font-bold">
-                {inventoryReport?.uploaded_at ? `Último: ${formatUploadTimestamp(inventoryReport.uploaded_at)}` : 'Sem estoque carregado'}
-              </p>
-            </div>
-            <input type="file" className="hidden" accept=".xlsx,.xls" onChange={handleInventoryUpload} />
-          </label>
-
-          <label className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-slate-800 text-slate-400 transition-colors group">
-            <TrendingUp size={20} className="group-hover:text-green-400" />
-            <div className="flex-1">
-              <p className="text-sm font-medium leading-none text-blue-400">Vendas (Excel/CSV)</p>
-              <p className="text-[10px] mt-1 text-slate-500 font-bold">{salesRecords.length} registros</p>
-            </div>
-            <input type="file" className="hidden" accept=".xlsx,.xls,.csv,.txt" onChange={handleSalesUpload} />
-          </label>
-
-          <button
-            onClick={() => setShowHistoryModal(true)}
-            className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-800 text-slate-400 transition-colors text-left"
-          >
-            <Clock size={20} />
-            <span className="text-sm font-medium">Histórico de Uploads</span>
-          </button>
-        </div>
       </aside>
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
@@ -1864,7 +2145,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                 <p className="text-sm font-bold text-slate-800">{sessionInfo.pharmacist}</p>
                 <p className="text-xs text-slate-500">Filial: {sessionInfo.filial}</p>
               </div>
-              <button onClick={handleReconfigure} className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors" title="Sair e Limpar Sessão">
+              <button onClick={logout} className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors" title="Encerrar sessão">
                 <LogOut size={18} />
               </button>
             </div>
@@ -2153,7 +2434,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                           onClick={() => setHistoryDetail({ type: 'seller', seller: s.name })}
                           className="flex items-center gap-4 p-5 bg-slate-50 rounded-2xl border border-slate-100 hover:shadow-md transition-all text-left active:scale-[0.99]"
                         >
-                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black ${i === 0 ? 'bg-amber-100 text-amber-600 shadow-sm' : 'bg-white text-slate-300 border'}`}>
+                          <div className={`w-10 h-10 rounded-xl flex items-center justify-center font-black ${getRankBadgeClasses(i)}`}>
                             {i + 1}º
                           </div>
                           <div className="flex-1 min-w-0">
@@ -2175,15 +2456,26 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                 </div>
               </div>
               {sessionInfo?.filial && (
-                <button
-                  onClick={handleClearDashboard}
-                  disabled={isClearingDashboard}
-                  className="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-2xl border border-rose-200 bg-white/90 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-rose-600 shadow-lg shadow-rose-200 transition hover:bg-rose-50 active:scale-95 disabled:cursor-wait disabled:opacity-60"
-                  title="Limpar os dados acumulados deste dashboard"
-                >
-                  <Trash2 size={16} />
-                  <span>Limpar dashboard</span>
-                </button>
+                <div className="fixed bottom-6 right-6 z-40 flex flex-col gap-2 sm:flex-row sm:items-center">
+                  <button
+                    onClick={handleSimulateDashboard}
+                    disabled={!canSimulateDashboard || isGeneratingDashboardReport}
+                    className="flex items-center gap-2 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-slate-600 shadow-lg transition hover:bg-slate-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
+                    title={canSimulateDashboard ? 'Simular o fechamento do ranking mensal' : 'Sem dados para simular'}
+                  >
+                    <Info size={16} />
+                    <span>Simular finalizar ranking mensal</span>
+                  </button>
+                  <button
+                    onClick={handleClearDashboard}
+                    disabled={!isMaster || isClearingDashboard}
+                    className="flex items-center gap-2 rounded-2xl border border-rose-200 bg-white/90 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-rose-600 shadow-lg shadow-rose-200 transition hover:bg-rose-50 active:scale-95 disabled:cursor-not-allowed disabled:opacity-60"
+                    title={isMaster ? 'Limpar os dados acumulados deste dashboard' : 'Somente usuário master pode usar'}
+                  >
+                    <Trash2 size={16} />
+                    <span>Limpar dashboard</span>
+                  </button>
+                </div>
               )}
             </>
           )}
@@ -2201,6 +2493,50 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             : {})
         }}
       />
+      {pdfPreview && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-5xl h-[85vh] flex flex-col shadow-xl">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
+              <div className="text-sm font-bold text-slate-800">Pré-visualização do PDF</div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => {
+                    const frame = document.getElementById('pdf-preview-frame') as HTMLIFrameElement | null;
+                    try {
+                      frame?.contentWindow?.focus();
+                      frame?.contentWindow?.print();
+                    } catch {
+                      window.print();
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-[11px] font-bold uppercase tracking-widest hover:bg-blue-700"
+                >
+                  Imprimir PDF
+                </button>
+                <a
+                  href={pdfPreview.url}
+                  download={pdfPreview.fileName}
+                  className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-[11px] font-bold uppercase tracking-widest hover:bg-slate-200"
+                >
+                  Baixar PDF
+                </a>
+                <button
+                  onClick={closePdfPreview}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 text-[11px] font-bold uppercase tracking-widest hover:bg-slate-50"
+                >
+                  Fechar
+                </button>
+              </div>
+            </div>
+            <iframe
+              id="pdf-preview-frame"
+              src={pdfPreview.url}
+              className="flex-1 w-full rounded-b-2xl"
+              title="Pré-visualização PDF"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 };
