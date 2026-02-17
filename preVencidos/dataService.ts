@@ -469,6 +469,7 @@ export const parseInventoryXLSX = async (file: File): Promise<InventoryCostRecor
         };
 
         // Colunas fixas conforme padrão da filial
+        let reducedColIndex = 0; // Coluna A (código reduzido)
         let barcodeColIndex = 1; // Coluna B
         let costColIndex = 9; // Coluna J
         let stockColIndex = 13; // Coluna N
@@ -495,6 +496,7 @@ export const parseInventoryXLSX = async (file: File): Promise<InventoryCostRecor
             continue;
           }
 
+          const reducedCode = normalizeCode(row[reducedColIndex]);
           let barcode = parseBarcode(row[barcodeColIndex]);
           if (!barcode || barcode.length < 8) {
             const candidates = [0, 2]
@@ -505,7 +507,9 @@ export const parseInventoryXLSX = async (file: File): Promise<InventoryCostRecor
               barcode = candidates[0];
             }
           }
-          if (!barcode || barcode.length < 8) continue;
+          if (!barcode || barcode.length < 8) {
+            if (!reducedCode) continue;
+          }
 
           const cost = parseLocaleNumber(row[costColIndex]);
           const stock = stockColIndex >= 0 ? parseLocaleNumber(row[stockColIndex]) : undefined;
@@ -515,7 +519,8 @@ export const parseInventoryXLSX = async (file: File): Promise<InventoryCostRecor
             barcode,
             cost,
             stock,
-            productName
+            productName,
+            reducedCode
           });
         }
 

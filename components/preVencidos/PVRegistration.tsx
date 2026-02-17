@@ -249,6 +249,9 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
 
   const getInventoryCostUnitByReduced = (reducedCode?: string) => {
     if (!reducedCode) return 0;
+    const reducedKey = `red:${String(reducedCode).replace(/\D/g, '') || reducedCode}`;
+    const reducedCost = inventoryCostByBarcode[reducedKey];
+    if (reducedCost !== undefined) return Number(reducedCost || 0);
     const barcode = barcodeByReduced[reducedCode] || '';
     if (!barcode) return 0;
     const normalized = String(barcode || '').replace(/\D/g, '');

@@ -43,6 +43,7 @@ export interface InventoryCostRecord {
   cost: number;
   stock?: number;
   productName?: string;
+  reducedCode?: string;
 }
 
 export interface SalesUploadRecord {

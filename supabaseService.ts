@@ -5,6 +5,9 @@ import { AnalysisReportPayload } from './preVencidos/analysisReport';
 
 // ==================== TYPES ====================
 
+const pvSalesHistoryExcludedColumns = new Set<string>();
+const pvReportsExcludedColumns = new Set<string>(['updated_at']);
+
 export interface DbUser {
   id?: string;
   email: string;
@@ -237,8 +240,7 @@ export async function fetchChecklistDefinitions(): Promise<DbChecklistDefinition
   try {
     const { data, error } = await supabase
       .from('checklist_definitions')
-      .select('*')
-      .order('created_at', { ascending: true });
+      .select('*');
 
     if (error) throw error;
     return data || [];
@@ -284,8 +286,7 @@ export async function fetchUsers(): Promise<DbUser[]> {
   try {
     const { data, error } = await supabase
       .from('users')
-      .select('*')
-      .order('created_at', { ascending: false });
+      .select('*');
 
     if (error) throw error;
     return data || [];
@@ -541,7 +542,6 @@ export async function fetchReportsSummary(page: number = 0, pageSize: number = 2
     const { data, error } = await supabase
       .from('reports')
       .select('id, user_email, user_name, pharmacy_name, score, created_at, form_data')
-      .order('created_at', { ascending: false })
       .range(from, to);
 
     if (error) throw error;
@@ -576,7 +576,6 @@ export async function fetchReports(page: number = 0, pageSize: number = 100): Pr
     const { data, error } = await supabase
       .from('reports')
       .select('*')
-      .order('created_at', { ascending: false })
       .range(from, to);
 
     if (error) throw error;
@@ -621,7 +620,6 @@ export async function fetchStockConferenceReportsSummary(page: number = 0, pageS
     const { data, error } = await supabase
       .from('stock_conference_reports')
       .select('id, user_email, user_name, branch, area, created_at, pharmacist, manager, summary')
-      .order('created_at', { ascending: false })
       .range(from, to);
 
     if (error) throw error;
@@ -656,7 +654,6 @@ export async function fetchStockConferenceReports(page: number = 0, pageSize: nu
     const { data, error } = await supabase
       .from('stock_conference_reports')
       .select('*')
-      .order('created_at', { ascending: false })
       .range(from, to);
 
     if (error) throw error;
@@ -966,18 +963,21 @@ export async function fetchAuditsHistory(branch: string): Promise<DbAuditSession
 
 export async function fetchActiveSalesReport(companyId: string, branch: string): Promise<DbActiveSalesReport | null> {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('pv_active_sales_reports')
       .select('*')
-      .eq('company_id', companyId)
       .eq('branch', branch)
-      .single();
+      .limit(1);
 
-    if (error) {
-      if (error.code === 'PGRST116') return null; // Not found
-      throw error;
+    if (companyId) {
+      query = query.or(`company_id.eq.${companyId},company_id.is.null`);
     }
-    return data;
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+    if (data && data.length > 0) return data[0];
+    return null;
   } catch (error) {
     console.error('Error fetching active sales report:', error);
     return null;
@@ -1062,8 +1062,7 @@ export async function fetchPVBranchRecords(companyId: string, branch: string): P
     let query = supabase
       .from('pv_branch_records')
       .select('*')
-      .eq('branch', branch)
-      .order('created_at', { ascending: false });
+      .eq('branch', branch);
 
     if (companyId) {
       query = query.eq('company_id', companyId);
@@ -1139,33 +1138,74 @@ export async function updatePVBranchRecord(id: string, quantity: number): Promis
 
 export async function insertPVSalesHistory(records: DbPVSalesHistory[]): Promise<boolean> {
   if (!records.length) return true;
-  try {
-    const { error } = await supabase
-      .from('pv_sales_history')
-      .insert(records);
+  let payload: Record<string, any>[] = records.map(record => {
+    const base = { ...record };
+    pvSalesHistoryExcludedColumns.forEach(column => {
+      if (column in base) delete base[column];
+    });
+    return base;
+  });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const { error } = await supabase
+        .from('pv_sales_history')
+        .insert(payload);
 
-    if (error) throw error;
-    return true;
-  } catch (error) {
-    console.error('Error inserting PV sales history:', JSON.stringify(error, null, 2));
-    return false;
+      if (error) throw error;
+      return true;
+    } catch (error: any) {
+      const message = typeof error?.message === 'string' ? error.message : '';
+      const code = error?.code;
+      const match = /'([^']+)' column/i.exec(message);
+      if (code === 'PGRST204' && match?.[1]) {
+        const missingColumn = match[1];
+        if (pvSalesHistoryExcludedColumns.has(missingColumn)) break;
+        pvSalesHistoryExcludedColumns.add(missingColumn);
+        payload = payload.map(item => {
+          const { [missingColumn]: _omit, ...rest } = item;
+          return rest;
+        });
+        continue;
+      }
+      console.error('Error inserting PV sales history:', JSON.stringify(error, null, 2));
+      return false;
+    }
   }
+  console.error('Error inserting PV sales history: coluna(s) ausente(s) e fallback falhou.');
+  return false;
 }
 
 export async function fetchPVSalesHistory(companyId: string, branch: string): Promise<DbPVSalesHistory[]> {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('pv_sales_history')
       .select('*')
-      .eq('company_id', companyId)
       .eq('branch', branch)
       .order('finalized_at', { ascending: false });
+
+    if (companyId) {
+      query = query.or(`company_id.eq.${companyId},company_id.is.null`);
+    }
+
+    const { data, error } = await query;
 
     if (error) throw error;
     return data || [];
   } catch (error) {
     console.error('Error fetching PV sales history:', error);
-    return [];
+    try {
+      const { data, error: retryError } = await supabase
+        .from('pv_sales_history')
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('branch', branch);
+
+      if (retryError) throw retryError;
+      return data || [];
+    } catch (retryError) {
+      console.error('Error fetching PV sales history (fallback):', retryError);
+      return [];
+    }
   }
 }
 
@@ -1200,12 +1240,17 @@ export async function updatePVBranchRecordDetails(
 
 export async function fetchPVSalesUploads(companyId: string, branch: string): Promise<DbPVSalesUpload[]> {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('pv_sales_uploads')
       .select('*')
-      .eq('company_id', companyId)
       .eq('branch', branch)
       .order('uploaded_at', { ascending: false });
+
+    if (companyId) {
+      query = query.or(`company_id.eq.${companyId},company_id.is.null`);
+    }
+
+    const { data, error } = await query;
 
     if (error) throw error;
     return data || [];
@@ -1244,12 +1289,17 @@ export async function insertPVSalesUpload(upload: DbPVSalesUpload): Promise<DbPV
 
 export async function fetchPVSalesAnalysisReports(companyId: string, branch: string): Promise<DbPVSalesAnalysisReport[]> {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('pv_sales_analysis_reports')
       .select('*')
-      .eq('company_id', companyId)
       .eq('branch', branch)
       .order('uploaded_at', { ascending: false });
+
+    if (companyId) {
+      query = query.or(`company_id.eq.${companyId},company_id.is.null`);
+    }
+
+    const { data, error } = await query;
 
     if (error) throw error;
     return data || [];
@@ -1360,14 +1410,25 @@ export async function fetchPVDashboardReports(companyId: string, branch: string,
       .select('*')
       .eq('company_id', companyId)
       .eq('branch', branch)
-      .order('created_at', { ascending: false })
       .limit(limit);
 
-    if (error) throw error;
-    return data || [];
+    if (!error) return data || [];
   } catch (error) {
     console.error('Error fetching PV dashboard reports:', error);
-    return [];
+    try {
+      const { data, error: retryError } = await supabase
+        .from('pv_dashboard_reports')
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('branch', branch)
+        .limit(limit);
+
+      if (retryError) throw retryError;
+      return data || [];
+    } catch (retryError) {
+      console.error('Error fetching PV dashboard reports (fallback):', retryError);
+      return [];
+    }
   }
 }
 
@@ -1398,18 +1459,22 @@ export async function insertPVDashboardReport(report: DbPVDashboardReport): Prom
 
 export async function fetchPVInventoryReport(companyId: string, branch: string): Promise<DbPVInventoryReport | null> {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('pv_inventory_reports')
       .select('*')
-      .eq('company_id', companyId)
       .eq('branch', branch)
-      .single();
+      .order('uploaded_at', { ascending: false })
+      .limit(1);
 
-    if (error) {
-      if (error.code === 'PGRST116') return null;
-      throw error;
+    if (companyId) {
+      query = query.or(`company_id.eq.${companyId},company_id.is.null`);
     }
-    return data;
+
+    const { data, error } = await query;
+
+    if (error) throw error;
+    if (data && data.length > 0) return data[0];
+    return null;
   } catch (error) {
     console.error('Error fetching PV inventory report:', error);
     return null;
@@ -1452,7 +1517,7 @@ export async function fetchPVReports(userEmail: string, reportType?: 'system' | 
       query = query.eq('report_type', reportType);
     }
 
-    const { data, error } = await query.order('updated_at', { ascending: false });
+    const { data, error } = await query;
 
     if (error) throw error;
     return data || [];
@@ -1463,28 +1528,70 @@ export async function fetchPVReports(userEmail: string, reportType?: 'system' | 
 }
 
 export async function upsertPVReport(report: DbPVReport): Promise<DbPVReport | null> {
-  try {
-    const payload = {
-      user_email: report.user_email,
-      company_id: report.company_id,
-      branch: report.branch,
-      report_type: report.report_type,
-      products: report.products,
-      updated_at: new Date().toISOString()
-    };
+  let payload: Record<string, any> = {
+    user_email: report.user_email,
+    company_id: report.company_id,
+    branch: report.branch,
+    report_type: report.report_type,
+    products: report.products,
+    updated_at: new Date().toISOString()
+  };
 
-    const { data, error } = await supabase
-      .from('pv_reports')
-      .upsert([payload], { onConflict: 'user_email, report_type' })
-      .select()
-      .single();
+  pvReportsExcludedColumns.forEach(column => {
+    if (column in payload) delete payload[column];
+  });
 
-    if (error) throw error;
-    return data;
-  } catch (error) {
-    console.error('Error upserting PV report:', error);
-    return null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const { data: existing, error: existingError } = await supabase
+        .from('pv_reports')
+        .select('id')
+        .eq('user_email', report.user_email)
+        .eq('report_type', report.report_type)
+        .limit(1);
+
+      if (existingError) throw existingError;
+
+      if (existing && existing.length > 0) {
+        const { data, error } = await supabase
+          .from('pv_reports')
+          .update(payload)
+          .eq('user_email', report.user_email)
+          .eq('report_type', report.report_type)
+          .select()
+          .single();
+
+        if (error) throw error;
+        return data;
+      }
+
+      const { data, error } = await supabase
+        .from('pv_reports')
+        .insert([payload])
+        .select()
+        .single();
+
+      if (error) throw error;
+      return data;
+    } catch (error: any) {
+      const message = typeof error?.message === 'string' ? error.message : '';
+      const code = error?.code;
+      const match = /'([^']+)' column/i.exec(message);
+      if (code === 'PGRST204' && match?.[1]) {
+        const missingColumn = match[1];
+        if (pvReportsExcludedColumns.has(missingColumn)) break;
+        pvReportsExcludedColumns.add(missingColumn);
+        const { [missingColumn]: _omit, ...rest } = payload;
+        payload = rest;
+        continue;
+      }
+      console.error('Error upserting PV report:', error);
+      return null;
+    }
   }
+
+  console.error('Error upserting PV report: coluna(s) ausente(s) e fallback falhou.');
+  return null;
 }
 
 export async function deletePVReports(userEmail: string, reportType?: 'system' | 'dcb'): Promise<boolean> {
@@ -1685,8 +1792,7 @@ export async function fetchTickets(): Promise<DbTicket[]> {
   try {
     const { data, error } = await supabase
       .from('tickets')
-      .select('*')
-      .order('created_at', { ascending: false });
+      .select('*');
 
     if (error) throw error;
     return data || [];

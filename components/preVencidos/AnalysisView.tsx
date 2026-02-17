@@ -61,10 +61,16 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
   };
 
   const results = useMemo(() => {
-    const periodFinalizedList = finalizedREDSByPeriod[currentSalesPeriod] || [];
+    const normalizedPeriod = (currentSalesPeriod || '').trim();
+    const periodFinalizedList = finalizedREDSByPeriod[normalizedPeriod]
+      || finalizedREDSByPeriod[currentSalesPeriod]
+      || [];
 
     const getInventoryCostUnit = (reducedCode?: string): number | null => {
       if (!reducedCode) return 0;
+      const reducedKey = `red:${String(reducedCode).replace(/\D/g, '') || reducedCode}`;
+      const reducedCost = inventoryCostByBarcode[reducedKey];
+      if (reducedCost !== undefined) return Number(reducedCost || 0);
       const raw = barcodeByReduced[reducedCode] || '';
       const normalized = String(raw || '').replace(/\D/g, '');
       if (!normalized) return null;
@@ -80,6 +86,9 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     };
     const getInventoryStock = (reducedCode?: string) => {
       if (!reducedCode) return null;
+      const reducedKey = `red:${String(reducedCode).replace(/\D/g, '') || reducedCode}`;
+      const reducedStock = inventoryStockByBarcode[reducedKey];
+      if (reducedStock !== undefined) return Number(reducedStock || 0);
       const raw = barcodeByReduced[reducedCode] || '';
       const normalized = String(raw || '').replace(/\D/g, '');
       if (!normalized) return null;
@@ -89,7 +98,28 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
       return Number(value || 0);
     };
 
-    const enriched = pvRecords.map(pv => {
+    const existingCodes = new Set(pvRecords.map(pv => pv.reducedCode));
+    const missingFinalized = periodFinalizedList.filter(code => !existingCodes.has(code));
+    const placeholderRecords: PVRecord[] = missingFinalized.map(code => {
+      const saleMatch = salesRecords.find(s => s.reducedCode === code);
+      return {
+        id: `finalized-${normalizedPeriod || currentSalesPeriod}-${code}`,
+        reducedCode: code,
+        name: saleMatch?.productName || `Produto ${code}`,
+        quantity: 0,
+        originBranch: '',
+        sectorResponsible: '',
+        expiryDate: '',
+        entryDate: new Date().toISOString(),
+        dcb: saleMatch?.dcb || 'N/A',
+        barcode: undefined,
+        lab: labByReduced?.[code] || saleMatch?.lab
+      };
+    });
+
+    const baseRecords = [...pvRecords, ...placeholderRecords];
+
+    const enriched = baseRecords.map(pv => {
       const isFinalized = periodFinalizedList.includes(pv.reducedCode);
       const directSales = salesRecords.filter(s => s.reducedCode === pv.reducedCode);
       const directSoldQty = directSales.reduce((acc, s) => acc + s.quantity, 0);
@@ -108,7 +138,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         inventoryCostUnit: resolvedCostUnit,
         inventoryCostTotal: resolvedCostUnit * s.quantity,
         lab: s.lab || 'N/A',
-        id: `${currentSalesPeriod}-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
+        id: `${normalizedPeriod || currentSalesPeriod}-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
         };
       });
 
@@ -132,7 +162,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         inventoryCostUnit: resolvedCostUnit,
         inventoryCostTotal: resolvedCostUnit * s.quantity,
         lab: s.lab || 'N/A',
-        id: `${currentSalesPeriod}-sim-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
+        id: `${normalizedPeriod || currentSalesPeriod}-sim-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
         };
       });
 
@@ -179,11 +209,12 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
   }, [pvRecords, salesRecords, finalizedREDSByPeriod, currentSalesPeriod, barcodeByReduced, inventoryCostByBarcode, inventoryStockByBarcode]);
 
   const reportPayload = useMemo(() => {
-    const finalizedCodes = finalizedREDSByPeriod[currentSalesPeriod] || [];
+    const normalizedPeriod = (currentSalesPeriod || '').trim();
+    const finalizedCodes = finalizedREDSByPeriod[normalizedPeriod] || finalizedREDSByPeriod[currentSalesPeriod] || [];
     return buildAnalysisReportPayload({
       pvRecords,
       salesRecords,
-      periodLabel: currentSalesPeriod || 'Período não identificado',
+      periodLabel: normalizedPeriod || 'Período não identificado',
       finalizedCodes,
       meta: {
         company: sessionInfo?.company,

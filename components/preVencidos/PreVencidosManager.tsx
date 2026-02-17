@@ -173,6 +173,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [localLastUpload, setLocalLastUpload] = useState<SalesUploadRecord | null>(null);
   const [lastDashboardReport, setLastDashboardReport] = useState<DbPVDashboardReport | null>(null);
   const [isGeneratingDashboardReport, setIsGeneratingDashboardReport] = useState(false);
+  const [isRefreshingDashboard, setIsRefreshingDashboard] = useState(false);
   const [pdfPreview, setPdfPreview] = useState<{ url: string; fileName: string } | null>(null);
   const [historyDetail, setHistoryDetail] = useState<{ type: 'seller' | 'recovered' | 'ignored'; seller?: string } | null>(null);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -202,7 +203,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     });
   };
 
-  const buildInventoryMaps = useCallback((records: { barcode: string; cost: number; stock?: number }[]) => {
+  const buildInventoryMaps = useCallback((records: { barcode: string; cost: number; stock?: number; reducedCode?: string }[]) => {
     const costMap: Record<string, number> = {};
     const stockMap: Record<string, number> = {};
     records.forEach(rec => {
@@ -210,13 +211,22 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       const normalized = normalizeBarcode(rawBarcode);
       const noZeros = normalized.replace(/^0+/, '') || normalized;
       const barcodeKeys = Array.from(new Set([normalized, noZeros].filter(Boolean)));
-      if (barcodeKeys.length === 0) return;
-      barcodeKeys.forEach(barcode => {
-        costMap[barcode] = Number(rec.cost || 0);
+      const reducedKey = rec.reducedCode ? `red:${String(rec.reducedCode).replace(/\D/g, '') || rec.reducedCode}` : '';
+      if (barcodeKeys.length === 0 && !reducedKey) return;
+      if (barcodeKeys.length > 0) {
+        barcodeKeys.forEach(barcode => {
+          costMap[barcode] = Number(rec.cost || 0);
+          if (typeof rec.stock === 'number') {
+            stockMap[barcode] = rec.stock;
+          }
+        });
+      }
+      if (reducedKey) {
+        costMap[reducedKey] = Number(rec.cost || 0);
         if (typeof rec.stock === 'number') {
-          stockMap[barcode] = rec.stock;
+          stockMap[reducedKey] = rec.stock;
         }
-      });
+      }
     });
     setInventoryCostByBarcode(costMap);
     setInventoryStockByBarcode(stockMap);
@@ -273,14 +283,6 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const saved = loadLastSalesUpload(userEmail);
     setLocalLastUpload(saved);
   }, [userEmail]);
-
-  useEffect(() => {
-    if (sessionInfo?.companyId && sessionInfo?.filial) {
-      fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial)
-        .then(uploads => setSalesUploads(uploads))
-        .catch(err => console.error('Erro carregando histórico de uploads de vendas:', err));
-    }
-  }, [sessionInfo?.companyId, sessionInfo?.filial]);
 
   const canSwitchToView = (view: AppView) => view === AppView.SETUP || hasCompletedSetup;
 
@@ -609,36 +611,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   // Load persistent branch records and history when company/branch is selected
   useEffect(() => {
     if (sessionInfo?.companyId && sessionInfo?.filial) {
-      // 1. Fetch Active Stock
-      fetchPVBranchRecords(sessionInfo.companyId, sessionInfo.filial)
-        .then(dbRecords => {
-          if (dbRecords && dbRecords.length > 0) {
-            setPvRecords(prev => {
-              const existingIds = new Set(prev.map(r => r.id));
-              const newRecords = dbRecords
-                .filter(rec => !existingIds.has(rec.id || ''))
-                .map(rec => ({
-                  id: String(rec.id || `db-${rec.reduced_code}-${Date.now()}`),
-                  reducedCode: rec.reduced_code,
-                  name: rec.product_name,
-                  quantity: rec.quantity,
-                  originBranch: rec.origin_branch || '',
-                  sectorResponsible: rec.sector_responsible || '',
-                  expiryDate: rec.expiry_date,
-                  entryDate: rec.entry_date,
-                  dcb: rec.dcb,
-                  userEmail: rec.user_email,
-                  userName: '' // Add logic to get name if possible or just use email
-                }));
-              return [...prev, ...newRecords];
-            });
-          } else {
-            console.log('🔍 [PV DEBUG] fetchPVBranchRecords retornou 0 registros para', sessionInfo.companyId, sessionInfo.filial);
-          }
-        })
-        .catch(err => console.error('❌ [PV DEBUG] Erro carregando registros da filial:', err));
-
-      // 2. Fetch Sales History (Dashboard Persistence)
+      // 1. Fetch Sales History (Dashboard Persistence)
       console.log('🔍 [PV DEBUG] Buscando histórico de vendas...');
       fetchPVSalesHistory(sessionInfo.companyId, sessionInfo.filial)
         .then(history => {
@@ -646,7 +619,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         })
         .catch(err => console.error('Erro carregando histórico de vendas:', err));
 
-      // 3. Fetch Active Sales Report (Persistence)
+      // 2. Fetch Active Sales Report (Persistence)
       fetchActiveSalesReport(sessionInfo.companyId, sessionInfo.filial)
         .then(report => {
           if (!report) return;
@@ -777,7 +750,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const historyFinalizedByPeriod = useMemo(() => {
     const map: Record<string, string[]> = {};
     historyRecords.forEach(rec => {
-      const period = rec.sale_period || '';
+      const period = (rec.sale_period || '').trim();
       const code = rec.reduced_code || '';
       if (!period || !code) return;
       if (!map[period]) map[period] = [];
@@ -872,6 +845,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
   const getInventoryCostUnitByReduced = (reducedCode?: string) => {
     if (!reducedCode) return 0;
+    const reducedKey = `red:${String(reducedCode).replace(/\D/g, '') || reducedCode}`;
+    const reducedCost = inventoryCostByBarcode[reducedKey];
+    if (reducedCost !== undefined) return Number(reducedCost || 0);
     const barcode = barcodeByReduced[reducedCode] || '';
     if (!barcode) return 0;
     const normalized = barcode.replace(/\D/g, '');
@@ -1119,7 +1095,22 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     }
   };
 
+  const refreshDashboardHistory = useCallback(async () => {
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
+    setIsRefreshingDashboard(true);
+    try {
+      const history = await fetchPVSalesHistory(sessionInfo.companyId, sessionInfo.filial);
+      if (history) setHistoryRecords(history);
+    } catch (error) {
+      console.error('Erro ao atualizar dashboard:', error);
+      alert('Erro ao atualizar dashboard.');
+    } finally {
+      setIsRefreshingDashboard(false);
+    }
+  }, [sessionInfo?.companyId, sessionInfo?.filial]);
+
   const handleFinalizeSale = async (reducedCode: string, period: string) => {
+    const normalizedPeriod = (period || salesPeriod || '').trim() || 'Período não identificado';
     let totalPVUnitsToDeduct = 0;
 
     // Prepare records for history
@@ -1155,7 +1146,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             company_id: sessionInfo.companyId,
             branch: sessionInfo.filial,
             user_email: userEmail || '',
-            sale_period: period,
+            sale_period: normalizedPeriod,
             seller_name: seller,
             reduced_code: reducedCode,
             product_name: product?.name || 'Produto Finalizado',
@@ -1201,6 +1192,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       const success = await insertPVSalesHistory(historyEntries);
       if (success) {
         setHistoryRecords(prev => [...prev, ...historyEntries]);
+        refreshDashboardHistory();
 
         // Ensure active report is refreshed with any state changes if needed? 
         // Actually, finalized state is stored in finalizedREDSByPeriod? 
@@ -1211,10 +1203,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       }
     }
 
-    const currentPeriodFinalized = finalizedREDSByPeriod[period] || [];
+    const currentPeriodFinalized = finalizedREDSByPeriod[normalizedPeriod] || [];
     const nextFinalized = {
       ...finalizedREDSByPeriod,
-      [period]: [...new Set([...currentPeriodFinalized, reducedCode])]
+      [normalizedPeriod]: [...new Set([...currentPeriodFinalized, reducedCode])]
     };
 
     setFinalizedREDSByPeriod(nextFinalized);
@@ -1225,13 +1217,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         company_id: sessionInfo.companyId,
         branch: sessionInfo.filial,
         sales_records: salesRecords,
-        sales_period: salesPeriod || period,
+        sales_period: normalizedPeriod,
         confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedForPersist),
         user_email: userEmail
       }).catch(err => console.error('Erro ao persistir finalização:', err));
     }
-
-    const normalizedPeriod = (period || salesPeriod || '').trim() || 'Período não identificado';
     const existingReport = analysisReports[normalizedPeriod];
     const updatedFinalizedCodes = nextFinalized[normalizedPeriod] || [];
 
@@ -1937,6 +1927,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     schedulePersist();
   }, [masterProducts, systemProducts, dcbBaseProducts, pvRecords, confirmedPVSales, finalizedREDSByPeriod, salesPeriod, sessionInfo, userEmail, schedulePersist]);
 
+  const handleRefreshDashboard = () => {
+    refreshDashboardHistory();
+  };
+
   useEffect(() => {
     return () => {
       if (persistTimeoutRef.current) {
@@ -2394,6 +2388,16 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           {currentView === AppView.DASHBOARD && (
             <>
               <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-black text-slate-800 uppercase tracking-widest">Dashboard</h2>
+                  <button
+                    onClick={handleRefreshDashboard}
+                    disabled={isRefreshingDashboard}
+                    className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-600 text-[10px] font-bold uppercase tracking-widest hover:bg-slate-50 disabled:opacity-60 disabled:cursor-not-allowed"
+                  >
+                    {isRefreshingDashboard ? 'Atualizando...' : 'Atualizar dashboard'}
+                  </button>
+                </div>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <button
                       onClick={() => setHistoryDetail({ type: 'recovered' })}
