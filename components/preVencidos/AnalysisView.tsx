@@ -281,13 +281,13 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
   return (
     <div className="space-y-6 animate-in fade-in duration-500">
       <div className="bg-white rounded-3xl shadow-sm border border-slate-200 overflow-hidden flex flex-col">
-        <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
-          <div className="flex items-center gap-4">
+        <div className="p-6 border-b border-slate-100 bg-slate-50/50 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-4 min-w-0">
             <h3 className="font-bold text-slate-800 flex items-center gap-2 uppercase text-[10px] tracking-widest">
               <FileSearch size={18} className="text-blue-500" /> Análise de Vendas
             </h3>
             <div className="h-4 w-[1px] bg-slate-200"></div>
-            <div className="flex items-center gap-3 text-[9px] font-bold uppercase tracking-tighter">
+            <div className="flex flex-wrap items-center gap-3 text-[9px] font-bold uppercase tracking-tighter">
               <button
                 type="button"
                 onClick={() => handleFilterClick('pending')}
@@ -329,7 +329,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
               </button>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={handlePrint}
@@ -338,7 +338,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
             >
               <Printer size={18} /> Imprimir
             </button>
-            <div className="relative w-64">
+            <div className="relative w-full sm:w-64 min-w-[200px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
               <input
                 type="text" placeholder="Buscar item..."
@@ -356,7 +356,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
               key={res.id}
               className={`p-5 rounded-2xl border transition-all ${res.isFinalized ? 'border-green-100 bg-green-50/20' : 'border-slate-100 bg-white hover:shadow-sm'}`}
             >
-              <div className="flex flex-col lg:flex-row gap-6">
+              <div className="flex flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_280px] xl:grid-cols-[minmax(0,1fr)_280px_180px] gap-6">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     {res.isFinalized ? (
@@ -370,33 +370,37 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                     )}
                     <span className="text-[10px] font-mono text-slate-400 font-bold">RED: {res.reducedCode}</span>
                   </div>
-                  <h4 className="text-lg font-bold text-slate-900 uppercase flex flex-wrap items-center gap-2">
+                  <h4 className="text-lg font-bold text-slate-900 uppercase flex flex-wrap items-center gap-2 break-words">
                     {res.name}
                     <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">
                       • {res.pvLab || 'N/D'}
                     </span>
                   </h4>
                   <div className="flex flex-wrap items-center gap-3 mt-2">
-                    <div className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 flex items-center gap-1">
-                      <FlaskConical size={12} /> {res.dcb}
+                    <div className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 flex items-start gap-1 max-w-full min-w-0 leading-snug">
+                      <FlaskConical size={12} className="mt-0.5" />
+                      <span className="min-w-0 break-all"> {res.dcb}</span>
                     </div>
-                    <div className="text-[10px] font-bold text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-100 flex items-center gap-1">
-                      <Package size={12} /> LAB PV: {res.pvLab || 'N/A'}
+                    <div className="text-[10px] font-bold text-slate-600 bg-slate-50 px-2 py-1 rounded border border-slate-100 flex items-start gap-1 max-w-full min-w-0 leading-snug">
+                      <Package size={12} className="mt-0.5" />
+                      <span className="min-w-0 break-all">LAB PV: {res.pvLab || 'N/A'}</span>
                     </div>
                     {res.status === 'sold' && res.firstDirectLab && (
-                      <div className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 flex items-center gap-1">
-                        <Package size={12} /> LAB PV VENDIDO: {res.firstDirectLab}
+                      <div className="text-[10px] font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded border border-emerald-100 flex items-start gap-1 max-w-full min-w-0 leading-snug">
+                        <Package size={12} className="mt-0.5" />
+                        <span className="min-w-0 break-all">LAB PV VENDIDO: {res.firstDirectLab}</span>
                       </div>
                     )}
                     {res.status === 'replaced' && res.firstSimilarLab && (
-                      <div className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-100 flex items-center gap-1">
-                        <Package size={12} /> LAB SIMILAR: {res.firstSimilarLab}
+                      <div className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-1 rounded border border-amber-100 flex items-start gap-1 max-w-full min-w-0 leading-snug">
+                        <Package size={12} className="mt-0.5" />
+                        <span className="min-w-0 break-all">LAB SIMILAR: {res.firstSimilarLab}</span>
                       </div>
                     )}
                   </div>
                 </div>
 
-                <div className="w-full lg:w-[260px] xl:w-[280px] shrink-0">
+                <div className="w-full lg:w-[280px] xl:w-[300px] min-w-0">
                   <div className="grid grid-cols-[140px_1fr] gap-x-4 gap-y-1 text-[9px] font-bold uppercase tracking-widest text-slate-500">
                     <div>PV EM ESTOQUE</div>
                     <div className="text-slate-700">{res.quantity}</div>
@@ -423,7 +427,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                   </div>
                 </div>
 
-                <div className="flex gap-2 shrink-0 h-fit justify-end">
+                <div className="flex gap-2 shrink-0 h-fit justify-end lg:col-span-2 xl:col-span-1 xl:justify-start">
                   <button onClick={() => toggleExpand(res.id, 'sku')} className={`p-3 rounded-xl border text-center min-w-[85px] transition-all ${res.directSoldQty > 0 ? (expanded?.id === res.id && expanded?.type === 'sku' ? 'bg-blue-600 text-white shadow-lg' : 'bg-white border-blue-100 text-blue-600 hover:bg-blue-50') : 'opacity-20'}`}>
                     <p className="text-[8px] font-bold uppercase leading-none mb-1">Saída SKU</p>
                     <p className="text-xl font-black">{res.directSoldQty}</p>

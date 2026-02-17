@@ -50,6 +50,45 @@
       -moz-osx-font-smoothing: grayscale;
     }
 
+    /* Evitar sobreposição em zoom: permitir quebra e encolhimento */
+    #root,
+    .min-w-0 {
+      min-width: 0;
+    }
+
+    :where(.flex, .inline-flex, .grid, .inline-grid) {
+      min-width: 0;
+    }
+
+    :where(.flex, .inline-flex, .grid, .inline-grid)>* {
+      min-width: 0;
+    }
+
+    p,
+    span,
+    h1,
+    h2,
+    h3,
+    h4,
+    h5,
+    h6,
+    label,
+    small,
+    strong,
+    em,
+    a,
+    li {
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    img,
+    svg,
+    canvas {
+      max-width: 100%;
+      height: auto;
+    }
+
     /* Smooth scrolling */
     html {
       scroll-behavior: smooth;
