@@ -350,10 +350,10 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
             <button
               type="button"
               onClick={handlePrint}
-              className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 bg-white text-[10px] font-black uppercase tracking-widest text-slate-600 hover:border-blue-200 hover:text-blue-600 transition"
+              className="flex items-center gap-3 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-sm font-black uppercase tracking-widest shadow-lg shadow-blue-200 hover:shadow-blue-300 hover:from-blue-500 hover:to-indigo-500 active:scale-95 transition-all border border-blue-400/30"
               title="Imprimir análise de vendas"
             >
-              <Printer size={14} /> Imprimir
+              <Printer size={18} /> Imprimir
             </button>
             <div className="relative w-64">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
