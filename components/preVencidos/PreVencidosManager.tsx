@@ -767,6 +767,36 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     return map;
   }, [masterProducts, pvRecords]);
 
+  const formatCurrency = (value: number) => {
+    try {
+      return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value || 0);
+    } catch {
+      return `R$ ${Number(value || 0).toFixed(2)}`;
+    }
+  };
+
+  const getSalesUnitPrice = (seller: string, reducedCode: string, quantityHint?: number) => {
+    if (!seller || !reducedCode) return 0;
+    const candidates = salesRecords.filter(s => s.reducedCode === reducedCode && s.salesperson === seller);
+    if (!candidates.length) return 0;
+    if (quantityHint !== undefined) {
+      const match = candidates.find(c => c.quantity === quantityHint);
+      if (match?.unitPrice) return match.unitPrice;
+    }
+    const withUnit = candidates.find(c => c.unitPrice && c.unitPrice > 0);
+    return withUnit?.unitPrice || 0;
+  };
+
+  const getInventoryCostUnitByReduced = (reducedCode?: string) => {
+    if (!reducedCode) return 0;
+    const barcode = barcodeByReduced[reducedCode] || '';
+    if (!barcode) return 0;
+    const normalized = barcode.replace(/\D/g, '');
+    const noZeros = normalized.replace(/^0+/, '') || normalized;
+    const value = inventoryCostByBarcode[normalized] ?? inventoryCostByBarcode[noZeros];
+    return Number(value || 0);
+  };
+
   type PeriodRange = {
     start: Date | null;
     end: Date | null;
@@ -1007,6 +1037,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           // Improved Seller Extraction using metadata if available
           const seller = item.sellerName || parts[1];
           const product = pvRecords.find(r => r.reducedCode === reducedCode);
+          const quantityHint = Number(parts[parts.length - 2]);
+          const unitPrice = getSalesUnitPrice(seller, reducedCode, Number.isFinite(quantityHint) ? quantityHint : undefined);
+          const soldValue = unitPrice * item.qtyPV;
+          const ignoredValue = unitPrice * item.qtyIgnoredPV;
 
           historyEntries.push({
             company_id: sessionInfo.companyId,
@@ -1019,6 +1053,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             qty_sold_pv: item.qtyPV,
             qty_ignored: item.qtyIgnoredPV,
             qty_neutral: item.qtyNeutral,
+            unit_price: unitPrice,
+            value_sold_pv: soldValue,
+            value_ignored: ignoredValue,
             finalized_at: new Date().toISOString()
           });
         }
@@ -1585,22 +1622,36 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   }, []);
 
   const dashboardMetrics = useMemo(() => {
-    const sellerStats: Record<string, { positive: number, neutral: number, negative: number }> = {};
+    const sellerStats: Record<string, { positive: number, neutral: number, negative: number, positiveCost: number, negativeCost: number }> = {};
     let totalRecovered = 0;
     let totalIgnored = 0;
+    let totalRecoveredCost = 0;
+    let totalIgnoredCost = 0;
 
     // 1. Add metrics from Persistent History (DB)
     historyRecords.forEach(rec => {
       const seller = rec.seller_name || 'Desconhecido';
-      if (!sellerStats[seller]) sellerStats[seller] = { positive: 0, neutral: 0, negative: 0 };
+      if (!sellerStats[seller]) sellerStats[seller] = { positive: 0, neutral: 0, negative: 0, positiveCost: 0, negativeCost: 0 };
 
-      sellerStats[seller].positive += Number(rec.qty_sold_pv || 0);
-      sellerStats[seller].neutral += Number(rec.qty_neutral || 0);
-      sellerStats[seller].negative += Number(rec.qty_ignored || 0);
+        const soldQty = Number(rec.qty_sold_pv || 0);
+        const ignoredQty = Number(rec.qty_ignored || 0);
+        const neutralQty = Number(rec.qty_neutral || 0);
 
-      totalRecovered += Number(rec.qty_sold_pv || 0);
-      totalIgnored += Number(rec.qty_ignored || 0);
-    });
+        sellerStats[seller].positive += soldQty > 0 ? soldQty : 0;
+        sellerStats[seller].neutral += neutralQty;
+        sellerStats[seller].negative += ignoredQty > 0 ? ignoredQty : 0;
+
+        const unitCost = getInventoryCostUnitByReduced(rec.reduced_code);
+        const soldCost = soldQty > 0 ? soldQty * unitCost : 0;
+        const ignoredCost = ignoredQty > 0 ? ignoredQty * unitCost : 0;
+      sellerStats[seller].positiveCost += soldCost;
+      sellerStats[seller].negativeCost += ignoredCost;
+
+        totalRecovered += soldQty > 0 ? soldQty : 0;
+        totalIgnored += ignoredQty > 0 ? ignoredQty : 0;
+        totalRecoveredCost += soldCost;
+        totalIgnoredCost += ignoredCost;
+      });
 
     // 2. Add metrics from Current Session (InMemory), skipping those already finalized/saved
     Object.keys(confirmedPVSales).forEach(key => {
@@ -1637,14 +1688,28 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
       // Use stored seller name if available, fallback to key parsing
       const seller = data.sellerName || parts[1];
+      if (!sellerStats[seller]) sellerStats[seller] = { positive: 0, neutral: 0, negative: 0, positiveCost: 0, negativeCost: 0 };
 
-      if (!sellerStats[seller]) sellerStats[seller] = { positive: 0, neutral: 0, negative: 0 };
+      let reducedCode = data.reducedCode;
+      if (!reducedCode) {
+        const candidate = parts[parts.length - 3];
+        if (candidate && /^\d+$/.test(candidate)) {
+          reducedCode = candidate;
+        }
+      }
+      const unitCost = getInventoryCostUnitByReduced(reducedCode);
+      const soldCost = data.qtyPV > 0 ? data.qtyPV * unitCost : 0;
+      const ignoredCost = data.qtyIgnoredPV > 0 ? data.qtyIgnoredPV * unitCost : 0;
 
-      sellerStats[seller].positive += data.qtyPV;
+      sellerStats[seller].positive += data.qtyPV > 0 ? data.qtyPV : 0;
       sellerStats[seller].neutral += data.qtyNeutral;
-      sellerStats[seller].negative += data.qtyIgnoredPV;
-      totalRecovered += data.qtyPV;
-      totalIgnored += data.qtyIgnoredPV;
+      sellerStats[seller].negative += data.qtyIgnoredPV > 0 ? data.qtyIgnoredPV : 0;
+      sellerStats[seller].positiveCost += soldCost;
+      sellerStats[seller].negativeCost += ignoredCost;
+      totalRecovered += data.qtyPV > 0 ? data.qtyPV : 0;
+      totalIgnored += data.qtyIgnoredPV > 0 ? data.qtyIgnoredPV : 0;
+      totalRecoveredCost += soldCost;
+      totalIgnoredCost += ignoredCost;
     });
 
     const ranking = Object.entries(sellerStats)
@@ -1653,7 +1718,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         score: data.positive - data.negative,
         positive: data.positive,
         neutral: data.neutral,
-        negative: data.negative
+        negative: data.negative,
+        positiveCost: data.positiveCost,
+        negativeCost: data.negativeCost
       }))
       .sort((a, b) => b.score - a.score || b.positive - a.positive);
 
@@ -1673,8 +1740,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const totalPotentialSales = totalRecovered + totalIgnored;
     const efficiency = totalPotentialSales > 0 ? (totalRecovered / totalPotentialSales) * 100 : 0;
 
-    return { ranking, totalRecovered, totalIgnored, efficiency, pvInRegistry, sortedStockByMonth };
-  }, [pvRecords, confirmedPVSales, historyRecords, effectiveFinalizedByPeriod]);
+    return { ranking, totalRecovered, totalIgnored, totalRecoveredCost, totalIgnoredCost, efficiency, pvInRegistry, sortedStockByMonth };
+  }, [pvRecords, confirmedPVSales, historyRecords, effectiveFinalizedByPeriod, inventoryCostByBarcode, barcodeByReduced]);
 
   const historyDetailItems = useMemo(() => {
     if (!historyDetail) return [];
@@ -1910,22 +1977,28 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             <>
               <div className="max-w-6xl mx-auto space-y-8 animate-in fade-in duration-500">
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  <button
-                    onClick={() => setHistoryDetail({ type: 'recovered' })}
-                    className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95"
-                  >
-                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recuperado PV (Filial)</p>
-                    <p className="text-4xl font-black text-green-600 mt-2">{dashboardMetrics.totalRecovered}</p>
-                    <p className="text-[9px] font-bold text-green-500 mt-2 uppercase flex items-center gap-1"><CheckCircle size={10} /> Positivo</p>
-                  </button>
-                  <button
-                    onClick={() => setHistoryDetail({ type: 'ignored' })}
-                    className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95"
-                  >
-                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Ignorou PV (Filial)</p>
-                    <p className="text-4xl font-black text-red-500 mt-2">{dashboardMetrics.totalIgnored}</p>
-                    <p className="text-[9px] font-bold text-red-400 mt-2 uppercase flex items-center gap-1"><MinusCircle size={10} /> Negativo</p>
-                  </button>
+                    <button
+                      onClick={() => setHistoryDetail({ type: 'recovered' })}
+                      className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95"
+                    >
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recuperado PV (Filial)</p>
+                      <p className="text-4xl font-black text-green-600 mt-2">{dashboardMetrics.totalRecovered}</p>
+                      <p className="text-[9px] font-bold text-green-600 mt-2 uppercase tracking-widest">
+                        {formatCurrency(dashboardMetrics.totalRecoveredCost || 0)}
+                      </p>
+                      <p className="text-[9px] font-bold text-green-500 mt-2 uppercase flex items-center gap-1"><CheckCircle size={10} /> Positivo</p>
+                    </button>
+                    <button
+                      onClick={() => setHistoryDetail({ type: 'ignored' })}
+                      className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95"
+                    >
+                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Ignorou PV (Filial)</p>
+                      <p className="text-4xl font-black text-red-500 mt-2">{dashboardMetrics.totalIgnored}</p>
+                      <p className="text-[9px] font-bold text-red-500 mt-2 uppercase tracking-widest">
+                        {formatCurrency(dashboardMetrics.totalIgnoredCost || 0)}
+                      </p>
+                      <p className="text-[9px] font-bold text-red-400 mt-2 uppercase flex items-center gap-1"><MinusCircle size={10} /> Negativo</p>
+                    </button>
                   <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white">
                     <p className="text-[9px] font-black text-blue-400 uppercase tracking-widest">Eficiência Geral Acumulada</p>
                     <p className="text-4xl font-black mt-2">{dashboardMetrics.efficiency.toFixed(1)}%</p>
@@ -2012,37 +2085,45 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                           <div className="overflow-x-auto">
                             <table className="w-full text-xs">
                               <thead className="text-slate-400 uppercase tracking-widest">
-                                <tr className="text-left border-b border-slate-100">
-                                  {historyDetail.type !== 'seller' && <th className="py-2 pr-4">Vendedor</th>}
-                                  <th className="py-2 pr-4">Produto</th>
-                                  <th className="py-2 pr-4 text-center">Vendido</th>
-                                  <th className="py-2 pr-4 text-center">Ignorado</th>
-                                  <th className="py-2 pr-4">Quando</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-100">
-                                {historyDetailItems.map((rec, idx) => (
-                                  <tr key={`${rec.reduced_code}-${rec.seller_name}-${idx}`} className="text-slate-700">
-                                    {historyDetail.type !== 'seller' && (
+                                  <tr className="text-left border-b border-slate-100">
+                                    {historyDetail.type !== 'seller' && <th className="py-2 pr-4">Vendedor</th>}
+                                    <th className="py-2 pr-4">Produto</th>
+                                    <th className="py-2 pr-4 text-center">Vendido</th>
+                                    <th className="py-2 pr-4 text-center">Ignorado</th>
+                                    <th className="py-2 pr-4 text-center">Valor Unit.</th>
+                                    <th className="py-2 pr-4 text-center">Total</th>
+                                    <th className="py-2 pr-4">Quando</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {historyDetailItems.map((rec, idx) => (
+                                    <tr key={`${rec.reduced_code}-${rec.seller_name}-${idx}`} className="text-slate-700">
+                                      {historyDetail.type !== 'seller' && (
                                       <td className="py-3 pr-4 font-bold uppercase text-[10px]">{rec.seller_name || '-'}</td>
                                     )}
                                     <td className="py-3 pr-4">
                                       <div className="font-semibold">{rec.product_name || '-'}</div>
                                       <div className="text-[10px] text-slate-400 font-mono">RED: {rec.reduced_code}</div>
                                     </td>
-                                    <td className="py-3 pr-4 text-center">
-                                      <span className="inline-flex min-w-[32px] justify-center bg-green-50 text-green-700 px-2 py-0.5 rounded-md font-black text-[10px]">
-                                        {Number(rec.qty_sold_pv || 0)}
-                                      </span>
-                                    </td>
-                                    <td className="py-3 pr-4 text-center">
-                                      <span className="inline-flex min-w-[32px] justify-center bg-red-50 text-red-700 px-2 py-0.5 rounded-md font-black text-[10px]">
-                                        {Number(rec.qty_ignored || 0)}
-                                      </span>
-                                    </td>
-                                    <td className="py-3 pr-4 text-[11px] text-slate-500">{formatHistoryDate(rec.finalized_at)}</td>
-                                  </tr>
-                                ))}
+                                      <td className="py-3 pr-4 text-center">
+                                        <span className="inline-flex min-w-[32px] justify-center bg-green-50 text-green-700 px-2 py-0.5 rounded-md font-black text-[10px]">
+                                          {Number(rec.qty_sold_pv || 0)}
+                                        </span>
+                                      </td>
+                                      <td className="py-3 pr-4 text-center">
+                                        <span className="inline-flex min-w-[32px] justify-center bg-red-50 text-red-700 px-2 py-0.5 rounded-md font-black text-[10px]">
+                                          {Number(rec.qty_ignored || 0)}
+                                        </span>
+                                      </td>
+                                      <td className="py-3 pr-4 text-center text-[10px] font-bold text-slate-600">
+                                        {formatCurrency(getInventoryCostUnitByReduced(rec.reduced_code))}
+                                      </td>
+                                      <td className="py-3 pr-4 text-center text-[10px] font-bold text-slate-600">
+                                        {formatCurrency(getInventoryCostUnitByReduced(rec.reduced_code) * Number(rec.qty_sold_pv || 0))}
+                                      </td>
+                                      <td className="py-3 pr-4 text-[11px] text-slate-500">{formatHistoryDate(rec.finalized_at)}</td>
+                                    </tr>
+                                  ))}
                               </tbody>
                             </table>
                           </div>
@@ -2082,10 +2163,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                               <span className="text-[8px] font-black text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-200">{s.neutral} N</span>
                               <span className="text-[8px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded border border-red-100">-{s.negative} ERR</span>
                             </div>
-                            <p className="text-[9px] font-bold text-blue-600 mt-2 uppercase tracking-widest">Saldo: {s.score}</p>
-                          </div>
-                        </button>
-                      ))}
+                              <p className="text-[9px] font-bold text-blue-600 mt-2 uppercase tracking-widest">Saldo: {s.score}</p>
+                              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                                Custo: {formatCurrency(s.positiveCost || 0)} / {formatCurrency(s.negativeCost || 0)}
+                              </p>
+                            </div>
+                          </button>
+                        ))}
                     </div>
                   )}
                 </div>
