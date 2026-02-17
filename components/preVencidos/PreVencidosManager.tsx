@@ -1479,6 +1479,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const formatSalesUploadError = (err?: unknown) => {
       const message = err instanceof Error ? err.message : String(err || '');
       const lower = message.toLowerCase();
+      if (lower.includes('nenhuma venda encontrada')) {
+        return 'Erro ao processar arquivo de vendas. Nenhuma venda foi localizada na planilha. Verifique se as colunas de Código, Quantidade e Valor de Vendas estão presentes.';
+      }
       if (lower.includes('includes') || lower.includes('undefined')) {
         return 'Erro ao processar arquivo de vendas. O arquivo não contém o cabeçalho ou as colunas esperadas.';
       }

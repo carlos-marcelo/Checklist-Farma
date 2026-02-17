@@ -214,9 +214,12 @@ export const parseSalesXLSX = async (file: File): Promise<{sales: SalesRecord[],
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array', cellText: true, cellNF: true });
+        if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+          throw new Error('Nenhuma planilha encontrada no arquivo.');
+        }
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
+        const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: true, defval: '' });
         const sales: SalesRecord[] = [];
 
         const normalizeHeader = (value: any) => (
@@ -272,6 +275,62 @@ export const parseSalesXLSX = async (file: File): Promise<{sales: SalesRecord[],
         let costIdx = 7;
         let totalIdx = 8;
         let headerFound = false;
+        let desctoIdx = -1;
+
+        const parseWithIndices = (indices: { codeIdx: number; nameIdx: number; labIdx: number; qtyIdx: number; costIdx: number; totalIdx: number }) => {
+          const { codeIdx, nameIdx, labIdx, qtyIdx, costIdx, totalIdx } = indices;
+          const parsed: SalesRecord[] = [];
+          let salesperson = currentSalesperson;
+
+          for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            if (!Array.isArray(row) || row.length < 2) continue;
+
+            const lowerRow = row.map(val => normalizeHeader(val));
+
+            const vendorIndex = lowerRow.findIndex(val => val.includes('vendedor'));
+            if (vendorIndex >= 0) {
+              const nameCandidates = row.slice(vendorIndex + 1)
+                .map(val => String(val || "").trim())
+                .filter(val => val !== "" && val !== "-" && !val.endsWith("-") && !/^\d+$/.test(val));
+              if (nameCandidates.length > 0) {
+                salesperson = nameCandidates.join(" ").replace(/\s+/g, ' ').trim();
+              }
+              continue;
+            }
+
+            const reducedRaw = String(row[codeIdx] || "").trim();
+            const reducedCode = normalizeCode(reducedRaw);
+            const isNumericCode = /^\d+$/.test(reducedCode) && reducedCode !== "";
+            if (!isNumericCode) continue;
+
+            const productName = String(row[nameIdx] || "").trim();
+            const quantity = parseLocaleNumber(row[qtyIdx]);
+            if (quantity <= 0) continue;
+
+            const totalValue = parseLocaleNumber(row[totalIdx]);
+            const unitPrice = quantity > 0 ? totalValue / quantity : 0;
+            const costUnit = parseLocaleNumber(row[costIdx]);
+            const costTotal = costUnit * quantity;
+            const lab = labIdx >= 0 ? String(row[labIdx] || "").trim() : "";
+
+            parsed.push({
+              reducedCode,
+              productName: productName || "Produto sem descrição",
+              quantity,
+              salesperson,
+              date: period,
+              dcb: "N/A",
+              unitPrice,
+              totalValue,
+              lab,
+              costUnit,
+              costTotal
+            });
+          }
+
+          return parsed;
+        };
 
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
@@ -291,6 +350,7 @@ export const parseSalesXLSX = async (file: File): Promise<{sales: SalesRecord[],
             const idxName = findIndexSafe(val => val.includes('descri') || val.includes('produto'));
             const idxLab = findIndexSafe(val => val.includes('laboratório') || val.includes('laboratorio'));
             const idxQty = findIndexSafe(val => val.includes('quant') || val.includes('qtd'));
+            const idxDescto = findIndexSafe(val => val.includes('descto') || val.includes('desconto'));
             const idxCost = findIndexSafe(val => val.includes('valor custo') || val.includes('vlr custo') || val === 'custo');
             const idxTotal = findIndexSafe(val => val.includes('valor vendas') || val.includes('valor venda') || val.includes('vlr vendas') || val.includes('vlr venda'));
 
@@ -300,8 +360,17 @@ export const parseSalesXLSX = async (file: File): Promise<{sales: SalesRecord[],
               if (idxName >= 0) nameIdx = idxName;
               if (idxLab >= 0) labIdx = idxLab;
               if (idxQty >= 0) qtyIdx = idxQty;
+              if (idxDescto >= 0) desctoIdx = idxDescto;
               if (idxCost >= 0) costIdx = idxCost;
               if (idxTotal >= 0) totalIdx = idxTotal;
+
+              if (idxQty < 0) {
+                if (desctoIdx >= 0) {
+                  qtyIdx = Math.max(0, desctoIdx - 1);
+                } else if (labIdx >= 0) {
+                  qtyIdx = labIdx + 1;
+                }
+              }
               continue;
             }
           }
@@ -345,6 +414,28 @@ export const parseSalesXLSX = async (file: File): Promise<{sales: SalesRecord[],
             costUnit,
             costTotal
           });
+        }
+
+        if (sales.length === 0) {
+          const candidates = [
+            { codeIdx: 1, nameIdx: 2, labIdx: 4, qtyIdx: 5, costIdx: 7, totalIdx: 8 },
+            { codeIdx: 1, nameIdx: 2, labIdx: 3, qtyIdx: 4, costIdx: 6, totalIdx: 7 },
+            { codeIdx: 0, nameIdx: 1, labIdx: 3, qtyIdx: 4, costIdx: 6, totalIdx: 7 },
+            { codeIdx: 0, nameIdx: 2, labIdx: 4, qtyIdx: 5, costIdx: 7, totalIdx: 8 },
+            { codeIdx: 1, nameIdx: 3, labIdx: 5, qtyIdx: 6, costIdx: 8, totalIdx: 9 }
+          ];
+          let best: SalesRecord[] = [];
+          candidates.forEach(candidate => {
+            const parsed = parseWithIndices(candidate);
+            if (parsed.length > best.length) best = parsed;
+          });
+          if (best.length > 0) {
+            sales.push(...best);
+          }
+        }
+        if (sales.length === 0) {
+          console.warn('⚠️ Nenhuma venda localizada no arquivo. Amostra das primeiras linhas:', rows.slice(0, 12));
+          throw new Error('Nenhuma venda encontrada. Verifique se a planilha contém Código, Quantidade e Valor de Vendas.');
         }
         resolve({ sales, period });
       } catch (err) {
@@ -426,7 +517,7 @@ export const parseInventoryXLSX = async (file: File): Promise<InventoryCostRecor
         const workbook = XLSX.read(data, { type: 'array', cellText: true, cellNF: true });
         const firstSheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[firstSheetName];
-        const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
+        const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: true, defval: '' });
 
         const records: InventoryCostRecord[] = [];
         const normalizeHeader = (value: any) => (
