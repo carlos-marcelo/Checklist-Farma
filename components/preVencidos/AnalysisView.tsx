@@ -356,8 +356,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
               key={res.id}
               className={`p-5 rounded-2xl border transition-all ${res.isFinalized ? 'border-green-100 bg-green-50/20' : 'border-slate-100 bg-white hover:shadow-sm'}`}
             >
-              <div className="flex flex-col md:flex-row justify-between gap-4">
-                <div className="flex-1">
+              <div className="flex flex-col lg:flex-row gap-6">
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     {res.isFinalized ? (
                       <span className="text-[8px] font-black px-2 py-0.5 rounded uppercase tracking-tighter bg-green-600 text-white flex items-center gap-1">
@@ -376,7 +376,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                       • {res.pvLab || 'N/D'}
                     </span>
                   </h4>
-                  <div className="flex items-center gap-3 mt-2">
+                  <div className="flex flex-wrap items-center gap-3 mt-2">
                     <div className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded border border-blue-100 flex items-center gap-1">
                       <FlaskConical size={12} /> {res.dcb}
                     </div>
@@ -393,33 +393,37 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                         <Package size={12} /> LAB SIMILAR: {res.firstSimilarLab}
                       </div>
                     )}
-                    <div className="space-y-1">
-                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">PV EM ESTOQUE: {res.quantity}</div>
-                      <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-                        ESTOQUE FILIAL (ARQ): {formatStock(res.pvInventoryStock)}
-                      </div>
-                      <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">VENCIMENTO: {res.expiryMonthLabel}</div>
-                      <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-                        CUSTO PV UNITÁRIO: {formatCurrency(res.pvInventoryCostUnit || 0)}
-                      </div>
-                        <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-                          CUSTO PV (ESTOQUE): {formatCurrency(res.pvInventoryCostTotal || 0)}
-                        </div>
-                        {res.status !== 'replaced' && (
-                          <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-                            CUSTO PV VENDIDO: {formatCurrency(res.directInventoryCostTotal || 0)}
-                          </div>
-                        )}
-                        {res.status === 'replaced' && (
-                          <div className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-                            CUSTO SIMILAR (TOTAL): {formatCurrency(res.similarInventoryCostTotal || 0)}
-                          </div>
-                        )}
-                    </div>
                   </div>
                 </div>
 
-                <div className="flex gap-2 shrink-0 h-fit">
+                <div className="w-full lg:w-[260px] xl:w-[280px] shrink-0">
+                  <div className="grid grid-cols-[140px_1fr] gap-x-4 gap-y-1 text-[9px] font-bold uppercase tracking-widest text-slate-500">
+                    <div>PV EM ESTOQUE</div>
+                    <div className="text-slate-700">{res.quantity}</div>
+                    <div>ESTOQUE FILIAL (ARQ)</div>
+                    <div className="text-slate-700">{formatStock(res.pvInventoryStock)}</div>
+                    <div>VENCIMENTO</div>
+                    <div className="text-slate-700">{res.expiryMonthLabel}</div>
+                    <div>CUSTO PV UNITÁRIO</div>
+                    <div className="text-slate-700">{formatCurrency(res.pvInventoryCostUnit || 0)}</div>
+                    <div>CUSTO PV (ESTOQUE)</div>
+                    <div className="text-slate-700">{formatCurrency(res.pvInventoryCostTotal || 0)}</div>
+                    {res.status !== 'replaced' && (
+                      <>
+                        <div>CUSTO PV VENDIDO</div>
+                        <div className="text-slate-700">{formatCurrency(res.directInventoryCostTotal || 0)}</div>
+                      </>
+                    )}
+                    {res.status === 'replaced' && (
+                      <>
+                        <div>CUSTO SIMILAR (TOTAL)</div>
+                        <div className="text-slate-700">{formatCurrency(res.similarInventoryCostTotal || 0)}</div>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex gap-2 shrink-0 h-fit justify-end">
                   <button onClick={() => toggleExpand(res.id, 'sku')} className={`p-3 rounded-xl border text-center min-w-[85px] transition-all ${res.directSoldQty > 0 ? (expanded?.id === res.id && expanded?.type === 'sku' ? 'bg-blue-600 text-white shadow-lg' : 'bg-white border-blue-100 text-blue-600 hover:bg-blue-50') : 'opacity-20'}`}>
                     <p className="text-[8px] font-bold uppercase leading-none mb-1">Saída SKU</p>
                     <p className="text-xl font-black">{res.directSoldQty}</p>
