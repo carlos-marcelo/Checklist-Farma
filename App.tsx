@@ -1230,13 +1230,18 @@ const App: React.FC = () => {
     };
 
     const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceReport[]) => {
-        setStockConferenceHistory(mapStockConferenceReports(reports));
-        setStockConferenceReportsRaw(reports);
+        const sortedReports = [...reports].sort((a, b) => {
+            const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+            const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+            return bTime - aTime;
+        });
+        setStockConferenceHistory(mapStockConferenceReports(sortedReports));
+        setStockConferenceReportsRaw(sortedReports);
     };
 
     const refreshStockConferenceReports = async () => {
-        const dbStockReports = await SupabaseService.fetchStockConferenceReports();
-        handleStockReportsLoaded(dbStockReports);
+        const dbStockReports = await SupabaseService.fetchStockConferenceReportsSummaryAll();
+        handleStockReportsLoaded(dbStockReports as SupabaseService.DbStockConferenceReport[]);
         return dbStockReports;
     };
 
@@ -1313,7 +1318,7 @@ const App: React.FC = () => {
             const dbReports = await SupabaseService.fetchReportsSummary(0, 50);
             const formattedReports = dbReports.map(mapDbReportToHistoryItem);
             setReportHistory(formattedReports);
-            const dbStockReportsSummary = await SupabaseService.fetchStockConferenceReportsSummary(0, 50);
+            const dbStockReportsSummary = await SupabaseService.fetchStockConferenceReportsSummaryAll();
             handleStockReportsLoaded(dbStockReportsSummary as SupabaseService.DbStockConferenceReport[]);
             console.log('✅ Relatórios recarregados:', formattedReports.length, 'conferências:', dbStockReportsSummary.length);
             alert(`Atualizado! ${formattedReports.length} avaliação(ões) e ${dbStockReportsSummary.length} conferência(s) carregada(s).`);
@@ -1344,7 +1349,7 @@ const App: React.FC = () => {
                     SupabaseService.fetchUsers(),
                     SupabaseService.fetchConfig(),
                     SupabaseService.fetchReportsSummary(0, 30),
-                    SupabaseService.fetchStockConferenceReportsSummary(0, 30),
+                    SupabaseService.fetchStockConferenceReportsSummaryAll(),
                     SupabaseService.fetchCompanies(),
                     SupabaseService.fetchAccessMatrix(),
                     SupabaseService.fetchTickets()
