@@ -55,26 +55,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
     return (
         <aside
-            className={`fixed inset-y-0 left-0 z-50 w-72 bg-white shadow-2xl transform transition-transform duration-300 ease-in-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 lg:static lg:inset-auto no-print flex flex-col border-r border-gray-100`}
+            className={`fixed inset-y-0 left-0 z-50 w-72 bg-white/80 backdrop-blur-xl shadow-[0_0_40px_rgba(0,0,0,0.08)] transform transition-transform duration-500 ease-out ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0 lg:static lg:inset-auto no-print flex flex-col border-r border-gray-100/50`}
         >
-            <div className={`h-28 flex items-center justify-center p-4 ${currentTheme.bgGradient} relative overflow-hidden shadow-md group`}>
-                <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
-                <div className="relative z-10 w-full flex justify-center">
+            {/* Header / Logo Section */}
+            <div className={`h-28 flex items-center justify-center p-4 relative overflow-hidden group mb-2`}>
+                <div className={`absolute inset-0 bg-gradient-to-br transition-all duration-700 ${currentTheme.bgGradient || 'from-blue-600 to-blue-800'} opacity-90 group-hover:opacity-100`}></div>
+                <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] pointer-events-none"></div>
+
+                {/* Decorative orbs in logo area */}
+                <div className="absolute top-[-20%] right-[-20%] w-32 h-32 bg-white/10 rounded-full blur-2xl animate-pulse-slow"></div>
+                <div className="absolute bottom-[-10%] left-[-10%] w-24 h-24 bg-white/5 rounded-full blur-xl"></div>
+
+                <div className="relative z-10 w-full flex justify-center transform transition-all duration-500 group-hover:scale-105">
                     <Logo config={displayConfig} companies={companies} selectedCompanyId={currentUser.company_id} />
                 </div>
-                {/* Quick Config Button */}
+
                 <button
                     onClick={() => handleViewChange('settings')}
-                    className="absolute top-2 right-2 p-1.5 text-white/70 hover:text-white hover:bg-white/20 rounded-full transition-all"
+                    className="absolute top-4 right-4 p-2 text-white/60 hover:text-white hover:bg-white/20 rounded-full transition-all duration-300 hover:rotate-90 z-20"
                     title="Configurar Marca"
                 >
                     <Settings size={16} />
                 </button>
             </div>
 
-            <div className="px-6 py-6 border-b border-gray-100 bg-white relative">
-                <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold text-lg ${currentTheme.bgGradient} shadow-md border-2 border-white overflow-hidden`}>
+            {/* Profile Section */}
+            <div className="px-6 py-6 mb-4 relative mx-4 mt-2 rounded-3xl bg-gradient-to-br from-gray-50/50 to-white border border-gray-100 shadow-sm overflow-hidden group transition-all duration-300 hover:shadow-md hover:border-gray-200">
+                <div className="absolute top-0 right-0 w-16 h-16 bg-blue-50/50 rounded-full blur-xl transition-all duration-500 group-hover:bg-blue-100/50"></div>
+
+                <div className="flex items-center gap-4 relative z-10">
+                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-white font-bold text-xl ${currentTheme.bgGradient || 'bg-blue-600'} shadow-lg border-2 border-white overflow-hidden transform transition-all duration-300 group-hover:rotate-3 group-hover:scale-110`}>
                         {currentUser.photo ? (
                             <img src={currentUser.photo} alt="Profile" className="w-full h-full object-cover" />
                         ) : (
@@ -82,150 +92,199 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         )}
                     </div>
                     <div className="flex-1 min-w-0">
-                        <p className="text-sm font-bold text-gray-900 truncate">{currentUser.name}</p>
-                        <p className="text-xs text-gray-500 truncate uppercase tracking-wider font-semibold">
-                            {currentUser.role === 'MASTER' ? 'Administrador' : 'Usuário'}
-                        </p>
-                        {(currentUser.company_id || currentUser.area || currentUser.filial) && (
-                            <div className="mt-1 flex flex-col gap-0.5 animate-fade-in">
-                                {currentUser.company_id && (() => {
-                                    const comp = companies.find((c: any) => c.id === currentUser.company_id);
-                                    return comp ? <p className="text-[10px] text-blue-600 font-bold truncate flex items-center gap-1"><Building2 size={10} /> {comp.name}</p> : null;
-                                })()}
-                                {currentUser.area && <p className="text-[10px] text-gray-500 truncate flex items-center gap-1"><MapPin size={10} /> {currentUser.area}</p>}
-                                {currentUser.filial && <p className="text-[10px] text-gray-500 truncate flex items-center gap-1"><Store size={10} /> {currentUser.filial}</p>}
-                            </div>
-                        )}
+                        <p className="text-sm font-bold text-gray-900 truncate tracking-tight">{currentUser.name}</p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                            <span className={`w-2 h-2 rounded-full animate-pulse-slow ${currentUser.approved ? 'bg-emerald-500' : 'bg-gray-400'}`}></span>
+                            <p className="text-[10px] text-gray-500 truncate uppercase tracking-widest font-black">
+                                {currentUser.role === 'MASTER' ? 'Administrador' : 'Usuário'}
+                            </p>
+                        </div>
                     </div>
                 </div>
+
+                {/* Company/Area/Filial info */}
+                {(currentUser.company_id || currentUser.area || currentUser.filial) && (
+                    <div className="mt-4 pt-4 border-t border-gray-100 flex flex-col gap-2 relative z-10">
+                        {currentUser.company_id && (() => {
+                            const comp = companies.find((c: any) => c.id === currentUser.company_id);
+                            return comp ? (
+                                <div className="badge bg-blue-50/50 text-blue-600 border-blue-100/50 flex items-center gap-2 group/item transition-all hover:bg-blue-50">
+                                    <Building2 size={12} className="text-blue-500" />
+                                    <span className="truncate flex-1">{comp.name}</span>
+                                </div>
+                            ) : null;
+                        })()}
+                        <div className="flex items-center gap-2">
+                            {currentUser.area && (
+                                <div className="badge bg-gray-50/50 text-gray-600 border-gray-100/50 flex-1 flex items-center gap-1.5 text-[9px]">
+                                    <MapPin size={10} className="text-gray-400" />
+                                    <span className="truncate">{currentUser.area}</span>
+                                </div>
+                            )}
+                            {currentUser.filial && (
+                                <div className="badge bg-gray-50/50 text-gray-600 border-gray-100/50 flex-1 flex items-center gap-1.5 text-[9px]">
+                                    <Store size={10} className="text-gray-400" />
+                                    <span className="truncate">{currentUser.filial}</span>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
             </div>
 
-            <nav className="flex-1 overflow-y-auto py-6 px-4 space-y-2 custom-scrollbar pb-32">
-                <div className="px-3 mb-3 text-xs font-bold text-gray-400 uppercase tracking-widest">Checklists (Rascunho)</div>
-                {checklists.map(checklist => {
-                    const complete = isChecklistComplete(checklist.id);
-                    const ignored = ignoredChecklists.has(checklist.id);
-                    const isActive = activeChecklistId === checklist.id && currentView === 'checklist';
-                    return (
-                        <button
-                            key={checklist.id}
-                            onClick={() => { setActiveChecklistId(checklist.id); handleViewChange('checklist'); }}
-                            className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 relative overflow-hidden ${isActive
-                                ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                                }`}
-                        >
-                            {isActive && <div className={`absolute left-0 top-0 bottom-0 w-1.5 ${currentTheme.bg}`}></div>}
-                            <Clipboard className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${isActive ? '' : 'text-gray-400'}`} />
-                            <div className="flex-1 text-left truncate">
-                                <span className={ignored ? 'line-through opacity-50' : ''}>{checklist.title}</span>
-                            </div>
-                            {complete && !ignored && <CheckCircle size={18} className="text-green-500 ml-2 drop-shadow-sm" />}
-                        </button>
-                    );
-                })}
+            {/* Navigation Menu */}
+            <nav className="flex-1 px-4 py-2 space-y-1.5 overflow-y-auto custom-scrollbar">
+                <p className="px-4 text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-3 mt-4">Menu Principal</p>
 
-                <div className="px-3 mt-8 mb-3 text-xs font-bold text-gray-400 uppercase tracking-widest">Gerenciamento</div>
+                <SidebarButton
+                    icon={<LayoutDashboard size={20} />}
+                    label="Dashboard"
+                    active={currentView === 'summary'}
+                    onClick={() => handleViewChange('summary')}
+                    color="blue"
+                />
 
-                {canControlChecklists && (
-                    <button
-                        onClick={() => handleViewChange('summary')}
-                        className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'summary'
-                            ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                            : 'text-gray-600 hover:bg-gray-50'
-                            }`}
-                    >
-                        <LayoutDashboard className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'summary' ? '' : 'text-gray-400'}`} />
-                        Visão Geral / Finalizar
-                    </button>
-                )}
+                <SidebarButton
+                    icon={<ClipboardList size={20} />}
+                    label="Checklists"
+                    active={currentView === 'checklist'}
+                    onClick={() => handleViewChange('checklist')}
+                    color="emerald"
+                />
 
-                <button
-                    onClick={() => handleViewChange('history')}
-                    className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'history'
-                        ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                        : 'text-gray-600 hover:bg-gray-50'
-                        }`}
-                >
-                    <History className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'history' ? '' : 'text-gray-400'}`} />
-                    Histórico de Relatórios
-                </button>
-
-                <button
-                    onClick={() => handleViewChange('stock')}
-                    className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'stock'
-                        ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                        : 'text-gray-600 hover:bg-gray-50'
-                        }`}
-                >
-                    <Package className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'stock' ? '' : 'text-gray-400'}`} />
-                    Conferência de Estoque
-                </button>
-
-                <button
+                <SidebarButton
+                    icon={<Package size={20} />}
+                    label="Pré-Vencidos"
+                    active={currentView === 'pre'}
                     onClick={() => handleViewChange('pre')}
-                    className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'pre'
-                        ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                        : 'text-gray-600 hover:bg-gray-50'
-                        }`}
-                >
-                    <ClipboardList className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'pre' ? '' : 'text-gray-400'}`} />
-                    Pré-Vencidos
-                </button>
+                    color="amber"
+                />
 
-                <button
+                <SidebarButton
+                    icon={<Search size={20} />}
+                    label="Conferência"
+                    active={currentView === 'stock'}
+                    onClick={() => handleViewChange('stock')}
+                    color="cyan"
+                />
+
+                <SidebarButton
+                    icon={<ClipboardList size={20} />}
+                    label="Auditoria"
+                    active={currentView === 'audit'}
                     onClick={() => handleViewChange('audit')}
-                    className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'audit'
-                        ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                        : 'text-gray-600 hover:bg-gray-50'
-                        }`}
-                >
-                    <Search className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'audit' ? '' : 'text-gray-400'}`} />
-                    Auditoria
-                </button>
+                    color="indigo"
+                />
 
-                <button
-                    onClick={() => handleViewChange('settings')}
-                    className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'settings'
-                        ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                        : 'text-gray-600 hover:bg-gray-50'
-                        }`}
-                >
-                    <Settings className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'settings' ? '' : 'text-gray-400'}`} />
-                    Configurações
-                </button>
+                <SidebarButton
+                    icon={<History size={20} />}
+                    label="Histórico"
+                    active={currentView === 'history'}
+                    onClick={() => handleViewChange('history')}
+                    color="purple"
+                />
+
+                <SidebarButton
+                    icon={<MessageSquareQuote size={20} />}
+                    label="Suporte"
+                    active={currentView === 'support'}
+                    onClick={() => handleViewChange('support')}
+                    color="rose"
+                />
 
                 {currentUser.role === 'MASTER' && (
-                    <button
-                        onClick={() => handleViewChange('access')}
-                        className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'access'
-                            ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                            : 'text-gray-600 hover:bg-gray-50'
-                            }`}
-                    >
-                        <Lock className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'access' ? '' : 'text-gray-400'}`} />
-                        Níveis de Acesso
-                    </button>
+                    <>
+                        <p className="px-4 text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-3 mt-8">Administração</p>
+                        <SidebarButton
+                            icon={<Settings size={20} />}
+                            label="Configurações"
+                            active={currentView === 'settings'}
+                            onClick={() => handleViewChange('settings')}
+                            color="slate"
+                        />
+                        <SidebarButton
+                            icon={<Lock size={20} />}
+                            label="Acessos"
+                            active={currentView === 'access'}
+                            onClick={() => handleViewChange('access')}
+                            color="indigo"
+                        />
+                    </>
                 )}
-
-                <button
-                    onClick={() => handleViewChange('support')}
-                    className={`w-full group flex items-center px-4 py-3.5 text-sm font-medium rounded-xl transition-all duration-200 ${currentView === 'support'
-                        ? `${currentTheme.lightBg} ${currentTheme.text} shadow-sm`
-                        : 'text-gray-600 hover:bg-gray-50'
-                        }`}
-                >
-                    <MessageSquareQuote className={`w-5 h-5 mr-3 flex-shrink-0 transition-transform group-hover:scale-110 ${currentView === 'support' ? '' : 'text-gray-400'}`} />
-                    Suporte e Melhorias
-                </button>
             </nav>
 
-            <div className="p-4 border-t border-gray-100 bg-white sticky bottom-0 left-0 right-0 z-10">
-                <button onClick={handleLogout} className="w-full flex items-center justify-center gap-2 text-sm font-semibold text-red-600 hover:bg-red-50 p-3 rounded-xl transition-colors">
-                    <LogOut size={18} />
-                    Sair do Sistema
+            {/* Logout Footer */}
+            <div className="p-4 mt-auto">
+                <button
+                    onClick={handleLogout}
+                    className="w-full flex items-center gap-3 px-6 py-4 text-rose-500 hover:text-white hover:bg-rose-500 rounded-2xl transition-all duration-300 font-bold group relative overflow-hidden"
+                >
+                    <div className="absolute inset-0 bg-rose-500/10 group-hover:bg-rose-500 transition-all duration-300"></div>
+                    <LogOut size={20} className="relative z-10 group-hover:scale-110 transition-transform" />
+                    <span className="relative z-10">Sair do Sistema</span>
                 </button>
             </div>
         </aside>
+    );
+};
+
+interface SidebarButtonProps {
+    icon: React.ReactNode;
+    label: string;
+    active: boolean;
+    onClick: () => void;
+    color: 'blue' | 'emerald' | 'amber' | 'cyan' | 'purple' | 'rose' | 'slate' | 'indigo';
+}
+
+const SidebarButton: React.FC<SidebarButtonProps> = ({ icon, label, active, onClick, color }) => {
+    const colorClasses = {
+        blue: active ? 'bg-blue-50 text-blue-600 border-blue-100 shadow-sm' : 'text-gray-500 hover:bg-blue-50/50 hover:text-blue-500',
+        emerald: active ? 'bg-emerald-50 text-emerald-600 border-emerald-100 shadow-sm' : 'text-gray-500 hover:bg-emerald-50/50 hover:text-emerald-500',
+        amber: active ? 'bg-amber-50 text-amber-600 border-amber-100 shadow-sm' : 'text-gray-500 hover:bg-amber-50/50 hover:text-amber-500',
+        cyan: active ? 'bg-cyan-50 text-cyan-600 border-cyan-100 shadow-sm' : 'text-gray-500 hover:bg-cyan-50/50 hover:text-cyan-500',
+        purple: active ? 'bg-purple-50 text-purple-600 border-purple-100 shadow-sm' : 'text-gray-500 hover:bg-purple-50/50 hover:text-purple-500',
+        rose: active ? 'bg-rose-50 text-rose-600 border-rose-100 shadow-sm' : 'text-gray-500 hover:bg-rose-50/50 hover:text-rose-500',
+        slate: active ? 'bg-slate-50 text-slate-600 border-slate-100 shadow-sm' : 'text-gray-500 hover:bg-slate-50/50 hover:text-slate-500',
+        indigo: active ? 'bg-indigo-50 text-indigo-600 border-indigo-100 shadow-sm' : 'text-gray-500 hover:bg-indigo-50/50 hover:text-indigo-500',
+    };
+
+    const iconColorClasses = {
+        blue: active ? 'text-blue-600' : 'text-gray-400 group-hover:text-blue-500',
+        emerald: active ? 'text-emerald-600' : 'text-gray-400 group-hover:text-emerald-500',
+        amber: active ? 'text-amber-600' : 'text-gray-400 group-hover:text-amber-500',
+        cyan: active ? 'text-cyan-600' : 'text-gray-400 group-hover:text-cyan-500',
+        purple: active ? 'text-purple-600' : 'text-gray-400 group-hover:text-purple-500',
+        rose: active ? 'text-rose-600' : 'text-gray-400 group-hover:text-rose-500',
+        slate: active ? 'text-slate-600' : 'text-gray-400 group-hover:text-slate-500',
+        indigo: active ? 'text-indigo-600' : 'text-gray-400 group-hover:text-indigo-500',
+    };
+
+    const accentColors = {
+        blue: 'bg-blue-600',
+        emerald: 'bg-emerald-600',
+        amber: 'bg-amber-600',
+        cyan: 'bg-cyan-600',
+        purple: 'bg-purple-600',
+        rose: 'bg-rose-600',
+        slate: 'bg-slate-600',
+        indigo: 'bg-indigo-600',
+    };
+
+    return (
+        <button
+            onClick={onClick}
+            className={`w-full flex items-center gap-4 px-4 py-3.5 rounded-2xl transition-all duration-300 font-bold group border-2 border-transparent ${colorClasses[color]} relative`}
+        >
+            {active && (
+                <div className={`absolute left-0 w-1.5 h-6 rounded-r-full ${accentColors[color]}`}></div>
+            )}
+            <div className={`transition-all duration-300 transform group-hover:scale-110 ${iconColorClasses[color]}`}>
+                {icon}
+            </div>
+            <span className="flex-1 text-left tracking-tight">{label}</span>
+            {active && <div className="animate-in fade-in zoom-in duration-300">
+                <div className={`w-1.5 h-1.5 rounded-full ${accentColors[color]}`}></div>
+            </div>}
+        </button>
     );
 };

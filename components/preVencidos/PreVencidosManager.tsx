@@ -13,7 +13,7 @@ import PVRegistration from './PVRegistration';
 import AnalysisView from './AnalysisView';
 import SetupView from './SetupView';
 import { NAV_ITEMS } from '../../preVencidos/constants';
-import { Package, AlertTriangle, LogOut, Trophy, TrendingUp, MinusCircle, CheckCircle, Calendar, Info, Trash2, X, Clock } from 'lucide-react';
+import { Package, AlertTriangle, LogOut, Trophy, TrendingUp, MinusCircle, CheckCircle, Calendar, Info, Trash2, X, Clock, Building, User } from 'lucide-react';
 import SalesHistoryModal from './SalesHistoryModal';
 import {
   DbCompany,
@@ -1041,7 +1041,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           sales_records: salesRecords,
           sales_period: salesPeriod,
           confirmed_sales: buildConfirmedSalesPayload(newState, effectiveFinalizedByPeriod),
-          user_email: userEmail
+          user_email: userEmail || '',
+          status: 'processed'
         }).catch(err => console.error('Erro ao salvar classificação:', err));
       }
 
@@ -1131,7 +1132,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         if (item.confirmed) totalPVUnitsToDeduct += item.qtyPV;
 
         // Create history record
-        if (sessionInfo?.companyId && sessionInfo.filial && (item.qtyPV > 0 || item.qtyIgnored > 0 || item.qtyNeutral > 0 || item.qtyIgnoredPV > 0)) {
+        if (sessionInfo?.companyId && sessionInfo.filial && (item.qtyPV > 0 || item.qtyNeutral > 0 || item.qtyIgnoredPV > 0)) {
           // Extract seller and product name using logic from AnalysisView or just parsing key roughly? 
           // We need accurate data. SalesRecord has it.
           // Improved Seller Extraction using metadata if available
@@ -1153,9 +1154,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             qty_sold_pv: item.qtyPV,
             qty_ignored: item.qtyIgnoredPV,
             qty_neutral: item.qtyNeutral,
-            unit_price: unitPrice,
-            value_sold_pv: soldValue,
-            value_ignored: ignoredValue,
+            unit_price: unitPrice || 0,
+            value_sold_pv: soldValue || 0,
+            value_ignored: ignoredValue || 0,
             finalized_at: new Date().toISOString()
           });
         }
@@ -1219,7 +1220,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         sales_records: salesRecords,
         sales_period: normalizedPeriod,
         confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedForPersist),
-        user_email: userEmail
+        user_email: userEmail || '',
+        status: 'processed'
       }).catch(err => console.error('Erro ao persistir finalização:', err));
     }
     const existingReport = analysisReports[normalizedPeriod];
@@ -1378,17 +1380,17 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   };
 
   const processAndSetSales = (sales: SalesRecord[], period: string, fileName?: string, range?: PeriodRange, uploadedAt?: string) => {
-      const cleanedPeriod = (period || '').trim() || 'Período não identificado';
-      const enrichedSales = sales.map(s => {
-        const product = masterProducts.find(p => p.reducedCode === s.reducedCode);
-        return {
-          ...s,
-          date: cleanedPeriod,
-          dcb: product ? product.dcb : s.dcb,
-          productName: product ? product.name : s.productName,
-          lab: product?.lab || s.lab
-        };
-      });
+    const cleanedPeriod = (period || '').trim() || 'Período não identificado';
+    const enrichedSales = sales.map(s => {
+      const product = masterProducts.find(p => p.reducedCode === s.reducedCode);
+      return {
+        ...s,
+        date: cleanedPeriod,
+        dcb: product ? product.dcb : s.dcb,
+        productName: product ? product.name : s.productName,
+        lab: product?.lab || s.lab
+      };
+    });
     setSalesRecords(enrichedSales);
     setSalesPeriod(cleanedPeriod);
     setCurrentView(AppView.ANALYSIS);
@@ -1415,8 +1417,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         sales_records: enrichedSales,
         sales_period: cleanedPeriod,
         confirmed_sales: buildConfirmedSalesPayload({}, {}), // Reset confirmed sales + metadata on new report
-        user_email: userEmail,
-        file_name: fileName
+        user_email: userEmail || '',
+        file_name: fileName,
+        status: 'processed'
       }).then(ok => {
         if (ok) console.log('✅ [PV Persistence] Relatório de vendas salvo no banco.');
       });
@@ -1502,24 +1505,24 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           const text = event.target?.result as string;
           const sales = parseSalesCSV(text);
           await handleParsedSales(sales, `CSV-Upload-${new Date().toLocaleDateString()}`, fileName);
-          } catch (err) {
-            console.error('Erro ao ler CSV de vendas:', err);
-            notifyError(err);
-          }
-        };
-        reader.onerror = () => notifyError();
-        reader.readAsText(file);
-      } else {
-        (async () => {
-          try {
-            const salesData = await parseSalesXLSX(file);
-            await handleParsedSales(salesData.sales, salesData.period, fileName);
-          } catch (error) {
-            console.error('Erro ao ler XLSX de vendas:', error);
-            notifyError(error);
-          }
-        })();
-      }
+        } catch (err) {
+          console.error('Erro ao ler CSV de vendas:', err);
+          notifyError(err);
+        }
+      };
+      reader.onerror = () => notifyError();
+      reader.readAsText(file);
+    } else {
+      (async () => {
+        try {
+          const salesData = await parseSalesXLSX(file);
+          await handleParsedSales(salesData.sales, salesData.period, fileName);
+        } catch (error) {
+          console.error('Erro ao ler XLSX de vendas:', error);
+          notifyError(error);
+        }
+      })();
+    }
 
     e.target.value = '';
   };
@@ -1957,27 +1960,27 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       const seller = rec.seller_name || 'Desconhecido';
       if (!sellerStats[seller]) sellerStats[seller] = { positive: 0, neutral: 0, negative: 0, positiveCost: 0, negativeCost: 0 };
 
-        const soldQty = Number(rec.qty_sold_pv || 0);
-        const ignoredQty = Number(rec.qty_ignored || 0);
-        const neutralQty = Number(rec.qty_neutral || 0);
+      const soldQty = Number(rec.qty_sold_pv || 0);
+      const ignoredQty = Number(rec.qty_ignored || 0);
+      const neutralQty = Number(rec.qty_neutral || 0);
 
-        sellerStats[seller].positive += soldQty > 0 ? soldQty : 0;
-        if (neutralQty > 0) {
-          sellerStats[seller].neutral += neutralQty;
-        }
-        sellerStats[seller].negative += ignoredQty > 0 ? ignoredQty : 0;
+      sellerStats[seller].positive += soldQty > 0 ? soldQty : 0;
+      if (neutralQty > 0) {
+        sellerStats[seller].neutral += neutralQty;
+      }
+      sellerStats[seller].negative += ignoredQty > 0 ? ignoredQty : 0;
 
-        const unitCost = getInventoryCostUnitByReduced(rec.reduced_code);
-        const soldCost = soldQty > 0 ? soldQty * unitCost : 0;
-        const ignoredCost = ignoredQty > 0 ? ignoredQty * unitCost : 0;
+      const unitCost = getInventoryCostUnitByReduced(rec.reduced_code);
+      const soldCost = soldQty > 0 ? soldQty * unitCost : 0;
+      const ignoredCost = ignoredQty > 0 ? ignoredQty * unitCost : 0;
       sellerStats[seller].positiveCost += soldCost;
       sellerStats[seller].negativeCost += ignoredCost;
 
-        totalRecovered += soldQty > 0 ? soldQty : 0;
-        totalIgnored += ignoredQty > 0 ? ignoredQty : 0;
-        totalRecoveredCost += soldCost;
-        totalIgnoredCost += ignoredCost;
-      });
+      totalRecovered += soldQty > 0 ? soldQty : 0;
+      totalIgnored += ignoredQty > 0 ? ignoredQty : 0;
+      totalRecoveredCost += soldCost;
+      totalIgnoredCost += ignoredCost;
+    });
 
     // 2. Add metrics from Current Session (InMemory), skipping those already finalized/saved
     Object.keys(confirmedPVSales).forEach(key => {
@@ -2161,118 +2164,160 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   }, [pvRecordEvents]);
 
   return (
-    <div className="flex h-full w-full overflow-hidden text-slate-900">
-      <aside className={`w-64 bg-slate-900 text-white flex flex-col shrink-0 transition-all duration-300 ${currentView === AppView.SETUP ? '-ml-64' : ''}`}>
-        <div className="p-6 flex items-center gap-3 border-b border-slate-800">
-          <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-900">
-            <Package size={24} />
-          </div>
-          <div>
-            <h1 className="font-bold text-lg leading-tight">PV Manager</h1>
-            <span className="text-[10px] text-slate-400 uppercase tracking-widest font-bold">Conferência 2.0</span>
-          </div>
-        </div>
+    <div className="flex flex-col h-full w-full overflow-hidden text-slate-900">
+      {/* NOVO HEADER DARK SUPERIOR (SUBSTITUI SIDEBAR) */}
+      <header className="bg-slate-900 text-white shadow-2xl z-30 shrink-0">
+        <div className="max-w-[1920px] mx-auto flex items-center justify-between px-6 py-2.5">
+          <div className="flex items-center gap-8">
+            {/* Logo Section */}
+            <div className="flex items-center gap-3 pr-6 border-r border-slate-800">
+              <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-900/40">
+                <Package size={20} className="text-white" />
+              </div>
+              <div>
+                <h1 className="font-black text-sm leading-none tracking-tight">PV MANAGER</h1>
+                <span className="text-[8px] text-slate-400 uppercase tracking-widest font-bold">Conferência 2.0</span>
+              </div>
+            </div>
 
-        <nav className="p-4 space-y-2 mt-4">
-          {NAV_ITEMS.map((item) => {
-            const targetView = item.id as AppView;
-            const disabled = !canSwitchToView(targetView);
-            return (
-              <button
-                key={item.id}
-                onClick={() => handleNavItemClick(targetView)}
-                disabled={disabled}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${currentView === targetView ? 'bg-blue-600 text-white shadow-lg' : disabled ? 'text-slate-500/70 cursor-not-allowed bg-slate-900/50' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
-              >
-                {item.icon}
-                <span className="font-medium">{item.label}</span>
-              </button>
-            );
-          })}
-          <div className="pt-2 space-y-2">
-            {isMaster ? (
-              <label className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-slate-800 text-slate-400 transition-colors group">
-                <Package size={20} className="group-hover:text-amber-400" />
-                <div className="flex-1">
-                  <p className="text-sm font-medium leading-none text-amber-400">Estoque (Excel)</p>
-                  <p className="text-[10px] mt-1 text-slate-500 font-bold">
-                    {inventoryReport?.uploaded_at ? `Último: ${formatUploadTimestamp(inventoryReport.uploaded_at)}` : 'Sem estoque carregado'}
-                  </p>
+            {/* Navigation Section */}
+            <nav className="flex items-center gap-1">
+              {NAV_ITEMS.map((item) => {
+                const targetView = item.id as AppView;
+                const disabled = !canSwitchToView(targetView);
+                const active = currentView === targetView;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => handleNavItemClick(targetView)}
+                    disabled={disabled}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all text-xs font-bold uppercase tracking-wide
+                      ${active
+                        ? 'bg-blue-600 text-white shadow-md shadow-blue-900/20'
+                        : disabled
+                          ? 'text-slate-600 cursor-not-allowed opacity-50'
+                          : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
+                  >
+                    {React.cloneElement(item.icon as React.ReactElement<any>, { size: 16 })}
+                    <span className="hidden lg:inline">{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+          </div>
+
+          {/* Tools & Actions Section */}
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 bg-slate-800/50 p-1 rounded-xl border border-slate-700/50">
+              {isMaster ? (
+                <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-slate-700 text-slate-300 transition-colors group">
+                  <Package size={16} className="text-amber-400" />
+                  <div className="flex flex-col">
+                    <span className="text-[9px] font-black uppercase tracking-tighter">Estoque</span>
+                    {inventoryReport?.uploaded_at && <span className="text-[7px] text-slate-500 font-bold -mt-0.5">{formatUploadTimestamp(inventoryReport.uploaded_at)}</span>}
+                  </div>
+                  <input type="file" className="hidden" accept=".xlsx,.xls" onChange={handleInventoryUpload} />
+                </label>
+              ) : (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-600 cursor-not-allowed" title="Somente Master">
+                  <Package size={16} />
+                  <span className="text-[9px] font-black uppercase tracking-tighter">Estoque</span>
                 </div>
-                <input type="file" className="hidden" accept=".xlsx,.xls" onChange={handleInventoryUpload} />
+              )}
+
+              <div className="w-px h-6 bg-slate-700 mx-1"></div>
+
+              <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-slate-700 text-slate-300 transition-colors group">
+                <TrendingUp size={16} className="text-emerald-400" />
+                <div className="flex flex-col">
+                  <span className="text-[9px] font-black uppercase tracking-tighter">Vendas</span>
+                  <span className="text-[7px] text-slate-500 font-bold -mt-0.5">{salesRecords.length} reg.</span>
+                </div>
+                <input type="file" className="hidden" accept=".xlsx,.xls,.csv,.txt" onChange={handleSalesUpload} />
               </label>
-            ) : (
-              <div
-                className="flex items-center gap-3 p-3 rounded-xl text-slate-500/80 opacity-70 cursor-not-allowed"
-                title="Apenas usuário master pode carregar estoque."
+
+              <div className="w-px h-6 bg-slate-700 mx-1"></div>
+
+              <button
+                onClick={() => setShowHistoryModal(true)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-slate-700 text-slate-300 transition-colors"
+                title="Histórico de Uploads"
               >
-                <Package size={20} />
-                <div className="flex-1">
-                  <p className="text-sm font-medium leading-none text-slate-400">Estoque (Excel)</p>
-                  <p className="text-[10px] mt-1 text-slate-500 font-bold">
-                    {inventoryReport?.uploaded_at ? `Último: ${formatUploadTimestamp(inventoryReport.uploaded_at)}` : 'Sem estoque carregado'}
-                  </p>
-                </div>
-              </div>
-            )}
+                <Clock size={16} className="text-blue-400" />
+                <span className="text-[9px] font-black uppercase tracking-tighter">Uploads</span>
+              </button>
+            </div>
 
-            <label className="flex items-center gap-3 p-3 rounded-xl cursor-pointer hover:bg-slate-800 text-slate-400 transition-colors group">
-              <TrendingUp size={20} className="group-hover:text-green-400" />
-              <div className="flex-1">
-                <p className="text-sm font-medium leading-none text-blue-400">Vendas (Excel/CSV)</p>
-                <p className="text-[10px] mt-1 text-slate-500 font-bold">{salesRecords.length} registros</p>
-              </div>
-              <input type="file" className="hidden" accept=".xlsx,.xls,.csv,.txt" onChange={handleSalesUpload} />
-            </label>
-
-            <button
-              onClick={() => setShowHistoryModal(true)}
-              className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-800 text-slate-400 transition-colors text-left"
-            >
-              <Clock size={20} />
-              <span className="text-sm font-medium">Histórico de Uploads</span>
+            <button onClick={logout} className="w-9 h-9 rounded-xl bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-400 hover:bg-red-600 hover:text-white hover:border-red-500 transition-all shadow-lg" title="Sair">
+              <LogOut size={16} />
             </button>
           </div>
-        </nav>
-      </aside>
+        </div>
+      </header>
 
-      <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        <header className="h-20 bg-white border-b border-slate-200 flex items-center justify-between px-8 shrink-0">
-          <div className="flex items-center gap-4">
-            <div className="bg-amber-50 text-amber-600 p-2 rounded-lg"><AlertTriangle size={20} /></div>
-            <div>
-              <p className="text-sm font-bold text-slate-800 uppercase tracking-tight">SISTEMA DE ALERTA PRÉ-VENCIDOS</p>
-              <p className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{sessionInfo?.company || 'DROGARIA CIDADE'}</p>
+      <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
+        {/* HEADER COMPACTO DE SESSÃO */}
+        <header className="h-12 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-20 shadow-sm shadow-slate-200/50">
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2 text-blue-600">
+              <Building size={16} />
+              <span className="text-[10px] font-black uppercase tracking-widest">{sessionInfo?.company || 'DROGARIA CIDADE'}</span>
+            </div>
+            <div className="w-px h-4 bg-slate-200"></div>
+            <div className="flex items-center gap-2 text-slate-600">
+              <User size={16} className="text-blue-500" />
+              <span className="text-[10px] font-bold uppercase">{sessionInfo?.pharmacist || 'Convidado'}</span>
+              <span className="text-[9px] text-slate-400 font-bold bg-slate-100 px-1.5 py-0.5 rounded">Filial: {sessionInfo?.filial || '-'}</span>
             </div>
           </div>
-          {sessionInfo && (
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2 mr-2 px-3 py-1 bg-white rounded-full border border-gray-100 shadow-sm" title={`Status da Conexão: ${connectionStatus === 'online' ? 'Online' : connectionStatus === 'syncing' ? 'Sincronizando' : 'Offline'}`}>
-                <div className={`w-2.5 h-2.5 rounded-full ${connectionStatus === 'online' ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.4)]' : connectionStatus === 'syncing' ? 'bg-amber-500 animate-pulse' : 'bg-red-500'}`}></div>
-                <span className={`text-xs font-bold hidden md:block ${connectionStatus === 'online' ? 'text-emerald-700' : connectionStatus === 'syncing' ? 'text-amber-700' : 'text-red-700'}`}>
-                  {connectionStatus === 'online' ? 'ONLINE' : connectionStatus === 'syncing' ? 'SYNC' : 'OFFLINE'}
-                </span>
-              </div>
-              <div className="text-right mr-4 hidden md:block">
-                <p className="text-sm font-bold text-slate-800">{sessionInfo.pharmacist}</p>
-                <p className="text-xs text-slate-500">Filial: {sessionInfo.filial}</p>
-              </div>
-              <button onClick={logout} className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 hover:bg-red-50 hover:text-red-600 transition-colors" title="Encerrar sessão">
-                <LogOut size={18} />
-              </button>
+
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-full border border-slate-100" title={`Status: ${connectionStatus}`}>
+              <div className={`w-2 h-2 rounded-full ${connectionStatus === 'online' ? 'bg-emerald-500 animate-pulse-slow shadow-[0_0_8px_rgba(16,185,129,0.3)]' : connectionStatus === 'syncing' ? 'bg-amber-500 animate-pulse' : 'bg-red-500'}`}></div>
+              <span className={`text-[9px] font-black ${connectionStatus === 'online' ? 'text-emerald-700' : 'text-amber-700'}`}>
+                {connectionStatus === 'online' ? 'SISTEMA ONLINE' : 'SINCRONIZANDO'}
+              </span>
             </div>
-          )}
+            <div className="bg-amber-100/50 text-amber-700 px-3 py-1 rounded-full border border-amber-200/50 flex items-center gap-2">
+              <AlertTriangle size={12} />
+              <span className="text-[9px] font-black uppercase tracking-tight">Alerta de Prevencíveis</span>
+            </div>
+          </div>
         </header>
 
-        <div className="flex-1 overflow-y-auto p-8 custom-scrollbar bg-slate-50">
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar bg-slate-50/50">
           {currentView === AppView.SETUP && (
             <SetupView
               onComplete={(info) => {
                 setSessionInfo(info);
+                // Only clear PV records as we are starting a fresh registration session
                 setPvRecords([]);
-                setConfirmedPVSales({});
-                setFinalizedREDSByPeriod({});
-                setSalesPeriod('');
+
+                // Keep sales records if they were uploaded during setup
+                // If not, clear the classifications
+                if (salesRecords.length === 0) {
+                  setConfirmedPVSales({});
+                  setFinalizedREDSByPeriod({});
+                  setSalesPeriod('');
+                } else {
+                  // If we already have sales, persist them to the new branch/company
+                  if (info.companyId && info.filial) {
+                    console.log('📤 [PV Persistence] Persistindo relatório carregado em memória para a nova filial...');
+                    upsertActiveSalesReport({
+                      company_id: info.companyId,
+                      branch: info.filial,
+                      sales_records: salesRecords,
+                      sales_period: salesPeriod,
+                      confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedREDSByPeriod),
+                      user_email: userEmail || '',
+                      file_name: localLastUpload?.file_name || 'Upload via Setup',
+                      status: 'processed'
+                    }).then(ok => {
+                      if (ok) console.log('✅ [PV Persistence] Relatório de vendas persistido com sucesso.');
+                    }).catch(err => console.error('❌ [PV Persistence] Erro ao persistir vendas no setup:', err));
+                  }
+                }
+
                 setHasCompletedSetup(true);
                 setCurrentView(AppView.REGISTRATION);
               }}
@@ -2281,7 +2326,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
               productsLoaded={masterProducts.length > 0}
               systemLoaded={systemProducts.length > 0}
               dcbLoaded={dcbBaseProducts.length > 0}
-              companies={companies}
+              companies={companies as any}
               uploadHistory={salesUploads}
             />
           )}
@@ -2402,28 +2447,28 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                   </button>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <button
-                      onClick={() => setHistoryDetail({ type: 'recovered' })}
-                      className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95"
-                    >
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recuperado PV (Filial)</p>
-                      <p className="text-4xl font-black text-green-600 mt-2">{dashboardMetrics.totalRecovered}</p>
-                      <p className="text-[9px] font-bold text-green-600 mt-2 uppercase tracking-widest">
-                        {formatCurrency(dashboardMetrics.totalRecoveredCost || 0)}
-                      </p>
-                      <p className="text-[9px] font-bold text-green-500 mt-2 uppercase flex items-center gap-1"><CheckCircle size={10} /> Positivo</p>
-                    </button>
-                    <button
-                      onClick={() => setHistoryDetail({ type: 'ignored' })}
-                      className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95"
-                    >
-                      <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Ignorou PV (Filial)</p>
-                      <p className="text-4xl font-black text-red-500 mt-2">{dashboardMetrics.totalIgnored}</p>
-                      <p className="text-[9px] font-bold text-red-500 mt-2 uppercase tracking-widest">
-                        {formatCurrency(dashboardMetrics.totalIgnoredCost || 0)}
-                      </p>
-                      <p className="text-[9px] font-bold text-red-400 mt-2 uppercase flex items-center gap-1"><MinusCircle size={10} /> Negativo</p>
-                    </button>
+                  <button
+                    onClick={() => setHistoryDetail({ type: 'recovered' })}
+                    className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95"
+                  >
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Recuperado PV (Filial)</p>
+                    <p className="text-4xl font-black text-green-600 mt-2">{dashboardMetrics.totalRecovered}</p>
+                    <p className="text-[9px] font-bold text-green-600 mt-2 uppercase tracking-widest">
+                      {formatCurrency(dashboardMetrics.totalRecoveredCost || 0)}
+                    </p>
+                    <p className="text-[9px] font-bold text-green-500 mt-2 uppercase flex items-center gap-1"><CheckCircle size={10} /> Positivo</p>
+                  </button>
+                  <button
+                    onClick={() => setHistoryDetail({ type: 'ignored' })}
+                    className="bg-white p-6 rounded-3xl shadow-sm border border-slate-200 text-left hover:shadow-md transition-all active:scale-95"
+                  >
+                    <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Ignorou PV (Filial)</p>
+                    <p className="text-4xl font-black text-red-500 mt-2">{dashboardMetrics.totalIgnored}</p>
+                    <p className="text-[9px] font-bold text-red-500 mt-2 uppercase tracking-widest">
+                      {formatCurrency(dashboardMetrics.totalIgnoredCost || 0)}
+                    </p>
+                    <p className="text-[9px] font-bold text-red-400 mt-2 uppercase flex items-center gap-1"><MinusCircle size={10} /> Negativo</p>
+                  </button>
                   <div className="bg-slate-900 p-6 rounded-3xl shadow-xl text-white">
                     <p className="text-[9px] font-black text-blue-400 uppercase tracking-widest">Eficiência Geral Acumulada</p>
                     <p className="text-4xl font-black mt-2">{dashboardMetrics.efficiency.toFixed(1)}%</p>
@@ -2510,45 +2555,45 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                           <div className="overflow-x-auto">
                             <table className="w-full text-xs">
                               <thead className="text-slate-400 uppercase tracking-widest">
-                                  <tr className="text-left border-b border-slate-100">
-                                    {historyDetail.type !== 'seller' && <th className="py-2 pr-4">Vendedor</th>}
-                                    <th className="py-2 pr-4">Produto</th>
-                                    <th className="py-2 pr-4 text-center">Vendido</th>
-                                    <th className="py-2 pr-4 text-center">Ignorado</th>
-                                    <th className="py-2 pr-4 text-center">Valor Unit.</th>
-                                    <th className="py-2 pr-4 text-center">Total</th>
-                                    <th className="py-2 pr-4">Quando</th>
-                                  </tr>
-                                </thead>
-                                <tbody className="divide-y divide-slate-100">
-                                  {historyDetailItems.map((rec, idx) => (
-                                    <tr key={`${rec.reduced_code}-${rec.seller_name}-${idx}`} className="text-slate-700">
-                                      {historyDetail.type !== 'seller' && (
+                                <tr className="text-left border-b border-slate-100">
+                                  {historyDetail.type !== 'seller' && <th className="py-2 pr-4">Vendedor</th>}
+                                  <th className="py-2 pr-4">Produto</th>
+                                  <th className="py-2 pr-4 text-center">Vendido</th>
+                                  <th className="py-2 pr-4 text-center">Ignorado</th>
+                                  <th className="py-2 pr-4 text-center">Valor Unit.</th>
+                                  <th className="py-2 pr-4 text-center">Total</th>
+                                  <th className="py-2 pr-4">Quando</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100">
+                                {historyDetailItems.map((rec, idx) => (
+                                  <tr key={`${rec.reduced_code}-${rec.seller_name}-${idx}`} className="text-slate-700">
+                                    {historyDetail.type !== 'seller' && (
                                       <td className="py-3 pr-4 font-bold uppercase text-[10px]">{rec.seller_name || '-'}</td>
                                     )}
                                     <td className="py-3 pr-4">
                                       <div className="font-semibold">{rec.product_name || '-'}</div>
                                       <div className="text-[10px] text-slate-400 font-mono">RED: {rec.reduced_code}</div>
                                     </td>
-                                      <td className="py-3 pr-4 text-center">
-                                        <span className="inline-flex min-w-[32px] justify-center bg-green-50 text-green-700 px-2 py-0.5 rounded-md font-black text-[10px]">
-                                          {Number(rec.qty_sold_pv || 0)}
-                                        </span>
-                                      </td>
-                                      <td className="py-3 pr-4 text-center">
-                                        <span className="inline-flex min-w-[32px] justify-center bg-red-50 text-red-700 px-2 py-0.5 rounded-md font-black text-[10px]">
-                                          {Number(rec.qty_ignored || 0)}
-                                        </span>
-                                      </td>
-                                      <td className="py-3 pr-4 text-center text-[10px] font-bold text-slate-600">
-                                        {formatCurrency(getInventoryCostUnitByReduced(rec.reduced_code))}
-                                      </td>
-                                      <td className="py-3 pr-4 text-center text-[10px] font-bold text-slate-600">
-                                        {formatCurrency(getInventoryCostUnitByReduced(rec.reduced_code) * Number(rec.qty_sold_pv || 0))}
-                                      </td>
-                                      <td className="py-3 pr-4 text-[11px] text-slate-500">{formatHistoryDate(rec.finalized_at)}</td>
-                                    </tr>
-                                  ))}
+                                    <td className="py-3 pr-4 text-center">
+                                      <span className="inline-flex min-w-[32px] justify-center bg-green-50 text-green-700 px-2 py-0.5 rounded-md font-black text-[10px]">
+                                        {Number(rec.qty_sold_pv || 0)}
+                                      </span>
+                                    </td>
+                                    <td className="py-3 pr-4 text-center">
+                                      <span className="inline-flex min-w-[32px] justify-center bg-red-50 text-red-700 px-2 py-0.5 rounded-md font-black text-[10px]">
+                                        {Number(rec.qty_ignored || 0)}
+                                      </span>
+                                    </td>
+                                    <td className="py-3 pr-4 text-center text-[10px] font-bold text-slate-600">
+                                      {formatCurrency(getInventoryCostUnitByReduced(rec.reduced_code))}
+                                    </td>
+                                    <td className="py-3 pr-4 text-center text-[10px] font-bold text-slate-600">
+                                      {formatCurrency(getInventoryCostUnitByReduced(rec.reduced_code) * Number(rec.qty_sold_pv || 0))}
+                                    </td>
+                                    <td className="py-3 pr-4 text-[11px] text-slate-500">{formatHistoryDate(rec.finalized_at)}</td>
+                                  </tr>
+                                ))}
                               </tbody>
                             </table>
                           </div>
@@ -2588,13 +2633,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                               <span className="text-[8px] font-black text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-200">{s.neutral} N</span>
                               <span className="text-[8px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded border border-red-100">-{s.negative} ERR</span>
                             </div>
-                              <p className="text-[9px] font-bold text-blue-600 mt-2 uppercase tracking-widest">Saldo: {s.score}</p>
-                              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
-                                Custo: {formatCurrency(s.positiveCost || 0)} / {formatCurrency(s.negativeCost || 0)}
-                              </p>
-                            </div>
-                          </button>
-                        ))}
+                            <p className="text-[9px] font-bold text-blue-600 mt-2 uppercase tracking-widest">Saldo: {s.score}</p>
+                            <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">
+                              Custo: {formatCurrency(s.positiveCost || 0)} / {formatCurrency(s.negativeCost || 0)}
+                            </p>
+                          </div>
+                        </button>
+                      ))}
                     </div>
                   )}
                 </div>

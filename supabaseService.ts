@@ -940,15 +940,10 @@ export async function fetchLatestAudit(branch: string): Promise<DbAuditSession |
 
 export async function upsertAuditSession(session: DbAuditSession): Promise<DbAuditSession | null> {
   try {
-    const safeData =
-      session.data && typeof session.data === 'object' && (session.data as any).termDrafts
-        ? (() => {
-            const { termDrafts, ...rest } = session.data as any;
-            return rest;
-          })()
-        : session.data;
+    const safeData = session.data;
+
     const payload: any = {
-      branch: session.branch,
+      branch: String(session.branch), // Ensure string
       audit_number: session.audit_number,
       status: session.status,
       data: safeData,
@@ -957,6 +952,7 @@ export async function upsertAuditSession(session: DbAuditSession): Promise<DbAud
       updated_at: new Date().toISOString()
     };
 
+    // If ID exists, we try to use it, but onConflict should handle the identity based on branch/number
     if (session.id) {
       payload.id = session.id;
     }
@@ -1017,89 +1013,28 @@ export async function fetchActiveSalesReport(companyId: string, branch: string):
 }
 
 export async function fetchAuditTermDrafts(branch: string, auditNumber: number): Promise<DbAuditTermDraft[]> {
-  try {
-    const { data, error } = await supabase
-      .from('audit_term_drafts')
-      .select('*')
-      .eq('branch', branch)
-      .eq('audit_number', auditNumber)
-      .order('updated_at', { ascending: false });
-
-    if (error) throw error;
-    return data || [];
-  } catch (error) {
-    console.error('Error fetching audit term drafts:', error);
-    return [];
-  }
+  // Persistence consolidated in audit_sessions table (data field)
+  return [];
 }
 
 export async function upsertAuditTermDrafts(drafts: DbAuditTermDraft[]): Promise<boolean> {
-  if (!drafts || drafts.length === 0) return true;
-  try {
-    const payload = drafts.map(d => ({
-      branch: d.branch,
-      audit_number: d.audit_number,
-      term_key: d.term_key,
-      payload: d.payload,
-      user_email: d.user_email,
-      updated_at: new Date().toISOString()
-    }));
-    const { error } = await supabase
-      .from('audit_term_drafts')
-      .upsert(payload, { onConflict: 'branch,audit_number,term_key' });
-    if (error) throw error;
-    return true;
-  } catch (error) {
-    console.error('Error upserting audit term drafts:', error);
-    return false;
-  }
+  // Persistence consolidated in audit_sessions table (data field)
+  return true;
 }
 
 export async function deleteAuditTermDraftsForAudit(branch: string, auditNumber: number): Promise<boolean> {
-  try {
-    const { error } = await supabase
-      .from('audit_term_drafts')
-      .delete()
-      .eq('branch', branch)
-      .eq('audit_number', auditNumber);
-
-    if (error) throw error;
-    return true;
-  } catch (error) {
-    console.error('Error deleting audit term drafts:', error);
-    return false;
-  }
+  // Persistence consolidated in audit_sessions table (data field)
+  return true;
 }
 
 export async function fetchAuditPartialTerms(branch: string, auditNumber: number): Promise<DbAuditPartialTerm[]> {
-  try {
-    const { data, error } = await supabase
-      .from('audit_partial_terms')
-      .select('*')
-      .eq('branch', branch)
-      .eq('audit_number', auditNumber)
-      .order('completed_at', { ascending: false });
-
-    if (error) throw error;
-    return data || [];
-  } catch (error) {
-    console.error('Error fetching audit partial terms:', error);
-    return [];
-  }
+  // Persistence consolidated in audit_sessions table (data field)
+  return [];
 }
 
 export async function upsertAuditPartialTerms(terms: DbAuditPartialTerm[]): Promise<boolean> {
-  if (!terms || terms.length === 0) return true;
-  try {
-    const { error } = await supabase
-      .from('audit_partial_terms')
-      .upsert(terms, { onConflict: 'branch,audit_number,batch_id,group_id,dept_id,cat_id' });
-    if (error) throw error;
-    return true;
-  } catch (error) {
-    console.error('Error upserting audit partial terms:', error);
-    return false;
-  }
+  // Persistence consolidated in audit_sessions table (data field)
+  return true;
 }
 
 export async function deleteAuditPartialTerms(
@@ -1109,47 +1044,16 @@ export async function deleteAuditPartialTerms(
   deptId?: string,
   catId?: string
 ): Promise<boolean> {
-  try {
-    let query = supabase
-      .from('audit_partial_terms')
-      .delete()
-      .eq('branch', branch)
-      .eq('audit_number', auditNumber)
-      .eq('group_id', groupId);
-
-    if (catId !== undefined) {
-      query = query.eq('cat_id', catId);
-      if (deptId !== undefined) query = query.eq('dept_id', deptId);
-    } else if (deptId !== undefined) {
-      query = query.eq('dept_id', deptId);
-    }
-
-    const { error } = await query;
-    if (error) throw error;
-    return true;
-  } catch (error) {
-    console.error('Error deleting audit partial terms:', error);
-    return false;
-  }
+  // Persistence consolidated in audit_sessions table (data field)
+  return true;
 }
 
 export async function deleteAuditPartialTermsForAudit(
   branch: string,
   auditNumber: number
 ): Promise<boolean> {
-  try {
-    const { error } = await supabase
-      .from('audit_partial_terms')
-      .delete()
-      .eq('branch', branch)
-      .eq('audit_number', auditNumber);
-
-    if (error) throw error;
-    return true;
-  } catch (error) {
-    console.error('Error deleting audit partial terms (audit):', error);
-    return false;
-  }
+  // Persistence consolidated in audit_sessions table (data field)
+  return true;
 }
 
 export async function upsertActiveSalesReport(report: DbActiveSalesReport): Promise<boolean> {

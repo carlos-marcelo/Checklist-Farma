@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package } from 'lucide-react';
+import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package, ArrowRight, ShieldCheck, HelpCircle, Info, LayoutGrid, UserCircle, FileSearch, ChevronDown, Calendar, RefreshCw, UserCircle2, Plus, SearchX } from 'lucide-react';
 import { CHECKLISTS as BASE_CHECKLISTS, THEMES, ACCESS_MODULES, ACCESS_LEVELS, INPUT_TYPE_LABELS, generateId } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem, ThemeColor, AppConfig, User, ReportHistoryItem, StockConferenceHistoryItem, CompanyArea, AccessLevelId, AccessModule, AccessLevelMeta, UserRole, StockConferenceSummary } from './types';
 import PreVencidosManager from './components/preVencidos/PreVencidosManager';
@@ -591,6 +591,7 @@ const DateInput = ({ value, onChange, theme, hasError, disabled }: { value: stri
     const [day, setDay] = useState('');
     const [month, setMonth] = useState('');
     const [year, setYear] = useState('');
+    const [isFocused, setIsFocused] = useState(false);
 
     useEffect(() => {
         if (value) {
@@ -608,45 +609,103 @@ const DateInput = ({ value, onChange, theme, hasError, disabled }: { value: stri
     }, [value]);
 
     const updateDate = (d: string, m: string, y: string) => {
-        setDay(d);
-        setMonth(m);
-        setYear(y);
-        if (d && m && y) {
+        if (d && m && y && y.length === 4) {
             onChange(`${d}/${m}/${y}`);
-        } else {
-            onChange('');
+        }
+        // Don't clear immediately to allow typing flow
+    };
+
+    const dayRef = useRef<HTMLInputElement>(null);
+    const monthRef = useRef<HTMLInputElement>(null);
+    const yearRef = useRef<HTMLInputElement>(null);
+
+    const handleDayChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        let val = e.target.value.replace(/\D/g, '');
+        if (val.length > 2) val = val.slice(0, 2);
+        setDay(val);
+        if (val.length === 2) {
+            monthRef.current?.focus();
+        }
+        updateDate(val, month, year);
+    };
+
+    const handleMonthChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        let val = e.target.value.replace(/\D/g, '');
+        if (val.length > 2) val = val.slice(0, 2);
+        setMonth(val);
+        if (val.length === 2) {
+            yearRef.current?.focus();
+        }
+        if (val.length === 0) {
+            dayRef.current?.focus();
+        }
+        updateDate(day, val, year);
+    };
+
+    const handleYearChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        let val = e.target.value.replace(/\D/g, '');
+        if (val.length > 4) val = val.slice(0, 4);
+        setYear(val);
+        if (val.length === 4) {
+            updateDate(day, month, val);
+        }
+        if (val.length === 0) {
+            monthRef.current?.focus();
         }
     };
 
-    const days = Array.from({ length: 31 }, (_, i) => (i + 1).toString().padStart(2, '0'));
-    const months = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
-    const years = Array.from({ length: 10 }, (_, i) => (new Date().getFullYear() - 1 + i).toString());
-
-    const selectClass = `appearance-none border ${hasError ? 'border-red-500 bg-red-50 text-red-900' : 'border-gray-200 bg-gray-50 text-gray-900'} rounded-lg p-2.5 focus:ring-2 ${theme.ring} focus:border-transparent outline-none shadow-sm transition-all hover:bg-white cursor-pointer font-medium ${disabled ? 'opacity-60 cursor-not-allowed bg-gray-100' : ''}`;
-
     return (
-        <div className="flex gap-3">
-            <div className="flex flex-col w-20">
-                <label className="text-[10px] uppercase font-bold text-gray-400 mb-1 tracking-wider">Dia</label>
-                <select value={day} onChange={(e) => updateDate(e.target.value, month, year)} className={selectClass} disabled={disabled}>
-                    <option value="">--</option>
-                    {days.map(d => <option key={d} value={d}>{d}</option>)}
-                </select>
+        <div className={`flex items-center gap-2 bg-gray-50 border rounded-xl p-2.5 transition-all duration-300 ${hasError
+            ? 'border-red-300 ring-2 ring-red-100'
+            : isFocused
+                ? 'border-blue-400 ring-4 ring-blue-500/10 shadow-md transform -translate-y-0.5'
+                : 'border-gray-200 hover:border-blue-300 hover:shadow-sm'
+            } ${disabled ? 'opacity-60 bg-gray-100 cursor-not-allowed' : ''}`}>
+            <div className="relative flex-1">
+                <input
+                    ref={dayRef}
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="DD"
+                    value={day}
+                    onChange={handleDayChange}
+                    onFocus={() => setIsFocused(true)}
+                    onBlur={() => setIsFocused(false)}
+                    disabled={disabled}
+                    className="w-full text-center bg-transparent outline-none font-mono text-gray-700 placeholder-gray-300 font-medium"
+                />
             </div>
-            <div className="flex flex-col w-24">
-                <label className="text-[10px] uppercase font-bold text-gray-400 mb-1 tracking-wider">Mês</label>
-                <select value={month} onChange={(e) => updateDate(day, e.target.value, year)} className={selectClass} disabled={disabled}>
-                    <option value="">--</option>
-                    {months.map((m, i) => <option key={m} value={(i + 1).toString().padStart(2, '0')}>{m}</option>)}
-                </select>
+            <span className="text-gray-300 font-light text-lg">/</span>
+            <div className="relative flex-1">
+                <input
+                    ref={monthRef}
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="MM"
+                    value={month}
+                    onChange={handleMonthChange}
+                    onFocus={() => setIsFocused(true)}
+                    onBlur={() => setIsFocused(false)}
+                    disabled={disabled}
+                    className="w-full text-center bg-transparent outline-none font-mono text-gray-700 placeholder-gray-300 font-medium"
+                />
             </div>
-            <div className="flex flex-col w-24">
-                <label className="text-[10px] uppercase font-bold text-gray-400 mb-1 tracking-wider">Ano</label>
-                <select value={year} onChange={(e) => updateDate(day, month, e.target.value)} className={selectClass} disabled={disabled}>
-                    <option value="">--</option>
-                    {years.map(y => <option key={y} value={y}>{y}</option>)}
-                </select>
+            <span className="text-gray-300 font-light text-lg">/</span>
+            <div className="relative flex-[1.5]">
+                <input
+                    ref={yearRef}
+                    type="text"
+                    inputMode="numeric"
+                    placeholder="AAAA"
+                    value={year}
+                    onChange={handleYearChange}
+                    onFocus={() => setIsFocused(true)}
+                    onBlur={() => setIsFocused(false)}
+                    disabled={disabled}
+                    className="w-full text-center bg-transparent outline-none font-mono text-gray-700 placeholder-gray-300 font-medium"
+                />
             </div>
+            <Calendar size={16} className={`ml-1 ${isFocused ? 'text-blue-500' : 'text-gray-400'} transition-colors duration-300`} />
         </div>
     );
 };
@@ -788,36 +847,42 @@ const LoginScreen = ({
     };
 
     return (
-        <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4 relative overflow-hidden">
-            {/* Decorative Background */}
-            <div className="absolute inset-0 bg-gradient-to-br from-gray-200 to-gray-50 z-0"></div>
-            <div className="absolute top-0 left-0 w-full h-1/2 bg-gradient-to-br from-[#002b5c] to-[#cc0000] transform -skew-y-6 origin-top-left z-0 shadow-2xl"></div>
+        <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 flex items-center justify-center p-4 relative overflow-hidden">
+            {/* Animated Background Elements */}
+            <div className="absolute inset-0 z-0">
+                <div className="absolute top-0 left-0 w-96 h-96 bg-blue-500/20 rounded-full blur-3xl animate-pulse-slow"></div>
+                <div className="absolute bottom-0 right-0 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl animate-pulse-slow" style={{ animationDelay: '1s' }}></div>
+                <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-96 h-96 bg-pink-500/10 rounded-full blur-3xl animate-pulse-slow" style={{ animationDelay: '2s' }}></div>
+            </div>
+            {/* Decorative Gradient Overlay */}
+            <div className="absolute top-0 left-0 w-full h-1/2 bg-gradient-to-br from-[#002b5c]/30 to-[#cc0000]/20 transform -skew-y-6 origin-top-left z-0"></div>
 
-            <div className="bg-white rounded-3xl shadow-floating w-full max-w-lg overflow-hidden relative z-10 border border-gray-100">
-                <div className="pt-10 pb-6 text-center">
-                    <div className="flex justify-center mb-4">
-                        <div className="w-[6.666rem] h-[6.666rem] filter drop-shadow-md">
+            <div className="glass rounded-3xl shadow-lift-lg w-full max-w-lg overflow-hidden relative z-10 border border-white/20 animate-scale-in">
+                <div className="pt-10 pb-6 text-center relative">
+                    <div className="absolute inset-0 bg-gradient-to-br from-white/5 to-transparent"></div>
+                    <div className="flex justify-center mb-4 relative z-10 animate-bounce-subtle">
+                        <div className="w-[6.666rem] h-[6.666rem] filter drop-shadow-2xl transform transition-transform duration-300 hover:scale-110">
                             <MFLogo className="w-full h-full" />
                         </div>
                     </div>
-                    <h1 className="text-3xl font-extrabold text-gray-800 uppercase tracking-wide"></h1>
-                    <p className="text-gray-500 font-bold tracking-widest text-xs mt-1 uppercase">Gestão & Excelência</p>
+                    <h1 className="text-3xl font-extrabold text-white uppercase tracking-wide drop-shadow-lg"></h1>
+                    <p className="text-white/80 font-bold tracking-widest text-xs mt-1 uppercase drop-shadow-md">Gestão & Excelência</p>
                 </div>
 
-                <div className="p-8 md:p-12 pt-4">
-                    <h2 className="text-xl font-bold text-gray-800 mb-6 text-center border-b border-gray-100 pb-4">
-                        {isForgotPassword ? 'Recuperar Senha' : isRegistering ? 'Criar Nova Conta' : 'Acesso ao Sistema'}
+                <div className="p-8 md:p-12 pt-4 bg-white/90 backdrop-blur-sm rounded-b-3xl">
+                    <h2 className="text-xl font-bold text-gray-800 mb-6 text-center border-b border-gray-200 pb-4 animate-fade-in-up">
+                        {isForgotPassword ? '🔐 Recuperar Senha' : isRegistering ? '✨ Criar Nova Conta' : '🔑 Acesso ao Sistema'}
                     </h2>
 
                     {error && (
-                        <div className="mb-6 p-4 bg-red-50 text-red-700 text-sm font-medium rounded-xl border border-red-100 flex items-center shadow-sm">
-                            <AlertCircle size={18} className="mr-2" />
+                        <div className="mb-6 p-4 bg-red-50 text-red-700 text-sm font-medium rounded-xl border border-red-200 flex items-center shadow-md animate-shake">
+                            <AlertCircle size={18} className="mr-2 flex-shrink-0" />
                             {error}
                         </div>
                     )}
                     {success && (
-                        <div className="mb-6 p-4 bg-green-50 text-green-700 text-sm font-medium rounded-xl border border-green-100 flex items-center shadow-sm">
-                            <CheckCircle size={18} className="mr-2" />
+                        <div className="mb-6 p-4 bg-green-50 text-green-700 text-sm font-medium rounded-xl border border-green-200 flex items-center shadow-md animate-scale-in">
+                            <CheckCircle size={18} className="mr-2 flex-shrink-0 animate-bounce-subtle" />
                             {success}
                         </div>
                     )}
@@ -825,36 +890,45 @@ const LoginScreen = ({
                     <form onSubmit={handleSubmit} className="space-y-5">
                         {isRegistering && (
                             <>
-                                <div className="group">
-                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Nome Completo</label>
+                                <div className="group animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
+                                    <label className="block text-xs font-bold text-gray-600 uppercase mb-2 ml-1 flex items-center gap-1">
+                                        <UserIcon size={12} className="text-blue-500" />
+                                        Nome Completo
+                                    </label>
                                     <input
                                         type="text"
                                         value={name}
                                         onChange={(e) => setName(e.target.value)}
-                                        className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3.5 text-gray-900 focus:bg-white focus:ring-2 focus:ring-[#002b5c] focus:border-transparent transition-all outline-none shadow-inner-light"
-                                        placeholder="Seu nome"
+                                        className="w-full bg-gray-50 border-2 border-gray-200 rounded-xl p-3.5 text-gray-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-300 outline-none shadow-sm hover:border-gray-300 hover:shadow-md"
+                                        placeholder="Seu nome completo"
                                         required={isRegistering}
                                     />
                                 </div>
-                                <div className="group">
-                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Telefone / WhatsApp</label>
+                                <div className="group animate-fade-in-up" style={{ animationDelay: '0.2s' }}>
+                                    <label className="block text-xs font-bold text-gray-600 uppercase mb-2 ml-1 flex items-center gap-1">
+                                        <Phone size={12} className="text-green-500" />
+                                        Telefone / WhatsApp
+                                    </label>
                                     <input
                                         type="tel"
                                         value={phone}
                                         onChange={handlePhoneChange}
                                         onBlur={handlePhoneBlur}
-                                        className={`w-full border rounded-xl p-3.5 text-gray-900 focus:bg-white focus:ring-2 focus:border-transparent transition-all outline-none shadow-inner-light ${phoneError ? 'bg-red-50 border-red-500 focus:ring-red-200' : 'bg-gray-50 border-gray-200 focus:ring-[#002b5c]'}`}
-                                        placeholder="(00) 00000-0000 (Apenas Números)"
+                                        className={`w-full border-2 rounded-xl p-3.5 text-gray-900 focus:bg-white focus:ring-2 focus:border-transparent transition-all duration-300 outline-none shadow-sm hover:shadow-md ${phoneError ? 'bg-red-50 border-red-400 focus:ring-red-300 focus:border-red-400' : 'bg-gray-50 border-gray-200 focus:ring-green-500 focus:border-green-500 hover:border-gray-300'}`}
+                                        placeholder="(00) 00000-0000"
                                         required={isRegistering}
                                     />
-                                    {phoneError && <p className="text-red-500 text-xs mt-1 ml-1 font-bold">{phoneError}</p>}
+                                    {phoneError && <p className="text-red-500 text-xs mt-2 ml-1 font-bold flex items-center gap-1 animate-shake"><AlertCircle size={12} />{phoneError}</p>}
                                 </div>
-                                <div className="group">
-                                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">Empresa que Trabalha</label>
+                                <div className="group animate-fade-in-up" style={{ animationDelay: '0.3s' }}>
+                                    <label className="block text-xs font-bold text-gray-600 uppercase mb-2 ml-1 flex items-center gap-1">
+                                        <Building2 size={12} className="text-purple-500" />
+                                        Empresa que Trabalha
+                                    </label>
                                     <select
                                         value={selectedCompanyForRegistration}
                                         onChange={(e) => setSelectedCompanyForRegistration(e.target.value)}
-                                        className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3.5 text-gray-900 focus:bg-white focus:ring-2 focus:ring-[#002b5c] focus:border-transparent transition-all outline-none shadow-inner-light"
+                                        className="w-full bg-gray-50 border-2 border-gray-200 rounded-xl p-3.5 text-gray-900 focus:bg-white focus:ring-2 focus:ring-purple-500 focus:border-purple-500 transition-all duration-300 outline-none shadow-sm hover:border-gray-300 hover:shadow-md cursor-pointer"
                                         required={isRegistering}
                                     >
                                         <option value="">-- Selecione a Empresa --</option>
@@ -866,13 +940,13 @@ const LoginScreen = ({
                             </>
                         )}
 
-                        <div className="group">
-                            <label className="block text-xs font-bold text-gray-500 uppercase mb-1 ml-1">E-mail</label>
+                        <div className="group animate-fade-in-up" style={{ animationDelay: isRegistering ? '0.4s' : '0.1s' }}>
+                            <label className="block text-xs font-bold text-gray-600 uppercase mb-2 ml-1">E-mail</label>
                             <input
                                 type="email"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
-                                className="w-full bg-gray-50 border border-gray-200 rounded-xl p-3.5 text-gray-900 focus:bg-white focus:ring-2 focus:ring-[#002b5c] focus:border-transparent transition-all outline-none shadow-inner-light"
+                                className="w-full bg-gray-50 border-2 border-gray-200 rounded-xl p-3.5 text-gray-900 focus:bg-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-300 outline-none shadow-sm hover:border-gray-300 hover:shadow-md"
                                 placeholder="nome@exemplo.com"
                                 required
                             />
@@ -927,12 +1001,13 @@ const LoginScreen = ({
 
                         {/* Forgot Password Link */}
                         {!isRegistering && !isForgotPassword && (
-                            <div className="flex justify-end">
+                            <div className="flex justify-end animate-fade-in-up" style={{ animationDelay: '0.3s' }}>
                                 <button
                                     type="button"
                                     onClick={() => { setIsForgotPassword(true); setError(''); setSuccess(''); }}
-                                    className="text-sm font-semibold text-blue-600 hover:text-blue-800 transition-colors"
+                                    className="text-sm font-semibold text-blue-600 hover:text-blue-700 transition-all duration-300 hover:underline underline-offset-2 flex items-center gap-1 group"
                                 >
+                                    <Lock size={14} className="transition-transform duration-300 group-hover:rotate-12" />
                                     Esqueci minha senha
                                 </button>
                             </div>
@@ -940,9 +1015,27 @@ const LoginScreen = ({
 
                         <button
                             type="submit"
-                            className={`w-full bg-gradient-to-r from-[#002b5c] to-[#004a8f] text-white font-bold text-lg py-4 rounded-xl hover:from-[#001a3d] hover:to-[#003366] transition-all shadow-lg hover:shadow-xl hover:-translate-y-1 transform active:scale-95 mt-4 ${shakeButton ? 'animate-shake bg-red-600 from-red-600 to-red-700 hover:from-red-600 hover:to-red-700' : ''}`}
+                            className={`w-full bg-gradient-to-r from-blue-600 via-blue-700 to-purple-600 text-white font-bold text-lg py-4 rounded-xl hover:from-blue-700 hover:via-purple-700 hover:to-purple-700 transition-all duration-300 shadow-lg hover:shadow-2xl hover:shadow-blue-500/50 hover:-translate-y-1 transform active:scale-95 mt-6 ripple relative overflow-hidden group ${shakeButton ? 'animate-shake !bg-gradient-to-r !from-red-600 !to-red-700' : ''}`}
                         >
-                            {isForgotPassword ? 'Enviar Link de Redefinição' : isRegistering ? 'Solicitar Cadastro' : 'Entrar no Sistema'}
+                            <span className="relative z-10 flex items-center justify-center gap-2">
+                                {isForgotPassword ? (
+                                    <>
+                                        <Send size={20} className="transition-transform duration-300 group-hover:scale-110" />
+                                        Enviar Link de Redefinição
+                                    </>
+                                ) : isRegistering ? (
+                                    <>
+                                        <UserPlus size={20} className="transition-transform duration-300 group-hover:scale-110" />
+                                        Solicitar Cadastro
+                                    </>
+                                ) : (
+                                    <>
+                                        <ArrowRight size={20} className="transition-transform duration-300 group-hover:translate-x-1" />
+                                        Entrar no Sistema
+                                    </>
+                                )}
+                            </span>
+                            <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 transform -skew-x-12 -translate-x-full group-hover:translate-x-full transition-transform duration-700"></div>
                         </button>
                     </form>
 
@@ -1029,6 +1122,9 @@ const App: React.FC = () => {
     const [loadingReportId, setLoadingReportId] = useState<string | null>(null);
     const [loadingStockReportId, setLoadingStockReportId] = useState<string | null>(null);
     const [historyFilterUser, setHistoryFilterUser] = useState<string>('all');
+    const [historySearch, setHistorySearch] = useState('');
+    const [historyAreaFilter, setHistoryAreaFilter] = useState('all');
+    const [historyDateRange, setHistoryDateRange] = useState<string>('all');
     const [isReloadingReports, setIsReloadingReports] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [stockConferenceReportsRaw, setStockConferenceReportsRaw] = useState<SupabaseService.DbStockConferenceReport[]>([]);
@@ -2873,17 +2969,67 @@ const App: React.FC = () => {
     const handleStockAreaFilterChange = (value: string) => setStockAreaFilter(value);
 
     const getFilteredHistory = () => {
+        let filtered = reportHistory;
+
+        // 1. Base User Filter (Permissions)
         if (canModerateHistory) {
-            if (historyFilterUser === 'all') return reportHistory;
-            return reportHistory.filter(r => r.userEmail === historyFilterUser);
+            // Masters can see all, or filter by specific user
+            if (historyFilterUser !== 'all') {
+                filtered = filtered.filter(r => r.userEmail === historyFilterUser);
+            }
+        } else {
+            // Regular users see only their own (plus allowed overrides)
+            const allowed = new Set<string>(['asconavietagestor@gmail.com']);
+            if (currentUser?.email) allowed.add(currentUser.email);
+
+            // First restrict to allowed emails
+            filtered = filtered.filter(r => allowed.has(r.userEmail));
+
+            // Then apply user filter if they selected one (though UI usually hides this for non-masters, logic remains safe)
+            if (historyFilterUser !== 'all' && allowed.has(historyFilterUser)) {
+                filtered = filtered.filter(r => r.userEmail === historyFilterUser);
+            } else if (historyFilterUser !== 'all') {
+                // Tried to filter by someone not allowed
+                return [];
+            }
         }
 
-        const allowed = new Set<string>(['asconavietagestor@gmail.com']);
-        if (currentUser?.email) allowed.add(currentUser.email);
-        const base = reportHistory.filter(r => allowed.has(r.userEmail));
-        if (historyFilterUser === 'all') return base;
-        if (!allowed.has(historyFilterUser)) return [];
-        return base.filter(r => r.userEmail === historyFilterUser);
+        // 2. Filter by Search (Company Name)
+        if (historySearch.trim()) {
+            const searchLower = historySearch.toLowerCase();
+            filtered = filtered.filter(r => (r.companyName || '').toLowerCase().includes(searchLower));
+        }
+
+        // 3. Filter by Area
+        if (historyAreaFilter !== 'all') {
+            filtered = filtered.filter(r => r.area === historyAreaFilter);
+        }
+
+        // 4. Filter by Date Range
+        if (historyDateRange !== 'all') {
+            const now = new Date();
+            const todayStart = new Date(now.setHours(0, 0, 0, 0));
+
+            filtered = filtered.filter(r => {
+                const reportDate = new Date(r.createdAt);
+                if (isNaN(reportDate.getTime())) return true;
+
+                if (historyDateRange === 'today') {
+                    return reportDate >= todayStart;
+                } else if (historyDateRange === 'week') {
+                    const weekAgo = new Date();
+                    weekAgo.setDate(now.getDate() - 7);
+                    return reportDate >= weekAgo;
+                } else if (historyDateRange === 'month') {
+                    const monthAgo = new Date();
+                    monthAgo.setMonth(now.getMonth() - 1);
+                    return reportDate >= monthAgo;
+                }
+                return true;
+            });
+        }
+
+        return filtered;
     };
 
     // --- RENDER ---
@@ -2891,14 +3037,58 @@ const App: React.FC = () => {
     // Loading Screen
     if (isLoadingData) {
         return (
-            <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 flex items-center justify-center">
-                <div className="text-center">
-                    <div className="w-[6.666rem] h-[6.666rem] mx-auto mb-6">
-                        <MFLogo className="w-full h-full animate-pulse" />
+            <div className="min-h-screen relative overflow-hidden flex items-center justify-center"
+                style={{ background: 'linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 30%, #2563eb 60%, #0ea5e9 100%)' }}>
+                {/* Animated background orbs */}
+                <div className="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] rounded-full opacity-20 animate-pulse"
+                    style={{ background: 'radial-gradient(circle, #60a5fa, transparent)', animationDuration: '3s' }}></div>
+                <div className="absolute bottom-[-10%] right-[-10%] w-[600px] h-[600px] rounded-full opacity-15 animate-pulse"
+                    style={{ background: 'radial-gradient(circle, #818cf8, transparent)', animationDuration: '4s', animationDelay: '1s' }}></div>
+                <div className="absolute top-[40%] right-[10%] w-[300px] h-[300px] rounded-full opacity-10 animate-pulse"
+                    style={{ background: 'radial-gradient(circle, #38bdf8, transparent)', animationDuration: '5s', animationDelay: '0.5s' }}></div>
+
+                {/* Glassmorphism card */}
+                <div className="relative z-10 text-center px-12 py-14 rounded-3xl"
+                    style={{
+                        background: 'rgba(255, 255, 255, 0.1)',
+                        backdropFilter: 'blur(20px)',
+                        WebkitBackdropFilter: 'blur(20px)',
+                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                        boxShadow: '0 25px 50px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255,255,255,0.2)'
+                    }}>
+                    {/* Logo */}
+                    <div className="w-28 h-28 mx-auto mb-8 relative">
+                        <div className="absolute inset-0 rounded-full animate-ping opacity-30"
+                            style={{ background: 'rgba(255,255,255,0.3)', animationDuration: '2s' }}></div>
+                        <div className="relative w-full h-full rounded-full p-3"
+                            style={{ background: 'rgba(255,255,255,0.15)', border: '2px solid rgba(255,255,255,0.3)' }}>
+                            <MFLogo className="w-full h-full" />
+                        </div>
                     </div>
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-white mx-auto mb-4"></div>
-                    <p className="text-white font-bold text-lg">Carregando dados...</p>
-                    <p className="text-white/80 text-sm mt-2">Conectando ao banco de dados</p>
+
+                    {/* Premium spinner */}
+                    <div className="relative w-16 h-16 mx-auto mb-8">
+                        <div className="absolute inset-0 rounded-full border-4 border-white/20"></div>
+                        <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-white animate-spin"></div>
+                        <div className="absolute inset-2 rounded-full border-4 border-transparent border-t-blue-300 animate-spin"
+                            style={{ animationDuration: '0.8s', animationDirection: 'reverse' }}></div>
+                    </div>
+
+                    {/* Text */}
+                    <h2 className="text-white font-bold text-2xl mb-2 tracking-tight">
+                        Carregando dados...
+                    </h2>
+                    <p className="text-white/70 text-sm font-medium">
+                        Conectando ao banco de dados
+                    </p>
+
+                    {/* Progress dots */}
+                    <div className="flex items-center justify-center gap-2 mt-6">
+                        {[0, 1, 2, 3].map(i => (
+                            <div key={i} className="w-2 h-2 rounded-full bg-white/60 animate-bounce"
+                                style={{ animationDelay: `${i * 0.15}s`, animationDuration: '1s' }}></div>
+                        ))}
+                    </div>
                 </div>
             </div>
         );
@@ -3056,6 +3246,7 @@ const App: React.FC = () => {
                                 userName={currentUser?.name || ''}
                                 userRole={currentUser?.role || 'USER'}
                                 companies={companies}
+                                onLogout={handleLogout}
                             />
                         </div>
                     )}
@@ -3073,337 +3264,361 @@ const App: React.FC = () => {
 
                     {/* --- SETTINGS VIEW --- */}
                     {currentView === 'settings' && (
-                        <div className="max-w-4xl mx-auto space-y-8 animate-fade-in relative pb-24">
+                        <div className="max-w-5xl mx-auto space-y-10 animate-fade-in relative pb-32">
 
-                            {/* Appearance Settings */}
-                            <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
-                                <h2 className="text-xl font-bold text-gray-800 mb-8 flex items-center gap-3 border-b border-gray-100 pb-4">
-                                    <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
-                                        <Palette size={24} className={currentTheme.text} />
+                            {/* Settings Header Block */}
+                            <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-4">
+                                <div>
+                                    <h1 className="text-4xl font-black text-gray-900 tracking-tight leading-tight">Configurações</h1>
+                                    <p className="text-gray-500 font-bold text-lg mt-1">Gerencie sua conta, empresa e preferências</p>
+                                </div>
+                                <div className="flex items-center gap-3 bg-white/50 backdrop-blur-md p-2 rounded-2xl border border-white/50 shadow-sm">
+                                    <div className={`p-2 rounded-xl ${currentTheme.lightBg} ${currentTheme.text}`}>
+                                        <Settings size={20} />
                                     </div>
-                                    Área da Empresa
-                                </h2>
+                                    <span className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">Ajustes do Sistema</span>
+                                </div>
+                            </div>
 
-                                <div className="space-y-10">
-                                    {/* Company View for Standard Users (Read Only) */}
-                                    {currentUser.role !== 'MASTER' && currentUser.company_id && (() => {
-                                        const userCompany = companies.find(c => c.id === currentUser.company_id);
-                                        if (!userCompany) return (
-                                            <div className="bg-yellow-50 text-yellow-800 p-4 rounded-lg flex items-center gap-2">
-                                                <AlertTriangle size={20} />
-                                                <p className="text-sm font-medium">Você está vinculado a uma empresa, mas os dados dela não foram encontrados.</p>
-                                            </div>
-                                        );
-
-                                        return (
-                                            <div className="space-y-6 animate-fade-in">
-                                                {/* Read Only Header */}
-                                                <div className="bg-blue-50 border border-blue-100 rounded-lg p-4 flex items-center gap-3">
-                                                    <Building2 className="text-blue-600" size={24} />
-                                                    <div>
-                                                        <p className="text-sm font-bold text-blue-900 uppercase tracking-wide">Sua Empresa</p>
-                                                        <p className="text-xs text-blue-700">Você está visualizando os dados da empresa vinculada à sua conta.</p>
-                                                    </div>
-                                                </div>
-
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                    <div>
-                                                        <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Nome da Empresa</label>
-                                                        <input
-                                                            type="text"
-                                                            value={userCompany.name}
-                                                            disabled
-                                                            className="w-full bg-gray-100 border border-gray-300 rounded-lg p-2.5 text-sm text-gray-600 cursor-not-allowed shadow-inner-light"
-                                                        />
-                                                    </div>
-                                                    <div>
-                                                        <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">CNPJ</label>
-                                                        <input
-                                                            type="text"
-                                                            value={userCompany.cnpj || '-'}
-                                                            disabled
-                                                            className="w-full bg-gray-100 border border-gray-300 rounded-lg p-2.5 text-sm text-gray-600 cursor-not-allowed shadow-inner-light"
-                                                        />
-                                                    </div>
-                                                    <div className="md:col-span-2">
-                                                        <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Telefone</label>
-                                                        <input
-                                                            type="text"
-                                                            value={userCompany.phone || '-'}
-                                                            disabled
-                                                            className="w-full bg-gray-100 border border-gray-300 rounded-lg p-2.5 text-sm text-gray-600 cursor-not-allowed shadow-inner-light"
-                                                        />
-                                                    </div>
-                                                </div>
-
-                                                <div>
-                                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Logo da Empresa</label>
-                                                    <div className="h-32 w-48 bg-gray-100 rounded-xl border border-gray-300 flex items-center justify-center overflow-hidden relative shadow-inner">
-                                                        {userCompany.logo ? (
-                                                            <img src={userCompany.logo} alt="Logo da Empresa" className="max-h-full max-w-full object-contain p-2" />
-                                                        ) : (
-                                                            <div className="text-center text-gray-400">
-                                                                <ImageIcon size={32} className="mx-auto mb-1 opacity-50" />
-                                                                <span className="text-xs block">Sem Logo</span>
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                <div className="h-px bg-gray-200 my-6"></div>
-                                            </div>
-                                        );
-                                    })()}
-
-                                    {/* Company Selection Dropdown (MASTER ONLY) */}
-                                    {canEditCompanies && (
-                                        <div>
-                                            <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Selecionar Empresa para Editar</label>
-                                            <select
-                                                value={selectedCompanyId || ''}
-                                                onChange={(e) => {
-                                                    const companyId = e.target.value;
-                                                    setSelectedCompanyId(companyId);
-                                                    if (companyId) {
-                                                        const company = companies.find(c => c.id === companyId);
-                                                        if (company) {
-                                                            setEditCompanyName(company.name);
-                                                            setEditCompanyCnpj(company.cnpj || '');
-                                                            setEditCompanyPhone(company.phone || '');
-                                                            setEditCompanyLogo(company.logo || null);
-                                                            setEditCompanyAreas(company.areas || []);
-
-                                                            // Bidirectional sync: Update empresa in all checklists
-                                                            setFormData(prev => {
-                                                                const newData = { ...prev };
-                                                                checklists.forEach(cl => {
-                                                                    newData[cl.id] = {
-                                                                        ...(newData[cl.id] || {}),
-                                                                        empresa: company.name
-                                                                    };
-                                                                });
-                                                                return newData;
-                                                            });
-                                                        }
-                                                    }
-                                                }}
-                                                className="w-full bg-white border border-gray-300 rounded-xl p-3 text-gray-900 focus:ring-2 focus:ring-red-500 outline-none shadow-inner-light transition-all"
-                                            >
-                                                <option value="">-- Selecione uma Empresa --</option>
-                                                {companies.map(company => (
-                                                    <option key={company.id} value={company.id}>{company.name}</option>
-                                                ))}
-                                            </select>
-                                            <p className="text-xs text-gray-500 mt-2 font-medium">Selecione a empresa que deseja editar e configurar áreas/filiais.</p>
+                            {/* Appearance & Company (Primary Card) */}
+                            <div className="bg-white/80 backdrop-blur-2xl rounded-[48px] shadow-card border border-white/60 overflow-hidden">
+                                <div className="p-10 md:p-14">
+                                    <h2 className="text-2xl font-black text-gray-900 mb-10 flex items-center gap-4">
+                                        <div className={`p-4 rounded-[24px] ${currentTheme.lightBg} ${currentTheme.text} shadow-inner-light`}>
+                                            <Palette size={32} strokeWidth={2.5} />
                                         </div>
-                                    )}
+                                        Área da Empresa
+                                    </h2>
 
-                                    {/* Editable Company Fields (only show if company is selected AND user is MASTER) */}
-                                    {selectedCompanyId && canEditCompanies && (
-                                        <>
-                                            {/* Basic Company Info */}
-                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                                                <div>
-                                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Nome da Empresa</label>
-                                                    <input
-                                                        type="text"
-                                                        value={editCompanyName}
-                                                        onChange={(e) => setEditCompanyName(e.target.value)}
-                                                        placeholder="Nome da Empresa"
-                                                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
-                                                    />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">CNPJ</label>
-                                                    <input
-                                                        type="text"
-                                                        value={editCompanyCnpj}
-                                                        onChange={(e) => setEditCompanyCnpj(e.target.value)}
-                                                        placeholder="CNPJ (Opcional)"
-                                                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
-                                                    />
-                                                </div>
-                                                <div className="md:col-span-2">
-                                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-2">Telefone</label>
-                                                    <input
-                                                        type="text"
-                                                        value={editCompanyPhone}
-                                                        onChange={(e) => setEditCompanyPhone(e.target.value)}
-                                                        placeholder="Telefone (Opcional)"
-                                                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
-                                                    />
-                                                </div>
-                                            </div>
-
-                                            {/* Logo Upload */}
-                                            <div className="col-span-1 md:col-span-2">
-                                                <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Logo da Empresa</label>
-                                                <div className="flex items-center gap-8 bg-gray-50 p-6 rounded-2xl border border-gray-200">
-                                                    <div className="h-28 w-44 bg-white rounded-xl shadow-sm border border-gray-200 flex items-center justify-center overflow-hidden relative">
-                                                        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/graphy.png')] opacity-10"></div>
-                                                        {editCompanyLogo ? (
-                                                            <img src={editCompanyLogo} alt="Preview" className="h-full w-full object-contain p-2 relative z-10" />
-                                                        ) : (
-                                                            <ImageIcon className="text-gray-300 relative z-10" size={40} />
-                                                        )}
+                                    <div className="space-y-12">
+                                        {/* Company View for Standard Users (Read Only) */}
+                                        {currentUser.role !== 'MASTER' && currentUser.company_id && (() => {
+                                            const userCompany = companies.find(c => c.id === currentUser.company_id);
+                                            if (!userCompany) return (
+                                                <div className="bg-red-50/50 backdrop-blur-sm border border-red-100 rounded-[32px] p-8 flex items-center gap-5">
+                                                    <div className="p-3 bg-red-100 text-red-600 rounded-2xl">
+                                                        <AlertTriangle size={32} />
                                                     </div>
-                                                    <div className="flex flex-col gap-3">
-                                                        <label className="cursor-pointer inline-flex items-center px-5 py-2.5 border border-gray-300 shadow-sm text-sm font-bold rounded-lg text-gray-700 bg-white hover:bg-gray-50 hover:shadow-md transition-all">
-                                                            <Upload size={18} className="mr-2" />
-                                                            Carregar Imagem
-                                                            <input
-                                                                type="file"
-                                                                className="hidden"
-                                                                accept="image/*"
-                                                                onChange={(e) => {
-                                                                    const file = e.target.files?.[0];
-                                                                    if (file) {
-                                                                        const reader = new FileReader();
-                                                                        reader.onloadend = () => {
-                                                                            setEditCompanyLogo(reader.result as string);
-                                                                        };
-                                                                        reader.readAsDataURL(file);
-                                                                    }
-                                                                }}
-                                                            />
-                                                        </label>
-                                                        {editCompanyLogo && (
-                                                            <button
-                                                                onClick={() => setEditCompanyLogo(null)}
-                                                                className="text-sm text-red-600 hover:text-red-800 font-semibold"
-                                                            >
-                                                                Remover Logo
-                                                            </button>
-                                                        )}
-                                                        <p className="text-xs text-gray-400">Recomendado: PNG Transparente</p>
+                                                    <div>
+                                                        <p className="text-lg font-black text-red-900 uppercase tracking-tight">Vínculo não encontrado</p>
+                                                        <p className="text-sm font-bold text-red-700/70">Os dados da empresa vinculada à sua conta não foram localizados no sistema.</p>
                                                     </div>
                                                 </div>
-                                            </div>
+                                            );
 
-                                            {/* Areas and Branches Management */}
-                                            <div>
-                                                <div className="flex justify-between items-center mb-4">
-                                                    <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide">Áreas e Filiais</label>
-                                                    <button
-                                                        onClick={() => {
-                                                            if (editCompanyAreas.length < 5) {
-                                                                setEditCompanyAreas([...editCompanyAreas, { name: '', branches: [] }]);
-                                                            }
-                                                        }}
-                                                        disabled={editCompanyAreas.length >= 5}
-                                                        className={`text-sm font-bold px-4 py-2 rounded-lg transition-all ${editCompanyAreas.length >= 5
-                                                            ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
-                                                            : 'bg-blue-600 text-white hover:bg-blue-700'
-                                                            }`}
-                                                    >
-                                                        + Adicionar Área
-                                                    </button>
-                                                </div>
-                                                <div className="space-y-4">
-                                                    {editCompanyAreas.map((area, index) => (
-                                                        <div key={index} className="bg-gray-50 p-4 rounded-lg border border-gray-200 relative group">
-                                                            <button
-                                                                onClick={() => {
-                                                                    setEditCompanyAreas(editCompanyAreas.filter((_, i) => i !== index));
-                                                                }}
-                                                                className="absolute top-2 right-2 text-red-600 hover:text-red-800 opacity-0 group-hover:opacity-100 transition-opacity"
-                                                            >
-                                                                <X size={18} />
-                                                            </button>
-                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                                                <div>
-                                                                    <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Nome da Área</label>
-                                                                    <input
-                                                                        type="text"
-                                                                        value={area.name}
-                                                                        onChange={(e) => {
-                                                                            const newAreas = [...editCompanyAreas];
-                                                                            newAreas[index].name = e.target.value;
-                                                                            setEditCompanyAreas(newAreas);
-                                                                        }}
-                                                                        placeholder="Ex: Área 1"
-                                                                        className="w-full border border-gray-200 rounded p-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                                                                    />
+                                            return (
+                                                <div className="space-y-10 animate-fade-in">
+                                                    {/* Read Only Status Badge */}
+                                                    <div className="bg-blue-50/50 backdrop-blur-sm border border-blue-100 rounded-[32px] p-6 flex items-center gap-5">
+                                                        <div className="p-4 bg-blue-100/50 text-blue-600 rounded-2xl shadow-inner-light">
+                                                            <Building2 size={28} strokeWidth={2.5} />
+                                                        </div>
+                                                        <div>
+                                                            <p className="text-sm font-black text-blue-900 uppercase tracking-widest">Empresa Vinculada</p>
+                                                            <p className="text-xs font-bold text-blue-700 opacity-60">Visualização restrita à sua organização atual.</p>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                                                        <div className="space-y-3">
+                                                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Razão Social</label>
+                                                            <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[24px] p-5 text-gray-600 font-bold shadow-inner-light flex items-center gap-3">
+                                                                <FileText size={18} className="text-gray-300" />
+                                                                {userCompany.name}
+                                                            </div>
+                                                        </div>
+                                                        <div className="space-y-3">
+                                                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">CNPJ / Documento</label>
+                                                            <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[24px] p-5 text-gray-600 font-bold shadow-inner-light flex items-center gap-3">
+                                                                <ShieldCheck size={18} className="text-gray-300" />
+                                                                {userCompany.cnpj || 'Não informado'}
+                                                            </div>
+                                                        </div>
+                                                        <div className="space-y-3">
+                                                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Contato Corporativo</label>
+                                                            <div className="w-full bg-gray-50/50 border border-gray-100 rounded-[24px] p-5 text-gray-600 font-bold shadow-inner-light flex items-center gap-3">
+                                                                <Phone size={18} className="text-gray-300" />
+                                                                {userCompany.phone || 'Não informado'}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="space-y-4">
+                                                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Identidade Visual</label>
+                                                        <div className="h-40 w-full max-w-sm bg-white rounded-[40px] border border-gray-100 shadow-sm flex items-center justify-center overflow-hidden group transition-all duration-500 hover:shadow-lg">
+                                                            {userCompany.logo ? (
+                                                                <img src={userCompany.logo} alt="Logo da Empresa" className="max-h-24 max-w-[80%] object-contain transition-transform duration-700 group-hover:scale-110" />
+                                                            ) : (
+                                                                <div className="flex flex-col items-center gap-3 opacity-20 group-hover:opacity-30 transition-opacity">
+                                                                    <ImageIcon size={48} className="text-gray-400" />
+                                                                    <span className="text-xs font-black uppercase tracking-widest">Sem Logomarca</span>
                                                                 </div>
-                                                                <div>
-                                                                    <label className="block text-xs font-bold text-gray-600 uppercase mb-1">Filiais (Separadas por ponto e vírgula)</label>
-                                                                    <input
-                                                                        type="text"
-                                                                        defaultValue={area.branches.join('; ')}
-                                                                        onBlur={(e) => {
-                                                                            const newAreas = [...editCompanyAreas];
-                                                                            newAreas[index].branches = e.target.value.split(';').map(b => b.trim()).filter(Boolean);
-                                                                            setEditCompanyAreas(newAreas);
-                                                                        }}
-                                                                        placeholder="Ex: Filial 1; Filial 2; Matriz..."
-                                                                        className="w-full border border-gray-200 rounded p-2 text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-                                                                    />
+                                                            )}
+                                                        </div>
+                                                    </div>
+                                                    <div className="h-px bg-gradient-to-r from-transparent via-gray-100 to-transparent my-10"></div>
+                                                </div>
+                                            );
+                                        })()}
+
+                                        {/* Company Selection Dropdown (MASTER ONLY) */}
+                                        {canEditCompanies && (
+                                            <div className="space-y-8">
+                                                <div className="space-y-4">
+                                                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Explorar Organizações</label>
+                                                    <div className="relative group">
+                                                        <div className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-gray-600 transition-colors">
+                                                            <Search size={22} />
+                                                        </div>
+                                                        <select
+                                                            value={selectedCompanyId || ''}
+                                                            onChange={(e) => {
+                                                                const companyId = e.target.value;
+                                                                setSelectedCompanyId(companyId);
+                                                                if (companyId) {
+                                                                    const company = companies.find(c => c.id === companyId);
+                                                                    if (company) {
+                                                                        setEditCompanyName(company.name);
+                                                                        setEditCompanyCnpj(company.cnpj || '');
+                                                                        setEditCompanyPhone(company.phone || '');
+                                                                        setEditCompanyLogo(company.logo || null);
+                                                                        setEditCompanyAreas(company.areas || []);
+
+                                                                        // Bidirectional sync: Update empresa in all checklists
+                                                                        setFormData(prev => {
+                                                                            const newData = { ...prev };
+                                                                            checklists.forEach(cl => {
+                                                                                newData[cl.id] = {
+                                                                                    ...(newData[cl.id] || {}),
+                                                                                    empresa: company.name
+                                                                                };
+                                                                            });
+                                                                            return newData;
+                                                                        });
+                                                                    }
+                                                                }
+                                                            }}
+                                                            className="w-full bg-white border border-gray-100 rounded-[32px] pl-16 pr-8 py-5 text-lg font-black text-gray-900 focus:ring-4 focus:ring-gray-100 outline-none shadow-sm transition-all appearance-none cursor-pointer"
+                                                        >
+                                                            <option value="">-- Selecione uma Empresa para Gestão --</option>
+                                                            {companies.map(company => (
+                                                                <option key={company.id} value={company.id}>{company.name}</option>
+                                                            ))}
+                                                        </select>
+                                                        <div className="absolute right-6 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                                                            <ChevronDown size={24} />
+                                                        </div>
+                                                    </div>
+                                                    <p className="text-xs text-gray-400 ml-4 font-bold flex items-center gap-2">
+                                                        <Info size={14} className="text-blue-500" />
+                                                        Selecione uma empresa para configurar áreas, filiais e identidade visual.
+                                                    </p>
+                                                </div>
+
+                                                {/* Editable Company Fields (only show if company is selected AND user is MASTER) */}
+                                                {selectedCompanyId && (
+                                                    <div className="space-y-10 pt-8 border-t border-gray-100 animate-slide-up">
+                                                        {/* Basic Company Info */}
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                                            <div className="space-y-3">
+                                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Nome da Empresa</label>
+                                                                <input
+                                                                    type="text"
+                                                                    value={editCompanyName}
+                                                                    onChange={(e) => setEditCompanyName(e.target.value)}
+                                                                    placeholder="Nome da Empresa"
+                                                                    className="w-full bg-gray-50/50 border border-gray-100 rounded-[24px] p-5 text-gray-900 font-bold focus:ring-4 focus:ring-blue-100 outline-none shadow-inner-light transition-all"
+                                                                />
+                                                            </div>
+                                                            <div className="space-y-3">
+                                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">CNPJ / Inscrição</label>
+                                                                <input
+                                                                    type="text"
+                                                                    value={editCompanyCnpj}
+                                                                    onChange={(e) => setEditCompanyCnpj(e.target.value)}
+                                                                    placeholder="CNPJ (Opcional)"
+                                                                    className="w-full bg-gray-50/50 border border-gray-100 rounded-[24px] p-5 text-gray-900 font-bold focus:ring-4 focus:ring-blue-100 outline-none shadow-inner-light transition-all"
+                                                                />
+                                                            </div>
+                                                            <div className="md:col-span-2 space-y-3">
+                                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Telefone de Contato</label>
+                                                                <input
+                                                                    type="text"
+                                                                    value={editCompanyPhone}
+                                                                    onChange={(e) => setEditCompanyPhone(e.target.value)}
+                                                                    placeholder="Telefone (Opcional)"
+                                                                    className="w-full bg-gray-50/50 border border-gray-100 rounded-[24px] p-5 text-gray-900 font-bold focus:ring-4 focus:ring-blue-100 outline-none shadow-inner-light transition-all"
+                                                                />
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Logo Upload */}
+                                                        <div className="space-y-4">
+                                                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Logo Corporativa</label>
+                                                            <div className="flex flex-col md:flex-row items-center gap-10 bg-gray-50/50 p-8 rounded-[40px] border border-gray-100 shadow-inner-light">
+                                                                <div className="h-32 w-48 bg-white rounded-[32px] shadow-sm border border-gray-100 flex items-center justify-center overflow-hidden relative group">
+                                                                    {editCompanyLogo ? (
+                                                                        <img src={editCompanyLogo} alt="Preview" className="h-full w-full object-contain p-4 group-hover:scale-110 transition-transform duration-500" />
+                                                                    ) : (
+                                                                        <ImageIcon className="text-gray-200" size={48} />
+                                                                    )}
+                                                                </div>
+                                                                <div className="flex flex-col gap-4 items-center md:items-start">
+                                                                    <label className="cursor-pointer inline-flex items-center gap-3 px-8 py-4 bg-white border border-gray-100 shadow-sm text-sm font-black rounded-2xl text-gray-700 hover:bg-gray-50 hover:shadow-md hover:-translate-y-0.5 transition-all">
+                                                                        <Upload size={20} className="text-blue-500" />
+                                                                        Alterar Logomarca
+                                                                        <input
+                                                                            type="file"
+                                                                            className="hidden"
+                                                                            accept="image/*"
+                                                                            onChange={(e) => {
+                                                                                const file = e.target.files?.[0];
+                                                                                if (file) {
+                                                                                    const reader = new FileReader();
+                                                                                    reader.onloadend = () => {
+                                                                                        setEditCompanyLogo(reader.result as string);
+                                                                                    };
+                                                                                    reader.readAsDataURL(file);
+                                                                                }
+                                                                            }}
+                                                                        />
+                                                                    </label>
+                                                                    {editCompanyLogo && (
+                                                                        <button
+                                                                            onClick={() => setEditCompanyLogo(null)}
+                                                                            className="text-xs text-red-500 hover:text-red-700 font-black uppercase tracking-widest px-2"
+                                                                        >
+                                                                            Remover Imagem
+                                                                        </button>
+                                                                    )}
                                                                 </div>
                                                             </div>
                                                         </div>
+
+                                                        {/* Areas and Branches Management */}
+                                                        <div className="space-y-6">
+                                                            <div className="flex justify-between items-center px-2">
+                                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Canais e Regionais</label>
+                                                                <button
+                                                                    onClick={() => {
+                                                                        if (editCompanyAreas.length < 5) {
+                                                                            setEditCompanyAreas([...editCompanyAreas, { name: '', branches: [] }]);
+                                                                        }
+                                                                    }}
+                                                                    disabled={editCompanyAreas.length >= 5}
+                                                                    className={`flex items-center gap-2 text-xs font-black uppercase tracking-widest px-5 py-2.5 rounded-xl transition-all shadow-sm ${editCompanyAreas.length >= 5
+                                                                        ? 'bg-gray-100 text-gray-300 cursor-not-allowed'
+                                                                        : 'bg-blue-600 text-white hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-500/20'
+                                                                        }`}
+                                                                >
+                                                                    <UserPlus size={16} /> Adicionar Área
+                                                                </button>
+                                                            </div>
+                                                            <div className="grid grid-cols-1 gap-4">
+                                                                {editCompanyAreas.map((area, index) => (
+                                                                    <div key={index} className="bg-gray-50/50 p-6 rounded-[32px] border border-gray-100 relative group animate-fade-in shadow-inner-light">
+                                                                        <button
+                                                                            onClick={() => setEditCompanyAreas(editCompanyAreas.filter((_, i) => i !== index))}
+                                                                            className="absolute top-4 right-4 p-2 bg-white/50 text-red-500 hover:bg-red-500 hover:text-white rounded-xl transition-all shadow-sm"
+                                                                        >
+                                                                            <X size={18} />
+                                                                        </button>
+                                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                                            <div className="space-y-2">
+                                                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Nome da Região / Canal</label>
+                                                                                <input
+                                                                                    type="text"
+                                                                                    value={area.name}
+                                                                                    onChange={(e) => {
+                                                                                        const newAreas = [...editCompanyAreas];
+                                                                                        newAreas[index].name = e.target.value;
+                                                                                        setEditCompanyAreas(newAreas);
+                                                                                    }}
+                                                                                    placeholder="Ex: Área 01"
+                                                                                    className="w-full bg-white border border-gray-100 rounded-2xl p-4 text-sm font-bold text-gray-900 focus:ring-4 focus:ring-blue-50/50 outline-none"
+                                                                                />
+                                                                            </div>
+                                                                            <div className="space-y-2">
+                                                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] ml-2">Bandeiras / Filiais (Separadas por ;)</label>
+                                                                                <input
+                                                                                    type="text"
+                                                                                    defaultValue={area.branches.join('; ')}
+                                                                                    onBlur={(e) => {
+                                                                                        const newAreas = [...editCompanyAreas];
+                                                                                        newAreas[index].branches = e.target.value.split(';').map(b => b.trim()).filter(Boolean);
+                                                                                        setEditCompanyAreas(newAreas);
+                                                                                    }}
+                                                                                    placeholder="Filial A; Filial B..."
+                                                                                    className="w-full bg-white border border-gray-100 rounded-2xl p-4 text-sm font-bold text-gray-900 focus:ring-4 focus:ring-blue-50/50 outline-none"
+                                                                                />
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Action Buttons */}
+                                                        <div className="flex justify-end pt-4">
+                                                            <button
+                                                                onClick={async () => {
+                                                                    if (!selectedCompanyId) return;
+                                                                    try {
+                                                                        await updateCompany(selectedCompanyId, {
+                                                                            name: editCompanyName,
+                                                                            cnpj: editCompanyCnpj,
+                                                                            phone: editCompanyPhone,
+                                                                            logo: editCompanyLogo,
+                                                                            areas: editCompanyAreas
+                                                                        });
+                                                                        setCompanies(companies.map(c =>
+                                                                            c.id === selectedCompanyId
+                                                                                ? { ...c, name: editCompanyName, cnpj: editCompanyCnpj, phone: editCompanyPhone, logo: editCompanyLogo, areas: editCompanyAreas }
+                                                                                : c
+                                                                        ));
+                                                                        if (config.pharmacyName === companies.find(c => c.id === selectedCompanyId)?.name) {
+                                                                            setConfig({ pharmacyName: editCompanyName, logo: editCompanyLogo });
+                                                                            await saveConfig({ pharmacy_name: editCompanyName, logo: editCompanyLogo });
+                                                                        }
+                                                                        alert('Alterações salvas com sucesso!');
+                                                                    } catch (error) {
+                                                                        console.error(error);
+                                                                        alert('Erro ao salvar.');
+                                                                    }
+                                                                }
+                                                                }
+                                                                className="flex items-center gap-3 bg-gray-900 hover:bg-black text-white font-black uppercase tracking-widest px-10 py-5 rounded-[24px] shadow-xl hover:shadow-gray-200/50 transition-all hover:-translate-y-1 active:translate-y-0"
+                                                            >
+                                                                <Save size={20} /> Atualizar Registro
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+
+                                        {/* Theme Customization */}
+                                        <div className="pt-12 border-t border-gray-100 mt-12">
+                                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
+                                                <div>
+                                                    <h3 className="text-xl font-black text-gray-900">Personalização Visual</h3>
+                                                    <p className="text-gray-400 font-bold text-sm">Escolha a cor que melhor define sua experiência</p>
+                                                </div>
+                                                <div className="flex gap-4 bg-gray-50/50 p-2 rounded-[28px] border border-gray-100 shadow-inner-light">
+                                                    {(['red', 'green', 'blue', 'yellow'] as ThemeColor[]).map(color => (
+                                                        <button
+                                                            key={color}
+                                                            onClick={() => handleUpdateUserTheme(color)}
+                                                            className={`w-14 h-14 rounded-[20px] shadow-sm border-4 transition-all duration-500 transform hover:scale-110 active:scale-95 ${THEMES[color].bg} ${(currentUser?.preferredTheme || 'blue') === color ? 'border-gray-900 ring-8 ring-gray-100 shadow-lg' : 'border-transparent opacity-60 hover:opacity-100'} `}
+                                                            title={`Tema ${color}`}
+                                                        />
                                                     ))}
                                                 </div>
                                             </div>
-
-                                            {/* Save Button */}
-                                            <div className="flex justify-end pt-4">
-                                                <button
-                                                    onClick={async () => {
-                                                        if (!selectedCompanyId) return;
-                                                        try {
-                                                            // Update company in Supabase
-                                                            await updateCompany(selectedCompanyId, {
-                                                                name: editCompanyName,
-                                                                cnpj: editCompanyCnpj,
-                                                                phone: editCompanyPhone,
-                                                                logo: editCompanyLogo,
-                                                                areas: editCompanyAreas
-                                                            });
-
-                                                            // Update local state
-                                                            setCompanies(companies.map(c =>
-                                                                c.id === selectedCompanyId
-                                                                    ? { ...c, name: editCompanyName, cnpj: editCompanyCnpj, phone: editCompanyPhone, logo: editCompanyLogo, areas: editCompanyAreas }
-                                                                    : c
-                                                            ));
-
-                                                            // Update config if this is the active company
-                                                            if (config.pharmacyName === companies.find(c => c.id === selectedCompanyId)?.name) {
-                                                                const newConfig = { pharmacy_name: editCompanyName, logo: editCompanyLogo };
-                                                                setConfig({ pharmacyName: editCompanyName, logo: editCompanyLogo });
-                                                                await saveConfig(newConfig);
-                                                            }
-
-                                                            alert('Empresa atualizada com sucesso!');
-                                                        } catch (error) {
-                                                            console.error('Erro ao atualizar empresa:', error);
-                                                            alert('Erro ao salvar alterações');
-                                                        }
-                                                    }}
-                                                    className="bg-green-600 hover:bg-green-700 text-white font-bold px-6 py-3 rounded-lg shadow-md hover:shadow-lg transition-all"
-                                                >
-                                                    Salvar Alterações
-                                                </button>
-                                            </div>
-                                        </>
-                                    )}
-
-                                    {/* Theme Color Selection */}
-                                    <div>
-                                        <label className="block text-sm font-bold text-gray-700 uppercase tracking-wide mb-3">Cor do Tema</label>
-                                        <div className="flex gap-4">
-                                            {(['red', 'green', 'blue', 'yellow'] as ThemeColor[]).map(color => (
-                                                <button
-                                                    key={color}
-                                                    onClick={() => handleUpdateUserTheme(color)}
-                                                    className={`w-12 h-12 rounded-xl shadow-md border-2 ${THEMES[color].bg} ${(currentUser?.preferredTheme || 'blue') === color ? 'border-gray-800 scale-110 ring-2 ring-offset-2 ring-gray-300' : 'border-transparent opacity-80 hover:opacity-100'} transition-all transform hover:scale-105`}
-                                                    title={color}
-                                                />
-                                            ))}
                                         </div>
                                     </div>
                                 </div>
                             </div>
-
                             {/* Company Management Section (MASTER only) */}
                             {canEditCompanies && (
                                 <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
@@ -3814,262 +4029,300 @@ const App: React.FC = () => {
                             </div>
 
                             {/* Master User Management */}
+                            {/* Modernized Master User Management */}
                             {canManageUsers && (
-                                <div id="user-management" className="bg-white rounded-2xl shadow-card border border-gray-100 p-8 mt-10">
-                                    <h2 className="text-xl font-bold text-gray-800 mb-8 flex items-center gap-3 border-b border-gray-100 pb-4">
-                                        <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
-                                            <Users size={24} className={currentTheme.text} />
+                                <div id="user-management" className="bg-white/80 backdrop-blur-2xl rounded-[32px] shadow-card border border-white/60 p-8 mt-10">
+                                    <h2 className="text-2xl font-black text-gray-900 mb-8 flex items-center gap-3">
+                                        <div className={`p-2.5 rounded-xl ${currentTheme.lightBg} ${currentTheme.text}`}>
+                                            <Users size={24} />
                                         </div>
-                                        Gerenciamento de Usuários
+                                        Gerenciamento de Equipe
                                     </h2>
 
-                                    {/* Internal User Creation Form */}
-                                    <div className="mb-8 bg-gray-50 p-6 rounded-xl border border-gray-200">
-                                        <h3 className="text-sm font-bold text-gray-700 uppercase mb-4 flex items-center gap-2">
-                                            <UserPlus size={16} /> Adicionar Novo Usuário (Interno)
+                                    {/* Modernized Internal User Creation Form */}
+                                    <div className="mb-8 bg-white/50 backdrop-blur-sm p-8 rounded-[24px] border border-white/60 shadow-sm relative overflow-hidden group">
+                                        <div className="absolute top-0 right-0 w-32 h-32 bg-gradient-to-br from-blue-500/5 to-purple-500/5 rounded-full blur-2xl -mr-10 -mt-10 pointer-events-none"></div>
+
+                                        <h3 className="text-sm font-black text-gray-600 uppercase tracking-widest mb-6 flex items-center gap-2">
+                                            <UserPlus size={16} className="text-gray-400" /> Adicionar Novo Membro
                                         </h3>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
                                             <input
                                                 type="text"
-                                                placeholder="Nome"
+                                                placeholder="Nome Completo"
                                                 value={newUserName}
                                                 onChange={(e) => setNewUserName(e.target.value)}
-                                                className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                                                className="w-full bg-white/70 border border-gray-200 rounded-xl p-3 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400 font-medium"
                                             />
                                             <input
                                                 type="email"
-                                                placeholder="Email"
+                                                placeholder="Email Corporativo"
                                                 value={newUserEmail}
                                                 onChange={(e) => setNewUserEmail(e.target.value)}
-                                                className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                                                className="w-full bg-white/70 border border-gray-200 rounded-xl p-3 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all placeholder:text-gray-400 font-medium"
                                             />
                                             <div className="w-full relative">
                                                 <input
                                                     type="text"
-                                                    placeholder="Telefone"
+                                                    placeholder="Telefone / WhatsApp"
                                                     value={newUserPhone}
                                                     onChange={handleInternalPhoneChange}
                                                     onBlur={handleInternalPhoneBlur}
-                                                    className={`w-full bg-white border rounded-lg p-2.5 text-sm text-gray-900 outline-none ${internalPhoneError ? 'border-red-500 bg-red-50 focus:ring-red-200' : 'border-gray-300 focus:ring-blue-500'}`}
+                                                    className={`w-full bg-white/70 border rounded-xl p-3 text-sm text-gray-900 outline-none transition-all font-medium ${internalPhoneError ? 'border-red-300 bg-red-50/50 focus:ring-red-200' : 'border-gray-200 focus:ring-blue-500/20 focus:border-blue-500'}`}
                                                 />
-                                                {internalPhoneError && <p className="text-red-500 text-[10px] absolute -bottom-4 left-0 font-bold">{internalPhoneError}</p>}
+                                                {internalPhoneError && <p className="text-red-500 text-[10px] absolute -bottom-5 left-1 font-bold flex items-center gap-1"><AlertCircle size={10} /> {internalPhoneError}</p>}
                                             </div>
 
                                             {/* Company Selection */}
-                                            <select
-                                                value={newUserCompanyId}
-                                                onChange={(e) => {
-                                                    setNewUserCompanyId(e.target.value);
-                                                    // Reset area and filial when company changes
-                                                    setNewUserArea('');
-                                                    setNewUserFilial('');
-                                                }}
-                                                className="w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
-                                            >
-                                                <option value="">-- Empresa (Opcional) --</option>
-                                                {companies.map((company: any) => (
-                                                    <option key={company.id} value={company.id}>{company.name}</option>
-                                                ))}
-                                            </select>
+                                            <div className="relative">
+                                                <select
+                                                    value={newUserCompanyId}
+                                                    onChange={(e) => {
+                                                        setNewUserCompanyId(e.target.value);
+                                                        setNewUserArea('');
+                                                        setNewUserFilial('');
+                                                    }}
+                                                    className={`w-full bg-white/70 border border-gray-200 rounded-xl p-3 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none appearance-none font-medium transition-all ${!newUserCompanyId ? 'text-gray-400' : ''}`}
+                                                >
+                                                    <option value="" className="text-gray-400">Selecione a Empresa</option>
+                                                    {companies.map((company: any) => (
+                                                        <option key={company.id} value={company.id} className="text-gray-900">{company.name}</option>
+                                                    ))}
+                                                </select>
+                                                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                                                    <ChevronDown size={14} strokeWidth={3} />
+                                                </div>
+                                            </div>
 
                                             {/* Filial Selection */}
-                                            <select
-                                                value={newUserFilial}
-                                                onChange={(e) => {
-                                                    const selectedFilial = e.target.value;
-                                                    setNewUserFilial(selectedFilial);
-
-                                                    // Auto-populate area based on selected filial
-                                                    const selectedCompany = companies.find((c: any) => c.id === newUserCompanyId);
-                                                    if (selectedCompany && selectedCompany.areas) {
-                                                        const areaForFilial = selectedCompany.areas.find((area: any) =>
-                                                            area.branches && area.branches.includes(selectedFilial)
-                                                        );
-                                                        if (areaForFilial) {
-                                                            setNewUserArea(areaForFilial.name);
+                                            <div className="relative">
+                                                <select
+                                                    value={newUserFilial}
+                                                    onChange={(e) => {
+                                                        const selectedFilial = e.target.value;
+                                                        setNewUserFilial(selectedFilial);
+                                                        const selectedCompany = companies.find((c: any) => c.id === newUserCompanyId);
+                                                        if (selectedCompany && selectedCompany.areas) {
+                                                            const areaForFilial = selectedCompany.areas.find((area: any) =>
+                                                                area.branches && area.branches.includes(selectedFilial)
+                                                            );
+                                                            if (areaForFilial) {
+                                                                setNewUserArea(areaForFilial.name);
+                                                            }
                                                         }
-                                                    }
-                                                }}
-                                                disabled={!newUserCompanyId}
-                                                className={`w-full bg-white border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none ${!newUserCompanyId ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                                            >
-                                                <option value="">-- Filial (Opcional) --</option>
-                                                {(() => {
-                                                    const selectedCompany = companies.find((c: any) => c.id === newUserCompanyId);
-                                                    if (selectedCompany && selectedCompany.areas) {
-                                                        const allBranches = selectedCompany.areas.flatMap((area: any) => area.branches || []);
-                                                        return allBranches.map((branch: string, idx: number) => (
-                                                            <option key={idx} value={branch}>{branch}</option>
-                                                        ));
-                                                    }
-                                                    return null;
-                                                })()}
-                                            </select>
+                                                    }}
+                                                    disabled={!newUserCompanyId}
+                                                    className={`w-full bg-white/70 border border-gray-200 rounded-xl p-3 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none appearance-none font-medium transition-all ${!newUserCompanyId ? 'bg-gray-50 cursor-not-allowed opacity-60' : ''}`}
+                                                >
+                                                    <option value="">Selecione a Filial</option>
+                                                    {(() => {
+                                                        const selectedCompany = companies.find((c: any) => c.id === newUserCompanyId);
+                                                        if (selectedCompany && selectedCompany.areas) {
+                                                            const allBranches = selectedCompany.areas.flatMap((area: any) => area.branches || []);
+                                                            return allBranches.map((branch: string, idx: number) => (
+                                                                <option key={idx} value={branch}>{branch}</option>
+                                                            ));
+                                                        }
+                                                        return null;
+                                                    })()}
+                                                </select>
+                                                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                                                    <ChevronDown size={14} strokeWidth={3} />
+                                                </div>
+                                            </div>
 
-                                            {/* Area (Read-only, auto-populated) */}
+                                            {/* Area (Read-only) */}
                                             <input
                                                 type="text"
-                                                placeholder="Área (Automático)"
+                                                placeholder="Área Automática"
                                                 value={newUserArea}
                                                 readOnly
                                                 disabled
-                                                className="w-full bg-gray-100 border border-gray-300 rounded-lg p-2.5 text-sm text-gray-700 cursor-not-allowed"
+                                                className="w-full bg-gray-50/50 border border-gray-200 rounded-xl p-3 text-sm text-gray-500 cursor-not-allowed font-medium italic"
                                             />
 
-                                            <div className="relative">
+                                            <div className="relative group/pass">
                                                 <input
                                                     type={showNewUserPass ? "text" : "password"}
                                                     placeholder="Senha Provisória"
                                                     value={newUserPass}
                                                     onChange={(e) => setNewUserPass(e.target.value)}
-                                                    className="w-full bg-white border border-gray-300 rounded-lg p-2.5 pr-10 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
+                                                    className="w-full bg-white/70 border border-gray-200 rounded-xl p-3 pr-10 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all font-medium"
                                                 />
                                                 <button
                                                     type="button"
                                                     onClick={() => setShowNewUserPass(!showNewUserPass)}
-                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-600 transition-colors opacity-0 group-hover/pass:opacity-100"
                                                 >
-                                                    {showNewUserPass ? <EyeOff size={18} /> : <Eye size={18} />}
+                                                    {showNewUserPass ? <EyeOff size={16} /> : <Eye size={16} />}
                                                 </button>
                                             </div>
-                                            {/* Added Confirmation Input */}
-                                            <div className="relative">
+
+                                            <div className="relative group/confirm">
                                                 <input
                                                     type={showNewUserConfirmPass ? "text" : "password"}
                                                     placeholder="Confirmar Senha"
                                                     value={newUserConfirmPass}
                                                     onChange={(e) => setNewUserConfirmPass(e.target.value)}
-                                                    className={`w-full bg-white border border-gray-300 rounded-lg p-2.5 pr-10 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none ${newUserPass && newUserConfirmPass && newUserPass !== newUserConfirmPass ? 'border-red-500 bg-red-50' : ''}`}
+                                                    className={`w-full bg-white/70 border border-gray-200 rounded-xl p-3 pr-10 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all font-medium ${newUserPass && newUserConfirmPass && newUserPass !== newUserConfirmPass ? 'border-red-300 bg-red-50/10' : ''}`}
                                                 />
                                                 <button
                                                     type="button"
                                                     onClick={() => setShowNewUserConfirmPass(!showNewUserConfirmPass)}
-                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors"
+                                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-blue-600 transition-colors opacity-0 group-hover/confirm:opacity-100"
                                                 >
-                                                    {showNewUserConfirmPass ? <EyeOff size={18} /> : <Eye size={18} />}
+                                                    {showNewUserConfirmPass ? <EyeOff size={16} /> : <Eye size={16} />}
                                                 </button>
                                             </div>
-                                            <select
-                                                value={newUserRole}
-                                                onChange={(e) => setNewUserRole(e.target.value as 'MASTER' | 'ADMINISTRATIVO' | 'USER')}
-                                                className="w-full border border-gray-300 rounded-lg p-2.5 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none bg-white lg:col-span-3"
-                                            >
-                                                <option value="USER">Criar Perfil: Usuário Comum</option>
-                                                <option value="ADMINISTRATIVO">Criar Perfil: Administrativo</option>
-                                                <option value="MASTER">Criar Perfil: Administrador (Master)</option>
-                                            </select>
+
+                                            <div className="relative lg:col-span-4">
+                                                <select
+                                                    value={newUserRole}
+                                                    onChange={(e) => setNewUserRole(e.target.value as 'MASTER' | 'ADMINISTRATIVO' | 'USER')}
+                                                    className="w-full bg-white/70 border border-gray-200 rounded-xl p-3 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none appearance-none font-bold transition-all"
+                                                >
+                                                    <option value="USER">Usuário Comum (Acesso Padrão)</option>
+                                                    <option value="ADMINISTRATIVO">Administrativo</option>
+                                                    <option value="MASTER">Administrador Master (Acesso Total)</option>
+                                                </select>
+                                                <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                                                    <ChevronDown size={14} strokeWidth={3} />
+                                                </div>
+                                            </div>
                                         </div>
+
                                         <div className="mt-6 flex justify-end">
                                             <button
                                                 onClick={handleCreateUserInternal}
-                                                className={`${internalShake ? 'animate-shake bg-red-600' : 'bg-blue-600 hover:bg-blue-700'} text-white font-bold text-sm px-6 py-2 rounded-lg shadow-sm transition-all`}
+                                                className={`${internalShake ? 'animate-shake bg-red-600' : 'bg-gray-900 hover:bg-black hover:-translate-y-0.5 hover:shadow-lg'} text-white font-bold text-sm px-8 py-3 rounded-xl shadow-md transition-all active:scale-95 flex items-center gap-2`}
                                             >
+                                                <Plus size={16} strokeWidth={3} />
                                                 Criar Usuário
                                             </button>
                                         </div>
                                     </div>
 
-                                    {/* Filter Toolbar */}
-                                    <div className="flex flex-col sm:flex-row gap-4 mb-6">
-                                        <div className="flex items-center gap-2 flex-1">
-                                            <Filter size={18} className="text-gray-400" />
-                                            <span className="text-xs font-bold uppercase text-gray-500">Filtrar por:</span>
+                                    {/* Modernized Filter Toolbar */}
+                                    <div className="flex flex-col sm:flex-row gap-4 mb-6 items-center justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <div className={`p-2 rounded-lg ${currentTheme.lightBg} text-gray-500`}>
+                                                <Filter size={16} />
+                                            </div>
+                                            <span className="text-xs font-black uppercase tracking-widest text-gray-400">Filtros</span>
                                         </div>
-                                        <select
-                                            value={userFilterRole}
-                                            onChange={(e) => setUserFilterRole(e.target.value as any)}
-                                            className="bg-white border border-gray-300 rounded-lg text-sm p-2 text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
-                                        >
-                                            <option value="ALL">Todas Funções</option>
-                                            <option value="MASTER">Administrador (Master)</option>
-                                            <option value="ADMINISTRATIVO">Administrativo</option>
-                                            <option value="USER">Usuário Comum</option>
-                                        </select>
-                                        <select
-                                            value={userFilterStatus}
-                                            onChange={(e) => setUserFilterStatus(e.target.value as any)}
-                                            className="bg-white border border-gray-300 rounded-lg text-sm p-2 text-gray-900 focus:ring-2 focus:ring-blue-500 outline-none"
-                                        >
-                                            <option value="ALL">Todos Status</option>
-                                            <option value="ACTIVE">Ativo</option>
-                                            <option value="PENDING">Pendente</option>
-                                            <option value="BANNED">Inativo / Banido</option>
-                                        </select>
+
+                                        <div className="flex gap-3 w-full sm:w-auto">
+                                            <div className="relative flex-1 sm:flex-none">
+                                                <select
+                                                    value={userFilterRole}
+                                                    onChange={(e) => setUserFilterRole(e.target.value as any)}
+                                                    className="w-full sm:w-48 appearance-none bg-white border border-gray-200 rounded-xl px-4 py-2 pr-8 text-sm font-medium text-gray-700 focus:outline-none focus:border-blue-500 hover:border-gray-300 transition-colors"
+                                                >
+                                                    <option value="ALL">Todas Funções</option>
+                                                    <option value="MASTER">Master</option>
+                                                    <option value="ADMINISTRATIVO">Administrativo</option>
+                                                    <option value="USER">Comum</option>
+                                                </select>
+                                                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                                            </div>
+
+                                            <div className="relative flex-1 sm:flex-none">
+                                                <select
+                                                    value={userFilterStatus}
+                                                    onChange={(e) => setUserFilterStatus(e.target.value as any)}
+                                                    className="w-full sm:w-48 appearance-none bg-white border border-gray-200 rounded-xl px-4 py-2 pr-8 text-sm font-medium text-gray-700 focus:outline-none focus:border-blue-500 hover:border-gray-300 transition-colors"
+                                                >
+                                                    <option value="ALL">Todos Status</option>
+                                                    <option value="ACTIVE">Ativo</option>
+                                                    <option value="PENDING">Pendente</option>
+                                                    <option value="BANNED">Inativo</option>
+                                                </select>
+                                                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                                            </div>
+                                        </div>
                                     </div>
 
-                                    <div className="overflow-x-auto rounded-xl border border-gray-200 shadow-sm">
-                                        <table className="w-full text-sm text-left">
-                                            <thead className="text-xs text-gray-600 uppercase bg-gray-50 font-bold tracking-wider">
+                                    <div className="overflow-hidden rounded-[24px] border border-gray-100 shadow-sm bg-white">
+                                        <table className="w-full text-left text-sm">
+                                            <thead className="bg-gray-50/80 border-b border-gray-100">
                                                 <tr>
-                                                    <th className="px-6 py-4">Nome</th>
-                                                    <th className="px-6 py-4">Email</th>
-                                                    <th className="px-6 py-4">Telefone</th>
-                                                    <th className="px-6 py-4">Função</th>
-                                                    <th className="px-6 py-4">Status</th>
-                                                    <th className="px-6 py-4">Ações</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px]">Nome</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px]">Contato</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px]">Função</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px]">Status</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px] text-right">Ações</th>
                                                 </tr>
                                             </thead>
-                                            <tbody className="divide-y divide-gray-100 bg-white">
+                                            <tbody className="divide-y divide-gray-50">
                                                 {filteredUsers.map((u, idx) => (
-                                                    <tr key={idx} className="hover:bg-gray-50 transition-colors">
-                                                        <td className="px-6 py-4 font-bold text-gray-800">{u.name}</td>
-                                                        <td className="px-6 py-4 text-gray-500 font-medium">{u.email}</td>
-                                                        <td className="px-6 py-4 text-gray-500 font-medium">{u.phone || '-'}</td>
-                                                        <td className="px-6 py-4"><span className="bg-gray-100 text-gray-600 py-1 px-3 rounded-full text-xs font-bold">{u.role}</span></td>
+                                                    <tr key={idx} className="group hover:bg-blue-50/30 transition-colors duration-200">
+                                                        <td className="px-6 py-4">
+                                                            <div className="font-bold text-gray-900">{u.name}</div>
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="flex flex-col">
+                                                                <span className="text-gray-600 font-medium">{u.email}</span>
+                                                                <span className="text-gray-400 text-xs mt-0.5">{u.phone || '-'}</span>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold border ${u.role === 'MASTER' ? 'bg-purple-50 text-purple-700 border-purple-100' :
+                                                                u.role === 'ADMINISTRATIVO' ? 'bg-blue-50 text-blue-700 border-blue-100' :
+                                                                    'bg-gray-100 text-gray-600 border-gray-200'
+                                                                }`}>
+                                                                {u.role === 'MASTER' ? 'Master' : u.role === 'ADMINISTRATIVO' ? 'Admin' : 'Usuário'}
+                                                            </span>
+                                                        </td>
                                                         <td className="px-6 py-4">
                                                             {u.rejected ? (
-                                                                <span className="bg-red-100 text-red-700 text-xs px-3 py-1 rounded-full font-bold shadow-sm flex w-fit items-center gap-1">
-                                                                    <div className="w-1.5 h-1.5 rounded-full bg-red-500"></div> Inativo
+                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-red-100/50 text-red-700 border border-red-100">
+                                                                    <div className="w-1.5 h-1.5 rounded-full bg-red-500"></div> Bloqueado
                                                                 </span>
                                                             ) : u.approved ? (
-                                                                <span className="bg-green-100 text-green-700 text-xs px-3 py-1 rounded-full font-bold shadow-sm flex w-fit items-center gap-1">
+                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-green-100/50 text-green-700 border border-green-100">
                                                                     <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div> Ativo
                                                                 </span>
                                                             ) : (
-                                                                <span className="bg-yellow-100 text-yellow-700 text-xs px-3 py-1 rounded-full font-bold shadow-sm flex w-fit items-center gap-1 animate-pulse">
+                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-yellow-100/50 text-yellow-700 border border-yellow-100 animate-pulse">
                                                                     <div className="w-1.5 h-1.5 rounded-full bg-yellow-500"></div> Pendente
                                                                 </span>
                                                             )}
                                                         </td>
-                                                        <td className="px-6 py-4">
+                                                        <td className="px-6 py-4 text-right">
                                                             {u.role !== 'MASTER' && (
-                                                                <div className="flex gap-2">
-                                                                    {/* If Rejected, allow Revert (Unban/Approve) */}
+                                                                <div className="flex items-center justify-end gap-2 opacity-60 group-hover:opacity-100 transition-opacity">
                                                                     {u.rejected ? (
                                                                         <button
                                                                             onClick={() => updateUserStatus(u.email, true)}
-                                                                            className="px-3 py-1.5 bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-lg border border-blue-200 transition-colors font-bold text-xs flex items-center gap-1"
+                                                                            className="p-2 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded-lg transition-colors border border-blue-100"
                                                                             title="Restaurar Acesso"
                                                                         >
-                                                                            <Undo2 size={14} /> Restaurar
+                                                                            <Undo2 size={16} strokeWidth={2.5} />
                                                                         </button>
                                                                     ) : !u.approved ? (
-                                                                        /* Pending Users Actions */
                                                                         <>
                                                                             <button
                                                                                 onClick={() => updateUserStatus(u.email, true)}
-                                                                                className="px-3 py-1.5 bg-green-50 text-green-700 hover:bg-green-100 rounded-lg border border-green-200 transition-colors font-bold text-xs flex items-center gap-1"
-                                                                                title="Aprovar Usuário"
+                                                                                className="p-2 bg-green-50 text-green-600 hover:bg-green-100 rounded-lg transition-colors border border-green-100"
+                                                                                title="Aprovar"
                                                                             >
-                                                                                <Check size={14} /> Aprovar
+                                                                                <Check size={16} strokeWidth={2.5} />
                                                                             </button>
                                                                             <button
                                                                                 onClick={() => handleRejectUser(u.email)}
-                                                                                className="px-3 py-1.5 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg border border-red-200 transition-colors font-bold text-xs flex items-center gap-1"
-                                                                                title="Recusar e Bloquear"
+                                                                                className="p-2 bg-red-50 text-red-600 hover:bg-red-100 rounded-lg transition-colors border border-red-100"
+                                                                                title="Rejeitar"
                                                                             >
-                                                                                <Ban size={14} /> Recusar
+                                                                                <Ban size={16} strokeWidth={2.5} />
                                                                             </button>
                                                                         </>
                                                                     ) : (
-                                                                        /* Active Users Actions */
                                                                         <button
                                                                             onClick={() => handleRejectUser(u.email)}
-                                                                            className="px-3 py-1.5 bg-gray-50 text-red-600 hover:bg-red-50 rounded-lg border border-red-200 transition-colors flex items-center gap-1 font-bold text-xs"
-                                                                            title="Bloquear/Inativar Acesso"
+                                                                            className="p-2 hover:bg-red-50 text-gray-400 hover:text-red-600 rounded-lg transition-colors"
+                                                                            title="Bloquear Acesso"
                                                                         >
-                                                                            <Ban size={14} />
-                                                                            Bloquear
+                                                                            <Ban size={16} strokeWidth={2} />
                                                                         </button>
                                                                     )}
                                                                 </div>
@@ -4079,8 +4332,11 @@ const App: React.FC = () => {
                                                 ))}
                                                 {filteredUsers.length === 0 && (
                                                     <tr>
-                                                        <td colSpan={6} className="px-6 py-8 text-center text-gray-400 font-medium">
-                                                            Nenhum usuário encontrado com os filtros selecionados.
+                                                        <td colSpan={5} className="px-6 py-12 text-center">
+                                                            <div className="flex flex-col items-center justify-center text-gray-400 gap-3">
+                                                                <SearchX size={32} strokeWidth={1.5} className="text-gray-300" />
+                                                                <p className="font-medium">Nenhum usuário encontrado</p>
+                                                            </div>
                                                         </td>
                                                     </tr>
                                                 )}
@@ -4097,266 +4353,355 @@ const App: React.FC = () => {
 
                     {/* --- SUPPORT/TICKETS VIEW --- */}
                     {currentView === 'support' && (
-                        <div className="max-w-4xl mx-auto space-y-8 animate-fade-in pb-24">
-                            <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
-                                <h2 className="text-xl font-bold text-gray-800 mb-6 flex items-center gap-3 border-b border-gray-100 pb-4">
-                                    <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
-                                        <MessageSquareQuote size={24} className={currentTheme.text} />
+                        <div className="max-w-5xl mx-auto space-y-10 animate-fade-in relative pb-32">
+
+                            {/* Header */}
+                            <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-4">
+                                <div>
+                                    <h1 className="text-4xl font-black text-gray-900 tracking-tight leading-tight">Suporte e Melhorias</h1>
+                                    <p className="text-gray-500 font-bold text-lg mt-1">Relate problemas ou sugira novas funcionalidades</p>
+                                </div>
+                                <div className="flex items-center gap-3 bg-white/50 backdrop-blur-md p-2 rounded-2xl border border-white/50 shadow-sm">
+                                    <div className={`p-2 rounded-xl ${currentTheme.lightBg} ${currentTheme.text}`}>
+                                        <MessageSquareQuote size={20} />
                                     </div>
-                                    Suporte e Melhorias
-                                </h2>
+                                    <span className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">Central de Ajuda</span>
+                                </div>
+                            </div>
 
-                                {/* Create Ticket Form */}
-                                <div className="mb-8 bg-gray-50 p-6 rounded-xl border border-gray-200">
-                                    <h3 className="text-sm font-bold text-gray-700 uppercase mb-4">Relatar Problema ou Sugestão</h3>
-                                    <div className="space-y-4">
-                                        <input
-                                            type="text"
-                                            value={newTicketTitle}
-                                            onChange={(e) => setNewTicketTitle(e.target.value)}
-                                            placeholder="Título curto (Ex: Erro ao salvar / Sugestão de cor)"
-                                            className="w-full bg-white border border-gray-300 rounded-lg p-3 outline-none focus:ring-2 focus:ring-blue-500"
-                                        />
-                                        <textarea
-                                            value={newTicketDesc}
-                                            onChange={(e) => setNewTicketDesc(e.target.value)}
-                                            placeholder="Descreva detalhadamente o que aconteceu ou o que gostaria que fosse implementado..."
-                                            rows={4}
-                                            className="w-full bg-white border border-gray-300 rounded-lg p-3 outline-none focus:ring-2 focus:ring-blue-500"
-                                        />
-                                        <div className="flex justify-between items-center">
-                                            {/* Simple Image Upload for Ticket */}
-                                            <div className="flex items-center gap-2">
-                                                <label className="cursor-pointer flex items-center gap-2 text-sm text-gray-600 hover:text-blue-600 font-bold bg-white px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50 transition-all">
-                                                    <Upload size={14} /> Anexar Imagem
-                                                    <input
-                                                        type="file"
-                                                        accept="image/*"
-                                                        className="hidden"
-                                                        onChange={(e) => {
-                                                            const file = e.target.files?.[0];
-                                                            if (file) {
-                                                                const reader = new FileReader();
-                                                                reader.onloadend = () => {
-                                                                    setNewTicketImages([reader.result as string]); // Valid for MVP, usually would append
-                                                                };
-                                                                reader.readAsDataURL(file);
-                                                            }
-                                                        }}
-                                                    />
-                                                </label>
-                                                {newTicketImages.length > 0 && <span className="text-xs text-green-600 font-bold">Imagem anexada!</span>}
-                                            </div>
-
-                                            <button
-                                                onClick={async () => {
-                                                    if (!newTicketTitle.trim() || !newTicketDesc.trim()) {
-                                                        alert('Preencha título e descrição.');
-                                                        return;
-                                                    }
-                                                    if (!currentUser) return;
-
-                                                    const ticket = {
-                                                        title: newTicketTitle,
-                                                        description: newTicketDesc,
-                                                        images: newTicketImages,
-                                                        user_email: currentUser.email,
-                                                        user_name: currentUser.name
-                                                    };
-                                                    const created = await createTicket(ticket as DbTicket);
-                                                    if (created) {
-                                                        setTickets([created, ...tickets]);
-                                                        setNewTicketTitle('');
-                                                        setNewTicketDesc('');
-                                                        setNewTicketImages([]);
-                                                        alert('Solicitação enviada com sucesso! Obrigado.');
-                                                    } else {
-                                                        alert('Erro ao enviar solicitação.');
-                                                    }
-                                                }}
-                                                className="bg-blue-600 hover:bg-blue-700 text-white font-bold px-6 py-2 rounded-lg shadow-sm transition-all flex items-center gap-2"
-                                            >
-                                                <Send size={16} /> Enviar
-                                            </button>
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
+                                {/* Create Ticket Form - Modernized */}
+                                <div className="lg:col-span-1 bg-white/80 backdrop-blur-2xl rounded-[32px] shadow-card border border-white/60 p-8 sticky top-24">
+                                    <h3 className="text-xl font-black text-gray-800 mb-6 flex items-center gap-3">
+                                        <div className={`p-2.5 rounded-xl ${currentTheme.lightBg} ${currentTheme.text}`}>
+                                            <Lightbulb size={20} />
                                         </div>
+                                        Novo Ticket
+                                    </h3>
+
+                                    <div className="space-y-5">
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-black text-gray-400 uppercase tracking-wider ml-1">Título do Assunto</label>
+                                            <div className="relative group">
+                                                <input
+                                                    type="text"
+                                                    value={newTicketTitle}
+                                                    onChange={(e) => setNewTicketTitle(e.target.value)}
+                                                    placeholder="Ex: Erro ao salvar / Sugestão de cor"
+                                                    className="w-full bg-white border border-gray-200 rounded-2xl p-4 text-gray-900 font-bold outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all shadow-sm"
+                                                />
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-black text-gray-400 uppercase tracking-wider ml-1">Descrição Detalhada</label>
+                                            <textarea
+                                                value={newTicketDesc}
+                                                onChange={(e) => setNewTicketDesc(e.target.value)}
+                                                placeholder="Descreva o que aconteceu ou sua ideia..."
+                                                rows={6}
+                                                className="w-full bg-white border border-gray-200 rounded-2xl p-4 text-gray-900 font-medium outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all shadow-sm resize-none"
+                                            />
+                                        </div>
+
+                                        <div className="pt-2">
+                                            <label className="cursor-pointer group block">
+                                                <input
+                                                    type="file"
+                                                    accept="image/*"
+                                                    className="hidden"
+                                                    onChange={(e) => {
+                                                        const file = e.target.files?.[0];
+                                                        if (file) {
+                                                            const reader = new FileReader();
+                                                            reader.onloadend = () => {
+                                                                setNewTicketImages([reader.result as string]);
+                                                            };
+                                                            reader.readAsDataURL(file);
+                                                        }
+                                                    }}
+                                                />
+                                                <div className={`border-2 border-dashed border-gray-200 rounded-2xl p-4 flex items-center justify-center gap-3 transition-colors ${newTicketImages.length > 0 ? 'bg-green-50 border-green-200' : 'hover:bg-gray-50 hover:border-gray-300'}`}>
+                                                    {newTicketImages.length > 0 ? (
+                                                        <>
+                                                            <div className="w-10 h-10 rounded-xl overflow-hidden border border-green-200 shadow-sm">
+                                                                <img src={newTicketImages[0]} className="w-full h-full object-cover" />
+                                                            </div>
+                                                            <div className="text-left">
+                                                                <p className="text-xs font-bold text-green-700 uppercase">Imagem Anexada</p>
+                                                                <p className="text-[10px] text-green-600 font-medium">Clique para alterar</p>
+                                                            </div>
+                                                            <CheckCircle size={18} className="text-green-500 ml-auto" />
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <div className="p-2 bg-gray-100 rounded-xl text-gray-400 group-hover:bg-white group-hover:text-blue-500 transition-colors">
+                                                                <ImageIcon size={20} />
+                                                            </div>
+                                                            <span className="text-sm font-bold text-gray-400 group-hover:text-gray-600 transition-colors">Anexar Print (Opcional)</span>
+                                                        </>
+                                                    )}
+                                                </div>
+                                            </label>
+                                        </div>
+
+                                        <button
+                                            onClick={async () => {
+                                                if (!newTicketTitle.trim() || !newTicketDesc.trim()) {
+                                                    alert('Preencha título e descrição.');
+                                                    return;
+                                                }
+                                                if (!currentUser) return;
+
+                                                const ticket = {
+                                                    title: newTicketTitle,
+                                                    description: newTicketDesc,
+                                                    images: newTicketImages,
+                                                    user_email: currentUser.email,
+                                                    user_name: currentUser.name
+                                                };
+                                                const created = await createTicket(ticket as DbTicket);
+                                                if (created) {
+                                                    setTickets([created, ...tickets]);
+                                                    setNewTicketTitle('');
+                                                    setNewTicketDesc('');
+                                                    setNewTicketImages([]);
+                                                    alert('Solicitação enviada com sucesso! Obrigado.');
+                                                } else {
+                                                    alert('Erro ao enviar solicitação.');
+                                                }
+                                            }}
+                                            className="w-full bg-gray-900 hover:bg-black text-white font-bold py-4 rounded-2xl shadow-lg hover:shadow-xl hover:-translate-y-1 transition-all active:scale-95 flex items-center justify-center gap-2"
+                                        >
+                                            <Send size={18} />
+                                            Enviar Solicitação
+                                        </button>
                                     </div>
                                 </div>
 
-                                {/* Ticket List */}
-                                <div className="space-y-6">
-                                    <h3 className="text-sm font-bold text-gray-700 uppercase flex items-center gap-2">
-                                        <History size={16} /> Solicitações Recentes
-                                    </h3>
+                                {/* Ticket List - Modernized */}
+                                <div className="lg:col-span-2 space-y-6">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <h3 className="text-xl font-black text-gray-800 flex items-center gap-3">
+                                            <History size={20} className="text-gray-400" />
+                                            Histórico
+                                        </h3>
+                                        <div className="bg-gray-100 text-gray-500 text-xs font-bold px-3 py-1 rounded-full">
+                                            {tickets.length} tickets
+                                        </div>
+                                    </div>
+
                                     {tickets.length === 0 ? (
-                                        <p className="text-gray-400 text-center py-8">Nenhuma solicitação encontrada.</p>
+                                        <div className="bg-white/50 border-2 border-dashed border-gray-200 rounded-[32px] p-12 text-center">
+                                            <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-300">
+                                                <MessageSquare size={32} />
+                                            </div>
+                                            <p className="text-gray-400 font-bold mb-1">Nenhum ticket encontrado</p>
+                                            <p className="text-sm text-gray-400 opacity-60">Suas solicitações aparecerão aqui.</p>
+                                        </div>
                                     ) : (
-                                        tickets.map(ticket => (
-                                            <div key={ticket.id} className="bg-white p-5 rounded-xl border border-gray-200 hover:border-blue-200 transition-colors shadow-sm">
-                                                <div className="flex justify-between items-start mb-3">
-                                                    <div>
-                                                        <h4 className="font-bold text-gray-800 text-lg flex items-center gap-2">
-                                                            {ticket.title}
-                                                            <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border ${ticket.status === 'DONE' ? 'bg-green-100 text-green-700 border-green-200' :
-                                                                ticket.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-700 border-blue-200' :
-                                                                    ticket.status === 'IGNORED' ? 'bg-gray-100 text-gray-500 border-gray-200' :
-                                                                        'bg-yellow-100 text-yellow-700 border-yellow-200'
+                                        <div className="space-y-4">
+                                            {tickets.map(ticket => (
+                                                <div key={ticket.id} className="bg-white rounded-[24px] border border-gray-100 p-6 shadow-sm hover:shadow-md transition-all group">
+                                                    <div className="flex justify-between items-start mb-4">
+                                                        <div className="flex gap-4">
+                                                            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-lg font-bold shadow-inner-light ${ticket.status === 'DONE' ? 'bg-green-100 text-green-600' :
+                                                                ticket.status === 'IN_PROGRESS' ? 'bg-blue-100 text-blue-600' :
+                                                                    ticket.status === 'IGNORED' ? 'bg-gray-100 text-gray-500' :
+                                                                        'bg-yellow-100 text-yellow-600'
                                                                 }`}>
-                                                                {ticket.status === 'DONE' ? 'Concluído' :
-                                                                    ticket.status === 'IN_PROGRESS' ? 'Em Análise' :
-                                                                        ticket.status === 'IGNORED' ? 'Arquivado' : 'Aberto'}
-                                                            </span>
-                                                        </h4>
-                                                        <p className="text-xs text-gray-500 mt-1 flex items-center gap-1">
-                                                            <div className="w-4 h-4 rounded-full bg-gray-200 flex items-center justify-center text-[8px] font-bold text-gray-600">
-                                                                {ticket.user_name.charAt(0)}
+                                                                {ticket.status === 'DONE' ? <CheckCircle size={24} /> :
+                                                                    ticket.status === 'IN_PROGRESS' ? <Loader2 size={24} className="animate-spin" /> :
+                                                                        ticket.status === 'IGNORED' ? <X size={24} /> :
+                                                                            <Clock size={24} />}
                                                             </div>
-                                                            {ticket.user_name} • {new Date(ticket.created_at || '').toLocaleDateString()}
+                                                            <div>
+                                                                <h4 className="font-bold text-gray-900 text-lg leading-tight group-hover:text-blue-600 transition-colors">
+                                                                    {ticket.title}
+                                                                </h4>
+                                                                <div className="flex items-center gap-2 mt-1">
+                                                                    <span className={`text-[10px] uppercase font-black tracking-wider px-2 py-0.5 rounded-lg ${ticket.status === 'DONE' ? 'bg-green-50 text-green-700' :
+                                                                        ticket.status === 'IN_PROGRESS' ? 'bg-blue-50 text-blue-700' :
+                                                                            ticket.status === 'IGNORED' ? 'bg-gray-50 text-gray-500' :
+                                                                                'bg-yellow-50 text-yellow-700'
+                                                                        }`}>
+                                                                        {ticket.status === 'DONE' ? 'Concluído' :
+                                                                            ticket.status === 'IN_PROGRESS' ? 'Em Análise' :
+                                                                                ticket.status === 'IGNORED' ? 'Arquivado' : 'Aberto'}
+                                                                    </span>
+                                                                    <span className="text-gray-300 text-xs">•</span>
+                                                                    <span className="text-xs font-bold text-gray-400">
+                                                                        {ticket.user_name}
+                                                                    </span>
+                                                                    <span className="text-gray-300 text-xs">•</span>
+                                                                    <span className="text-xs font-bold text-gray-400">
+                                                                        {new Date(ticket.created_at || '').toLocaleDateString()}
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="pl-[4rem]">
+                                                        <p className="text-gray-600 text-sm leading-relaxed mb-4 bg-gray-50/50 p-4 rounded-2xl border border-gray-100/50">
+                                                            {ticket.description}
                                                         </p>
+
+                                                        {ticket.images && ticket.images.length > 0 && (
+                                                            <div className="flex gap-2 mb-4 overflow-x-auto pb-2">
+                                                                {ticket.images.map((img, idx) => (
+                                                                    <div key={idx} className="relative group/img cursor-pointer shrink-0" onClick={() => window.open(img, '_blank')}>
+                                                                        <img src={img} className="h-16 w-16 object-cover rounded-xl border border-gray-200 hover:scale-105 transition-transform" />
+                                                                        <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/10 rounded-xl transition-colors" />
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        )}
+
+                                                        {ticket.admin_response && (
+                                                            <div className="bg-gradient-to-r from-green-50 to-emerald-50/30 p-5 rounded-2xl border border-green-100/50 relative overflow-hidden">
+                                                                <div className="absolute top-0 right-0 p-3 opacity-10">
+                                                                    <MessageSquareQuote size={40} className="text-green-600" />
+                                                                </div>
+                                                                <p className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+                                                                    <div className="w-1.5 h-1.5 rounded-full bg-green-500" /> Resposta Oficial
+                                                                </p>
+                                                                <p className="text-sm font-medium text-green-900 leading-relaxed relative z-10">{ticket.admin_response}</p>
+                                                            </div>
+                                                        )}
+
+                                                        {/* Admin Actions (Master Only) */}
+                                                        {canRespondTickets && (
+                                                            <div className="mt-6 pt-6 border-t border-dashed border-gray-100 animate-fade-in">
+                                                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-3 block">Gerenciar Ticket</label>
+                                                                <div className="flex flex-col gap-3">
+                                                                    <textarea
+                                                                        placeholder="Escreva uma resposta para o usuário..."
+                                                                        className="w-full text-sm bg-gray-50 border border-gray-200 rounded-xl p-3 outline-none focus:bg-white focus:ring-2 focus:ring-blue-100 transition-all resize-none"
+                                                                        rows={2}
+                                                                        value={adminResponseInput[ticket.id!] || ''}
+                                                                        onChange={(e) => setAdminResponseInput(prev => ({ ...prev, [ticket.id!]: e.target.value }))}
+                                                                    />
+                                                                    <div className="flex gap-2 justify-end">
+                                                                        <button
+                                                                            onClick={async () => {
+                                                                                const responseText = adminResponseInput[ticket.id!] || '';
+                                                                                const success = await updateTicketStatus(ticket.id!, 'IN_PROGRESS', responseText);
+                                                                                if (success) {
+                                                                                    setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, status: 'IN_PROGRESS', admin_response: responseText } : t));
+                                                                                    alert('Status alterado para "Em Análise"!');
+                                                                                }
+                                                                            }}
+                                                                            className="text-xs bg-blue-50 text-blue-600 px-4 py-2 rounded-lg font-bold hover:bg-blue-100 transition-colors"
+                                                                        >
+                                                                            Em Análise
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={async () => {
+                                                                                const responseText = adminResponseInput[ticket.id!] || '';
+                                                                                const success = await updateTicketStatus(ticket.id!, 'IGNORED', responseText);
+                                                                                if (success) {
+                                                                                    setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, status: 'IGNORED', admin_response: responseText } : t));
+                                                                                    alert('Ticket arquivado!');
+                                                                                }
+                                                                            }}
+                                                                            className="text-xs bg-gray-100 text-gray-600 px-4 py-2 rounded-lg font-bold hover:bg-gray-200 transition-colors"
+                                                                        >
+                                                                            Arquivar
+                                                                        </button>
+                                                                        <button
+                                                                            onClick={async () => {
+                                                                                const responseText = adminResponseInput[ticket.id!] || '';
+                                                                                const success = await updateTicketStatus(ticket.id!, 'DONE', responseText);
+                                                                                if (success) {
+                                                                                    setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, status: 'DONE', admin_response: responseText } : t));
+                                                                                    alert('Ticket concluído!');
+                                                                                }
+                                                                            }}
+                                                                            className="text-xs bg-green-500 text-white px-4 py-2 rounded-lg font-bold hover:bg-green-600 shadow-md hover:shadow-lg transition-all"
+                                                                        >
+                                                                            Concluir & Responder
+                                                                        </button>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
-
-                                                <p className="text-gray-700 text-sm whitespace-pre-wrap mb-4 bg-gray-50 p-3 rounded-lg border border-gray-100">{ticket.description}</p>
-
-                                                {ticket.images && ticket.images.length > 0 && (
-                                                    <div className="flex gap-2 mb-4">
-                                                        {ticket.images.map((img, idx) => (
-                                                            <img key={idx} src={img} className="h-20 w-20 object-cover rounded-lg border border-gray-200 cursor-pointer hover:opacity-90" onClick={() => window.open(img, '_blank')} />
-                                                        ))}
-                                                    </div>
-                                                )}
-
-                                                {ticket.admin_response && (
-                                                    <div className="bg-green-50 p-4 rounded-lg border border-green-100 mt-4">
-                                                        <p className="text-xs font-bold text-green-700 uppercase mb-1 flex items-center gap-1">
-                                                            <Check size={12} /> Resposta do Desenvolvedor
-                                                        </p>
-                                                        <p className="text-sm text-green-900">{ticket.admin_response}</p>
-                                                    </div>
-                                                )}
-
-                                                {/* Admin Actions (Master Only) */}
-                                                {canRespondTickets && (
-                                                    <div className="mt-4 pt-4 border-t border-gray-100">
-                                                        <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Responder / Alterar Status</label>
-                                                        <div className="flex gap-2 mb-2">
-                                                            <textarea
-                                                                placeholder="Resposta para o usuário..."
-                                                                className="w-full text-sm border border-gray-300 rounded p-2 outline-none focus:border-blue-500"
-                                                                rows={2}
-                                                                value={adminResponseInput[ticket.id!] || ''}
-                                                                onChange={(e) => setAdminResponseInput(prev => ({ ...prev, [ticket.id!]: e.target.value }))}
-                                                            />
-                                                        </div>
-                                                        <div className="flex gap-2 justify-end">
-                                                            <button
-                                                                onClick={async () => {
-                                                                    const responseText = adminResponseInput[ticket.id!] || '';
-                                                                    const success = await updateTicketStatus(ticket.id!, 'IN_PROGRESS', responseText);
-                                                                    if (success) {
-                                                                        // Optimistic Update
-                                                                        setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, status: 'IN_PROGRESS', admin_response: responseText } : t));
-                                                                        alert('Status alterado para "Em Análise" com sucesso!');
-                                                                    } else {
-                                                                        alert('Erro ao atualizar status.');
-                                                                    }
-                                                                }}
-                                                                className="text-xs bg-blue-100 text-blue-700 px-3 py-1 rounded font-bold hover:bg-blue-200"
-                                                            >
-                                                                Em Análise
-                                                            </button>
-                                                            <button
-                                                                onClick={async () => {
-                                                                    const responseText = adminResponseInput[ticket.id!] || '';
-                                                                    const success = await updateTicketStatus(ticket.id!, 'DONE', responseText);
-                                                                    if (success) {
-                                                                        setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, status: 'DONE', admin_response: responseText } : t));
-                                                                        alert('Ticket concluído com sucesso!');
-                                                                    } else {
-                                                                        alert('Erro ao concluir ticket.');
-                                                                    }
-                                                                }}
-                                                                className="text-xs bg-green-100 text-green-700 px-3 py-1 rounded font-bold hover:bg-green-200"
-                                                            >
-                                                                Concluir
-                                                            </button>
-                                                            <button
-                                                                onClick={async () => {
-                                                                    const responseText = adminResponseInput[ticket.id!] || '';
-                                                                    const success = await updateTicketStatus(ticket.id!, 'IGNORED', responseText);
-                                                                    if (success) {
-                                                                        setTickets(prev => prev.map(t => t.id === ticket.id ? { ...t, status: 'IGNORED', admin_response: responseText } : t));
-                                                                        alert('Ticket arquivado com sucesso!');
-                                                                    } else {
-                                                                        alert('Erro ao arquivar ticket.');
-                                                                    }
-                                                                }}
-                                                                className="text-xs bg-gray-100 text-gray-600 px-3 py-1 rounded font-bold hover:bg-gray-200"
-                                                            >
-                                                                Arquivar
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        ))
+                                            ))}
+                                        </div>
                                     )}
                                 </div>
                             </div>
                         </div>
                     )}
 
+                    {/* --- ACCESS MATRIX --- */}
                     {currentView === 'access' && currentUser.role === 'MASTER' && (
-                        <div className="max-w-4xl mx-auto space-y-8 animate-fade-in relative pb-24">
-                            <div className="bg-slate-950/80 rounded-[28px] border border-slate-800 shadow-2xl p-8 text-slate-50">
-                                <div className="flex flex-col gap-2">
-                                    <h2 className="text-2xl font-black tracking-tight uppercase">Níveis de Acesso</h2>
-                                    <p className="text-sm text-slate-300">
-                                        Master pode marcar caixas para conceder permissões extras aos outros níveis. O painel é referência visual de quem pode ver o quê.
-                                    </p>
+                        <div className="max-w-6xl mx-auto space-y-10 animate-fade-in pb-32">
+                            {/* Header */}
+                            <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-4">
+                                <div>
+                                    <h1 className="text-4xl font-black text-gray-900 tracking-tight leading-tight">Controle de Acessos</h1>
+                                    <p className="text-gray-500 font-bold text-lg mt-1">Gerencie permissões para cada nível hierárquico</p>
                                 </div>
+                                <div className="flex items-center gap-3 bg-white/50 backdrop-blur-md p-2 rounded-2xl border border-white/50 shadow-sm">
+                                    <div className={`p-2 rounded-xl ${currentTheme.lightBg} ${currentTheme.text}`}>
+                                        <ShieldCheck size={20} />
+                                    </div>
+                                    <span className="text-xs font-black text-gray-400 uppercase tracking-widest px-2">Segurança</span>
+                                </div>
+                            </div>
 
-                                <div className="mt-8 grid gap-6 lg:grid-cols-3">
+                            <div className="bg-white/80 backdrop-blur-2xl rounded-[40px] shadow-card border border-white/60 p-10 overflow-hidden">
+                                <div className="grid gap-8 lg:grid-cols-3">
                                     {ACCESS_LEVELS.map(level => (
-                                        <div key={level.id} className="flex flex-col gap-4 rounded-3xl border border-slate-800 bg-slate-900/60 p-5 shadow-xl">
-                                            <div className="flex items-start justify-between gap-3">
-                                                <div>
-                                                    <p className="text-lg font-bold tracking-tight">{level.title}</p>
-                                                    <p className="text-sm text-slate-300">
-                                                        {level.description}
-                                                    </p>
+                                        <div key={level.id} className="flex flex-col gap-6 rounded-[32px] border border-gray-100 bg-white p-8 shadow-sm hover:shadow-xl transition-all duration-500 group">
+                                            <div className="space-y-4 border-b border-gray-100 pb-6">
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-2xl font-black tracking-tight text-gray-900 group-hover:text-blue-600 transition-colors">{level.title}</p>
+                                                        <p className="text-sm font-medium text-gray-400 mt-2 leading-relaxed">
+                                                            {level.description}
+                                                        </p>
+                                                    </div>
                                                 </div>
-                                                <span className={`px-3 py-1 text-[11px] uppercase rounded-full tracking-widest shadow-sm ${level.badgeClasses}`}>
+                                                <span className={`inline-block px-4 py-1.5 text-[10px] font-black uppercase rounded-full tracking-widest shadow-sm ${level.badgeClasses}`}>
                                                     {level.badgeLabel}
                                                 </span>
                                             </div>
 
-                                            <div className="space-y-3">
+                                            <div className="space-y-4">
                                                 {ACCESS_MODULES.map(module => {
-                                                    const enabled = level.id === 'MASTER' ? true : accessMatrix[level.id][module.id];
+                                                    const enabled = level.id === 'MASTER' ? true : accessMatrix[level.id]?.[module.id];
                                                     return (
                                                         <div
                                                             key={`${level.id}-${module.id}`}
-                                                            className="flex items-center justify-between gap-3 rounded-2xl border border-slate-800 bg-white/5 px-4 py-3 shadow-inner"
+                                                            className={`flex items-center justify-between gap-4 rounded-2xl border px-5 py-4 transition-all duration-300 ${enabled
+                                                                ? 'bg-blue-50/50 border-blue-100 shadow-sm'
+                                                                : 'bg-gray-50/50 border-gray-100 opacity-60 hover:opacity-100'
+                                                                }`}
                                                         >
                                                             <div>
-                                                                <p className="text-sm font-semibold text-slate-50">{module.label}</p>
-                                                                {module.note && <p className="text-[11px] text-slate-400">{module.note}</p>}
+                                                                <p className={`text-sm font-bold transition-colors ${enabled ? 'text-gray-900' : 'text-gray-500'}`}>{module.label}</p>
+                                                                {module.note && <p className="text-[10px] text-gray-400 font-medium mt-0.5">{module.note}</p>}
                                                             </div>
+
                                                             {level.id === 'MASTER' ? (
-                                                                <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-emerald-500 text-white shadow-lg">
-                                                                    <Check size={14} />
-                                                                </span>
+                                                                <div className="h-8 w-8 rounded-full bg-green-100 text-green-600 flex items-center justify-center shadow-sm">
+                                                                    <Check size={16} strokeWidth={3} />
+                                                                </div>
                                                             ) : (
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => handleToggleAccess(level.id, module.id)}
-                                                                    aria-pressed={enabled}
-                                                                    className={`inline-flex h-9 w-9 items-center justify-center rounded-full border-2 transition ${enabled
-                                                                        ? 'bg-orange-500 border-orange-500 text-white shadow-lg'
-                                                                        : 'border-slate-600 text-slate-400 hover:border-orange-400 hover:text-orange-400'
+                                                                    className={`relative h-7 w-12 rounded-full transition-colors duration-300 focus:outline-none focus:ring-2 focus:ring-blue-500/20 ${enabled ? 'bg-blue-600' : 'bg-gray-200'
                                                                         }`}
                                                                 >
-                                                                    <Check size={14} className={`transition ${enabled ? 'opacity-100' : 'opacity-0'}`} />
+                                                                    <span
+                                                                        className={`block h-5 w-5 rounded-full bg-white shadow-md transform transition-transform duration-300 ${enabled ? 'translate-x-6' : 'translate-x-1'
+                                                                            } mt-1`}
+                                                                    />
                                                                 </button>
                                                             )}
                                                         </div>
@@ -4372,284 +4717,383 @@ const App: React.FC = () => {
 
                     {/* --- CHECKLIST VIEW --- */}
                     {currentView === 'checklist' && (
-                        <div className="max-w-4xl mx-auto space-y-8 animate-fade-in pb-24">
+                        <div className="max-w-4xl mx-auto space-y-10 animate-fade-in pb-32">
+                            {/* Checklist Info Header - Premium Glassmorphism */}
+                            <div className="bg-white/80 backdrop-blur-xl border border-white/50 rounded-[32px] p-8 shadow-card overflow-hidden relative group">
+                                <div className={`absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r ${currentTheme.bgGradient}`} />
+                                <div className="flex items-center gap-5">
+                                    <div className={`p-4 rounded-2xl ${currentTheme.lightBg} ${currentTheme.text} transition-all duration-500 group-hover:scale-110 group-hover:rotate-3 shadow-inner-light`}>
+                                        <ClipboardList size={32} strokeWidth={2.5} />
+                                    </div>
+                                    <div>
+                                        <h2 className="text-3xl font-black text-gray-900 leading-tight tracking-tight">
+                                            {activeChecklist?.title}
+                                        </h2>
+                                        <p className="text-gray-500 font-bold text-lg mt-1">{activeChecklist?.description}</p>
+                                    </div>
+                                </div>
+                            </div>
 
-                            {/* PENDING ITEMS ALERT BOX (Updated) */}
+                            {/* PENDING ITEMS ALERT BOX (Modernized) */}
                             {showErrors && (currentMissingItems.length > 0 || currentSigMissing || currentUnansweredItems.length > 0) && (
-                                <div ref={errorBoxRef} className="bg-white border-l-4 border-l-red-500 rounded-2xl shadow-floating overflow-hidden mb-8 animate-shake">
-                                    {/* Header */}
-                                    <div className="p-6 border-b border-gray-100 bg-red-50 flex items-center gap-3">
-                                        <div className="p-2 bg-red-100 rounded-full text-red-600">
-                                            <AlertTriangle size={24} />
+                                <div ref={errorBoxRef} className="bg-white/90 backdrop-blur-2xl border-2 border-red-500/20 rounded-[32px] shadow-2xl overflow-hidden mb-12 animate-shake ring-4 ring-red-500/5">
+                                    <div className="p-8 border-b border-red-100 bg-gradient-to-r from-red-50 to-white flex items-center gap-5">
+                                        <div className="p-3.5 bg-red-500 rounded-2xl text-white shadow-lg shadow-red-500/20 animate-pulse">
+                                            <AlertTriangle size={28} strokeWidth={2.5} />
                                         </div>
                                         <div>
-                                            <h4 className="text-red-900 font-black text-lg uppercase tracking-wide">
-                                                Pendências Encontradas
+                                            <h4 className="text-red-900 font-black text-xl uppercase tracking-widest">
+                                                Pendências Identificadas
                                             </h4>
-                                            <p className="text-sm text-red-700 font-medium">Você precisa resolver os itens abaixo para continuar.</p>
+                                            <p className="text-red-700/80 font-bold">Por favor, complete os itens obrigatórios para prosseguir.</p>
                                         </div>
                                     </div>
 
-                                    <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-                                        {/* Required Items (Red) */}
+                                    <div className="p-8 grid grid-cols-1 md:grid-cols-2 gap-8 bg-white/50">
                                         {(currentMissingItems.length > 0 || currentSigMissing) && (
-                                            <div className="space-y-3">
-                                                <h5 className="text-xs font-bold uppercase tracking-widest text-red-500 mb-1 flex items-center gap-2">
-                                                    <AlertCircle size={14} /> Obrigatório
+                                            <div className="space-y-4">
+                                                <h5 className="text-xs font-black uppercase tracking-[0.2em] text-red-500 flex items-center gap-2">
+                                                    <span className="w-8 h-[2px] bg-red-500 rounded-full" />
+                                                    Obrigatórios
                                                 </h5>
-                                                <ul className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                                                <div className="space-y-3 max-h-72 overflow-y-auto custom-scrollbar pr-3">
                                                     {currentMissingItems.map((item, i) => (
-                                                        <li key={i} className="text-sm text-red-800 bg-red-50 p-3 rounded-lg border border-red-100 flex items-start gap-2">
-                                                            <span><span className="font-bold">{item.section}:</span> {item.text}</span>
-                                                        </li>
+                                                        <div key={i} className="group bg-red-50/50 hover:bg-red-50 border border-red-100 p-4 rounded-2xl transition-all duration-300 hover:shadow-md">
+                                                            <div className="flex items-start gap-3">
+                                                                <div className="mt-1 text-red-400">
+                                                                    <AlertCircle size={16} strokeWidth={3} />
+                                                                </div>
+                                                                <span className="text-sm font-bold text-red-900 leading-snug">
+                                                                    <span className="uppercase text-[10px] tracking-widest opacity-60 block mb-0.5">{item.section}</span>
+                                                                    {item.text}
+                                                                </span>
+                                                            </div>
+                                                        </div>
                                                     ))}
                                                     {currentSigMissing && (
-                                                        <li className="text-sm text-red-800 bg-red-50 p-3 rounded-lg border border-red-100 flex items-start gap-2">
-                                                            <span className="font-bold">Assinatura do Gestor Obrigatória</span>
-                                                        </li>
+                                                        <div className="bg-red-500 text-white p-4 rounded-2xl shadow-lg shadow-red-500/20 flex items-center gap-3">
+                                                            <CheckCircle size={18} />
+                                                            <span className="font-bold text-sm tracking-wide">Assinatura do Gestor necessária</span>
+                                                        </div>
                                                     )}
-                                                </ul>
+                                                </div>
                                             </div>
                                         )}
 
-                                        {/* Unanswered Score Items (Yellow) */}
                                         {currentUnansweredItems.length > 0 && (
-                                            <div className="space-y-3">
-                                                <h5 className="text-xs font-bold uppercase tracking-widest text-yellow-500 mb-1 flex items-center gap-2">
-                                                    <AlertTriangle size={14} /> Atenção (Impacta Nota)
+                                            <div className="space-y-4">
+                                                <h5 className="text-xs font-black uppercase tracking-[0.2em] text-yellow-600 flex items-center gap-2">
+                                                    <span className="w-8 h-[2px] bg-yellow-500 rounded-full" />
+                                                    Atenção (Nota)
                                                 </h5>
-                                                <ul className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                                                <div className="space-y-3 max-h-72 overflow-y-auto custom-scrollbar pr-3">
                                                     {currentUnansweredItems.map((item, i) => (
-                                                        <li key={i} className="text-sm text-yellow-800 bg-yellow-50 p-3 rounded-lg border border-yellow-100 flex items-start gap-2">
-                                                            <span><span className="font-bold">{item.section}:</span> {item.text}</span>
-                                                        </li>
+                                                        <div key={i} className="group bg-yellow-50/50 hover:bg-yellow-50 border border-yellow-100 p-4 rounded-2xl transition-all duration-300 hover:shadow-md">
+                                                            <div className="flex items-start gap-3">
+                                                                <div className="mt-1 text-yellow-500">
+                                                                    <HelpCircle size={16} strokeWidth={3} />
+                                                                </div>
+                                                                <span className="text-sm font-bold text-yellow-900 leading-snug">
+                                                                    <span className="uppercase text-[10px] tracking-widest opacity-60 block mb-0.5">{item.section}</span>
+                                                                    {item.text}
+                                                                </span>
+                                                            </div>
+                                                        </div>
                                                     ))}
-                                                </ul>
+                                                </div>
                                             </div>
                                         )}
                                     </div>
                                 </div>
                             )}
 
-                            {activeChecklist.sections.map(section => {
+                            {activeChecklist.sections.map((section, sIdx) => {
                                 const status = getSectionStatus(section);
                                 return (
-                                    <div key={section.id} className="bg-white rounded-2xl shadow-card border border-gray-100 overflow-hidden">
-                                        <div className={`px-6 py-4 border-b border-gray-100 ${currentTheme.lightBg} flex justify-between items-center`}>
-                                            <h3 className={`font-bold text-lg ${currentTheme.text}`}>{section.title}</h3>
+                                    <div
+                                        key={section.id}
+                                        className="bg-white/70 backdrop-blur-xl border border-white/40 rounded-[40px] shadow-card overflow-hidden transition-all duration-500 hover:shadow-2xl hover:-translate-y-1 group"
+                                        style={{ animationDelay: `${sIdx * 100}ms` }}
+                                    >
+                                        <div className={`px-10 py-7 border-b border-gray-100/50 bg-gradient-to-r from-white to-transparent flex justify-between items-center relative`}>
                                             <div className="flex items-center gap-4">
-                                                <div className="flex items-center gap-2 bg-white px-3 py-1 rounded-full border border-gray-200 shadow-sm">
-                                                    <span className="text-xs font-bold text-gray-500">{status.answeredItems}/{status.totalItems}</span>
-                                                    {/* Only show stars if the section has scoreable items */}
+                                                <div className={`w-2 h-10 rounded-full bg-gradient-to-b ${currentTheme.bgGradient}`} />
+                                                <h3 className={`font-black text-xl tracking-tight text-gray-900`}>
+                                                    {section.title}
+                                                </h3>
+                                            </div>
+
+                                            <div className="flex items-center gap-4">
+                                                <div className="flex items-center gap-3 bg-white/80 backdrop-blur shadow-inner-light px-5 py-2.5 rounded-2xl border border-gray-100">
+                                                    <div className="flex flex-col items-end">
+                                                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Progresso</span>
+                                                        <span className="text-sm font-black text-gray-800">{status.answeredItems}/{status.totalItems}</span>
+                                                    </div>
+
                                                     {status.scoreableItems > 0 && (
-                                                        <div className="flex text-yellow-400">
+                                                        <div className="h-8 w-[1px] bg-gray-100 mx-1" />
+                                                    )}
+
+                                                    {status.scoreableItems > 0 && (
+                                                        <div className="flex gap-1">
                                                             {[1, 2, 3, 4, 5].map(star => (
                                                                 <Star
                                                                     key={star}
-                                                                    size={14}
-                                                                    fill={star <= Math.round(status.predictedScore || 0) ? "currentColor" : "none"}
-                                                                    strokeWidth={2}
+                                                                    size={16}
+                                                                    fill={star <= Math.round(status.predictedScore || 0) ? "#facc15" : "none"}
+                                                                    stroke={star <= Math.round(status.predictedScore || 0) ? "#facc15" : "#e2e8f0"}
+                                                                    strokeWidth={3}
+                                                                    className="transition-all duration-500 hover:scale-125"
                                                                 />
                                                             ))}
                                                         </div>
                                                     )}
                                                 </div>
-                                                <div className="text-xs font-bold text-gray-400 uppercase tracking-widest">Seção</div>
                                             </div>
                                         </div>
 
-                                        <div className="p-6 space-y-6">
+                                        <div className="p-10 space-y-10 bg-white/30">
                                             {section.items.map(item => {
                                                 const value = getInputValue(item.id);
-                                                // Updated Error Logic:
-                                                const hasError = showErrors && item.required && !value; // Red
-                                                const isUnanswered = showErrors && item.type === InputType.BOOLEAN_PASS_FAIL && (value === '' || value === null || value === undefined); // Yellow
-
-                                                // Determine border class based on priority (Error > Warning > Default)
-                                                let inputClasses = 'border-gray-200 bg-gray-50 text-gray-900';
-                                                if (hasError) {
-                                                    inputClasses = 'border-red-500 bg-red-50 text-red-900 placeholder-red-400';
-                                                } else if (isUnanswered) {
-                                                    inputClasses = 'border-yellow-400 bg-yellow-50 text-gray-900';
-                                                }
+                                                const hasError = showErrors && item.required && !value;
+                                                const isUnanswered = showErrors && item.type === InputType.BOOLEAN_PASS_FAIL && (value === '' || value === null || value === undefined);
 
                                                 if (item.type === InputType.HEADER) {
-                                                    return <h4 key={item.id} className="font-bold text-gray-800 mt-4 mb-2 border-b border-gray-100 pb-1 pt-2">{item.text}</h4>;
+                                                    return (
+                                                        <div key={item.id} className="pt-6 relative group/header">
+                                                            <h4 className="font-black text-gray-900 text-lg uppercase tracking-[0.2em] flex items-center gap-3">
+                                                                <span className={`w-2 h-6 rounded-full bg-gradient-to-b ${currentTheme.bgGradient}`} />
+                                                                {item.text}
+                                                            </h4>
+                                                            <div className="mt-2 h-[1px] w-full bg-gray-100 group-hover/header:bg-blue-100 transition-colors" />
+                                                        </div>
+                                                    );
                                                 }
                                                 if (item.type === InputType.INFO) {
-                                                    return <p key={item.id} className="text-sm text-gray-500 italic mb-4 bg-blue-50 p-3 rounded-lg border border-blue-100 flex items-start gap-2"><div className="mt-0.5 min-w-4"><AlertCircle size={14} /></div>{item.text}</p>;
+                                                    return (
+                                                        <div key={item.id} className="bg-blue-50/50 backdrop-blur-sm border border-blue-100 p-5 rounded-[24px] flex items-start gap-4 transition-all hover:bg-blue-50 group/info">
+                                                            <div className="bg-white p-2.5 rounded-xl shadow-sm border border-blue-100 text-blue-500 group-hover/info:rotate-12 transition-transform">
+                                                                <AlertCircle size={22} strokeWidth={2.5} />
+                                                            </div>
+                                                            <p className="text-sm font-bold text-blue-900/80 leading-relaxed pt-1 italic">{item.text}</p>
+                                                        </div>
+                                                    );
                                                 }
 
                                                 return (
-                                                    <div key={item.id} className="mb-4">
-                                                        <div className="flex justify-between mb-1.5">
-                                                            <label className="block text-sm font-bold text-gray-700">{item.text} {item.required && <span className="text-red-500">*</span>}</label>
-                                                            {item.helpText && <span className="text-xs text-gray-400 cursor-help" title={item.helpText}><AlertCircle size={12} /></span>}
+                                                    <div key={item.id} className="space-y-4 group/item">
+                                                        <div className="flex justify-between items-center">
+                                                            <label className={`block text-xs font-black uppercase tracking-widest transition-colors ${hasError ? 'text-red-500' : isUnanswered ? 'text-yellow-600' : 'text-gray-500 group-focus-within/item:text-gray-900 mt-2'}`}>
+                                                                {item.text} {item.required && <span className="text-red-500 ml-1 font-black">*</span>}
+                                                            </label>
+                                                            {item.helpText && (
+                                                                <div className="group/help relative">
+                                                                    <div className="p-1.5 rounded-full bg-gray-50 text-gray-400 hover:bg-blue-50 hover:text-blue-500 transition-all cursor-help border border-gray-100 shadow-sm">
+                                                                        <Info size={14} strokeWidth={3} />
+                                                                    </div>
+                                                                    <div className="absolute bottom-full right-0 mb-3 w-64 bg-gray-900 text-white text-[10px] font-bold p-3 rounded-2xl opacity-0 group-hover/help:opacity-100 transition-all pointer-events-none shadow-2xl z-20 leading-relaxed uppercase tracking-wider">
+                                                                        {item.helpText}
+                                                                        <div className="absolute top-full right-4 border-8 border-transparent border-t-gray-900" />
+                                                                    </div>
+                                                                </div>
+                                                            )}
                                                         </div>
 
-                                                        {/* Custom rendering for Empresa field */}
-                                                        {item.id === 'empresa' ? (
-                                                            <select
-                                                                value={value as string || ''}
-                                                                onChange={(e) => {
-                                                                    const selectedCompanyName = e.target.value;
-                                                                    handleInputChange(item.id, selectedCompanyName);
-                                                                    // Reset filial and área when empresa changes
-                                                                    handleInputChange('filial', '');
-                                                                    handleInputChange('area', '');
-
-                                                                    // Bidirectional sync: Update selectedCompanyId in Settings
-                                                                    const selectedCompany = companies.find((c: any) => c.name === selectedCompanyName);
-                                                                    if (selectedCompany) {
-                                                                        setSelectedCompanyId(selectedCompany.id);
-                                                                        setEditCompanyName(selectedCompany.name);
-                                                                        setEditCompanyCnpj(selectedCompany.cnpj || '');
-                                                                        setEditCompanyPhone(selectedCompany.phone || '');
-                                                                        setEditCompanyLogo(selectedCompany.logo || null);
-                                                                        setEditCompanyAreas(selectedCompany.areas || []);
-                                                                    }
-                                                                }}
-                                                                disabled={isReadOnly}
-                                                                className={`w-full border ${inputClasses} rounded-lg p-3 focus:bg-white focus:ring-2 ${currentTheme.ring} outline-none transition-colors shadow-inner-light ${isReadOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                                                            >
-                                                                <option value="">-- Selecione uma Empresa --</option>
-                                                                {companies.map((company: any) => (
-                                                                    <option key={company.id} value={company.name}>{company.name}</option>
-                                                                ))}
-                                                            </select>
-                                                        ) : item.id === 'filial' ? (
-                                                            /* Custom rendering for Filial field */
-                                                            <select
-                                                                value={value as string || ''}
-                                                                onChange={(e) => {
-                                                                    const selectedFilial = e.target.value;
-                                                                    handleInputChange(item.id, selectedFilial);
-
-                                                                    // Auto-populate área based on selected filial
-                                                                    const empresaValue = getInputValue('empresa');
-                                                                    const selectedCompany = companies.find((c: any) => c.name === empresaValue);
-                                                                    if (selectedCompany && selectedCompany.areas) {
-                                                                        const areaForFilial = selectedCompany.areas.find((area: any) =>
-                                                                            area.branches && area.branches.includes(selectedFilial)
-                                                                        );
-                                                                        if (areaForFilial) {
-                                                                            handleInputChange('area', areaForFilial.name);
+                                                        <div className="relative">
+                                                            {item.id === 'empresa' ? (
+                                                                <select
+                                                                    value={value as string || ''}
+                                                                    onChange={(e) => {
+                                                                        const selectedCompanyName = e.target.value;
+                                                                        handleInputChange(item.id, selectedCompanyName);
+                                                                        handleInputChange('filial', '');
+                                                                        handleInputChange('area', '');
+                                                                        const selectedCompany = companies.find((c: any) => c.name === selectedCompanyName);
+                                                                        if (selectedCompany) {
+                                                                            setSelectedCompanyId(selectedCompany.id);
+                                                                            setEditCompanyName(selectedCompany.name);
+                                                                            setEditCompanyCnpj(selectedCompany.cnpj || '');
+                                                                            setEditCompanyPhone(selectedCompany.phone || '');
+                                                                            setEditCompanyLogo(selectedCompany.logo || null);
+                                                                            setEditCompanyAreas(selectedCompany.areas || []);
                                                                         }
-                                                                    }
-                                                                }}
-                                                                disabled={isReadOnly || !getInputValue('empresa')}
-                                                                className={`w-full border ${inputClasses} rounded-lg p-3 focus:bg-white focus:ring-2 ${currentTheme.ring} outline-none transition-colors shadow-inner-light ${isReadOnly || !getInputValue('empresa') ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                                                            >
-                                                                <option value="">-- Selecione uma Filial --</option>
-                                                                {(() => {
-                                                                    const empresaValue = getInputValue('empresa');
-                                                                    const selectedCompany = companies.find((c: any) => c.name === empresaValue);
-                                                                    if (selectedCompany && selectedCompany.areas) {
-                                                                        // Flatten all branches from all areas
-                                                                        const allBranches = selectedCompany.areas.flatMap((area: any) => area.branches || []);
-                                                                        return allBranches.map((branch: string, idx: number) => (
-                                                                            <option key={idx} value={branch}>{branch}</option>
-                                                                        ));
-                                                                    }
-                                                                    return null;
-                                                                })()}
-                                                            </select>
-                                                        ) : item.id === 'area' ? (
-                                                            /* Custom rendering for Área field - Read-only, auto-populated */
-                                                            <input
-                                                                type="text"
-                                                                value={value as string || ''}
-                                                                readOnly
-                                                                disabled
-                                                                className="w-full border border-gray-200 bg-gray-100 text-gray-700 rounded-lg p-3 cursor-not-allowed shadow-inner-light"
-                                                                placeholder="Área será preenchida automaticamente"
-                                                            />
-                                                        ) : item.type === InputType.TEXT && (
-                                                            /* Standard TEXT input for other fields */
-                                                            <input
-                                                                type="text"
-                                                                value={value as string || ''}
-                                                                onChange={(e) => handleInputChange(item.id, e.target.value)}
-                                                                disabled={isReadOnly}
-                                                                readOnly={isReadOnly}
-                                                                className={`w-full border ${inputClasses} rounded-lg p-3 focus:bg-white focus:ring-2 ${currentTheme.ring} outline-none transition-colors shadow-inner-light ${isReadOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                                                            />
-                                                        )}
-                                                        {item.type === InputType.TEXTAREA && (
-                                                            <textarea
-                                                                value={value as string || ''}
-                                                                onChange={(e) => handleInputChange(item.id, e.target.value)}
-                                                                disabled={isReadOnly}
-                                                                readOnly={isReadOnly}
-                                                                rows={3}
-                                                                className={`w-full border ${inputClasses} rounded-lg p-3 focus:bg-white focus:ring-2 ${currentTheme.ring} outline-none transition-colors shadow-inner-light ${isReadOnly ? 'bg-gray-100 cursor-not-allowed' : ''}`}
-                                                            />
-                                                        )}
-                                                        {item.type === InputType.DATE && (
-                                                            <DateInput value={value as string || ''} onChange={(val) => handleInputChange(item.id, val)} theme={currentTheme} hasError={hasError} disabled={isReadOnly} />
-                                                        )}
-                                                        {item.type === InputType.BOOLEAN_PASS_FAIL && (
-                                                            <div className="flex gap-2 sm:gap-3">
-                                                                <button
-                                                                    onClick={() => handleInputChange(item.id, 'pass')}
+                                                                    }}
                                                                     disabled={isReadOnly}
-                                                                    className={`flex-1 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${value === 'pass' ? 'bg-green-500 text-white border-green-600 shadow-md transform scale-[1.02]' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
+                                                                    className={`w-full bg-white border-2 ${hasError ? 'border-red-200 ring-4 ring-red-50' : isUnanswered ? 'border-yellow-200 ring-4 ring-yellow-50' : 'border-gray-100'} rounded-2xl p-4.5 font-bold text-gray-800 placeholder:text-gray-300 focus:bg-white focus:ring-4 ${currentTheme.ring} outline-none transition-all shadow-inner-light hover:border-gray-200 appearance-none`}
                                                                 >
-                                                                    <Check size={14} className="sm:w-4 sm:h-4" /> <span className="tracking-wide">CONFORME</span>
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => handleInputChange(item.id, 'fail')}
+                                                                    <option value="">-- SELECIONE A EMPRESA --</option>
+                                                                    {companies.map((company: any) => (
+                                                                        <option key={company.id} value={company.name}>{company.name}</option>
+                                                                    ))}
+                                                                </select>
+                                                            ) : item.id === 'filial' ? (
+                                                                <select
+                                                                    value={value as string || ''}
+                                                                    onChange={(e) => {
+                                                                        const selectedFilial = e.target.value;
+                                                                        handleInputChange(item.id, selectedFilial);
+                                                                        const empresaValue = getInputValue('empresa');
+                                                                        const selectedCompany = companies.find((c: any) => c.name === empresaValue);
+                                                                        if (selectedCompany && selectedCompany.areas) {
+                                                                            const areaForFilial = selectedCompany.areas.find((area: any) =>
+                                                                                area.branches && area.branches.includes(selectedFilial)
+                                                                            );
+                                                                            if (areaForFilial) {
+                                                                                handleInputChange('area', areaForFilial.name);
+                                                                            }
+                                                                        }
+                                                                    }}
+                                                                    disabled={isReadOnly || !getInputValue('empresa')}
+                                                                    className={`w-full bg-white border-2 ${hasError ? 'border-red-200 ring-4 ring-red-50' : isUnanswered ? 'border-yellow-200 ring-4 ring-yellow-50' : 'border-gray-100'} rounded-2xl p-4.5 font-bold text-gray-800 placeholder:text-gray-300 focus:bg-white focus:ring-4 ${currentTheme.ring} outline-none transition-all shadow-inner-light hover:border-gray-200 appearance-none ${isReadOnly || !getInputValue('empresa') ? 'opacity-50 cursor-not-allowed bg-gray-50/50' : ''}`}
+                                                                >
+                                                                    <option value="">-- SELECIONE A FILIAL --</option>
+                                                                    {(() => {
+                                                                        const empresaValue = getInputValue('empresa');
+                                                                        const selectedCompany = companies.find((c: any) => c.name === empresaValue);
+                                                                        if (selectedCompany && selectedCompany.areas) {
+                                                                            const allBranches = selectedCompany.areas.flatMap((area: any) => area.branches || []);
+                                                                            return allBranches.map((branch: string, idx: number) => (
+                                                                                <option key={idx} value={branch}>{branch}</option>
+                                                                            ));
+                                                                        }
+                                                                        return null;
+                                                                    })()}
+                                                                </select>
+                                                            ) : item.id === 'area' ? (
+                                                                <input
+                                                                    type="text"
+                                                                    value={value as string || ''}
+                                                                    readOnly
+                                                                    placeholder="Área automática ao selecionar filial"
+                                                                    className="w-full border-2 border-gray-100 bg-gray-50/80 text-gray-500 font-bold rounded-2xl p-4.5 cursor-not-allowed shadow-inner-light tracking-wide"
+                                                                />
+                                                            ) : item.type === InputType.TEXT ? (
+                                                                <input
+                                                                    type="text"
+                                                                    value={value as string || ''}
+                                                                    onChange={(e) => handleInputChange(item.id, e.target.value)}
                                                                     disabled={isReadOnly}
-                                                                    className={`flex-1 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all flex items-center justify-center gap-1.5 sm:gap-2 ${value === 'fail' ? 'bg-red-500 text-white border-red-600 shadow-md transform scale-[1.02]' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                                                >
-                                                                    <AlertTriangle size={14} className="sm:w-4 sm:h-4" /> <span className="tracking-wide">NÃO CONFORME</span>
-                                                                </button>
-                                                                <button
-                                                                    onClick={() => handleInputChange(item.id, 'na')}
+                                                                    placeholder={`Preencha o campo ${item.text.toLowerCase()}...`}
+                                                                    className={`w-full border-2 ${hasError ? 'border-red-200 ring-4 ring-red-50' : isUnanswered ? 'border-yellow-200 ring-4 ring-yellow-50' : 'border-gray-100'} bg-white rounded-2xl p-4.5 font-bold text-gray-800 placeholder:text-gray-300 focus:bg-white focus:ring-4 ${currentTheme.ring} outline-none transition-all shadow-inner-light hover:border-gray-200`}
+                                                                />
+                                                            ) : item.type === InputType.TEXTAREA ? (
+                                                                <textarea
+                                                                    value={value as string || ''}
+                                                                    onChange={(e) => handleInputChange(item.id, e.target.value)}
                                                                     disabled={isReadOnly}
-                                                                    className={`w-14 sm:w-16 py-2.5 sm:py-3 rounded-xl border font-bold text-xs sm:text-sm transition-all ${value === 'na' ? 'bg-gray-600 text-white border-gray-700' : 'bg-white text-gray-400 border-gray-200 hover:bg-gray-50'} ${isReadOnly ? 'opacity-60 cursor-not-allowed' : ''}`}
-                                                                >
-                                                                    N/A
-                                                                </button>
-                                                            </div>
-                                                        )}
+                                                                    rows={3}
+                                                                    placeholder={`Detalhes ou observações sobre ${item.text.toLowerCase()}...`}
+                                                                    className={`w-full border-2 ${hasError ? 'border-red-200 ring-4 ring-red-50' : isUnanswered ? 'border-yellow-200 ring-4 ring-yellow-50' : 'border-gray-100'} bg-white rounded-2xl p-4.5 font-bold text-gray-800 placeholder:text-gray-300 focus:bg-white focus:ring-4 ${currentTheme.ring} outline-none transition-all shadow-inner-light hover:border-gray-200 resize-none`}
+                                                                />
+                                                            ) : null}
+
+                                                            {item.type === InputType.DATE && (
+                                                                <DateInput value={value as string || ''} onChange={(val) => handleInputChange(item.id, val)} theme={currentTheme} hasError={hasError} disabled={isReadOnly} />
+                                                            )}
+
+                                                            {item.type === InputType.BOOLEAN_PASS_FAIL && (
+                                                                <div className="flex gap-5">
+                                                                    <button
+                                                                        onClick={() => handleInputChange(item.id, 'pass')}
+                                                                        disabled={isReadOnly}
+                                                                        className={`flex-1 py-5 rounded-[24px] border-3 font-black text-xs md:text-sm tracking-[0.2em] uppercase transition-all duration-300 flex items-center justify-center gap-4 active:scale-95 shadow-sm group/btn ${value === 'pass'
+                                                                            ? 'bg-green-500 text-white border-green-400 shadow-xl shadow-green-500/30'
+                                                                            : 'bg-white text-gray-400 border-gray-100 hover:border-green-300 hover:text-green-600 hover:shadow-lg'
+                                                                            } ${isReadOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                                                    >
+                                                                        <div className={`p-1.5 rounded-full transition-all duration-500 ${value === 'pass' ? 'bg-white text-green-500 scale-110 shadow-lg' : 'bg-gray-50 text-gray-300 group-hover/btn:bg-green-50 group-hover/btn:text-green-500'}`}>
+                                                                            <Check size={18} strokeWidth={4} />
+                                                                        </div>
+                                                                        <span className="relative z-10">Conforme</span>
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => handleInputChange(item.id, 'fail')}
+                                                                        disabled={isReadOnly}
+                                                                        className={`flex-1 py-5 rounded-[24px] border-3 font-black text-xs md:text-sm tracking-[0.2em] uppercase transition-all duration-300 flex items-center justify-center gap-4 active:scale-95 shadow-sm group/btn ${value === 'fail'
+                                                                            ? 'bg-red-500 text-white border-red-400 shadow-xl shadow-red-500/30'
+                                                                            : 'bg-white text-gray-400 border-gray-100 hover:border-red-300 hover:text-red-600 hover:shadow-lg'
+                                                                            } ${isReadOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                                                    >
+                                                                        <div className={`p-1.5 rounded-full transition-all duration-500 ${value === 'fail' ? 'bg-white text-red-500 scale-110 shadow-lg' : 'bg-gray-50 text-gray-300 group-hover/btn:bg-red-50 group-hover/btn:text-red-500'}`}>
+                                                                            <AlertTriangle size={18} strokeWidth={4} />
+                                                                        </div>
+                                                                        <span className="relative z-10">NÃO Conforme</span>
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => handleInputChange(item.id, 'na')}
+                                                                        disabled={isReadOnly}
+                                                                        className={`w-24 md:w-32 py-5 rounded-[24px] border-3 font-black text-xs md:text-sm tracking-[0.2em] transition-all duration-300 active:scale-95 shadow-sm ${value === 'na'
+                                                                            ? 'bg-gray-800 text-white border-gray-700 shadow-xl shadow-gray-900/30'
+                                                                            : 'bg-white text-gray-400 border-gray-100 hover:border-gray-400 hover:text-gray-800 hover:shadow-lg'
+                                                                            } ${isReadOnly ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                                                    >
+                                                                        N/A
+                                                                    </button>
+                                                                </div>
+                                                            )}
+                                                        </div>
                                                     </div>
                                                 );
                                             })}
 
-                                            {/* Image Upload - Hide for info_basica */}
+                                            {/* Image Upload Area (Modernized) */}
                                             {section.id !== 'info_basica' && (
-                                                <div className="mt-8 pt-6 border-t border-gray-100">
-                                                    <label className="flex items-center gap-2 text-sm font-bold text-gray-700 uppercase mb-4">
-                                                        <ImageIcon size={16} />
-                                                        Fotos e Evidências
-                                                    </label>
-                                                    <div className="flex flex-wrap gap-4">
+                                                <div className="mt-14 pt-12 border-t border-gray-100/80">
+                                                    <div className="flex items-center justify-between mb-10">
+                                                        <div className="flex items-center gap-4">
+                                                            <div className={`p-3 rounded-2xl bg-gradient-to-br ${currentTheme.bgGradient} text-white shadow-xl shadow-blue-500/20`}>
+                                                                <ImageIcon size={24} strokeWidth={2.5} />
+                                                            </div>
+                                                            <div>
+                                                                <h4 className="font-black text-gray-900 uppercase tracking-widest text-base">Evidências Fotográficas</h4>
+                                                                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mt-0.5">Capture e anexe provas visuais da seção</p>
+                                                            </div>
+                                                        </div>
+                                                        <div className="bg-gray-50 border border-gray-100 px-4 py-2 rounded-2xl shadow-inner-light">
+                                                            <span className="text-xs font-black text-gray-500 uppercase tracking-widest">
+                                                                {(getDataSource(activeChecklistId).imgs[section.id] || []).length} / 10 Fotos
+                                                            </span>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-8">
                                                         {(getDataSource(activeChecklistId).imgs[section.id] || []).map((img, idx) => (
-                                                            <div key={idx} className="relative w-28 h-28 rounded-xl overflow-hidden border border-gray-200 shadow-sm group">
-                                                                <img src={img} className="w-full h-full object-cover" />
-                                                                {!isReadOnly && (
-                                                                    <button onClick={() => removeImage(section.id, idx)} className="absolute top-1 right-1 bg-red-600 text-white rounded-full p-1.5 opacity-0 group-hover:opacity-100 transition-all shadow-sm hover:bg-red-700"><Trash2 size={12} /></button>
-                                                                )}
+                                                            <div key={idx} className="relative aspect-square rounded-[32px] overflow-hidden border-4 border-white shadow-2xl group/img ring-4 ring-gray-100/50">
+                                                                <img src={img} className="w-full h-full object-cover transition-transform duration-1000 group-hover/img:scale-125" />
+                                                                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover/img:opacity-100 transition-opacity duration-300 flex items-center justify-center backdrop-blur-[2px]">
+                                                                    {!isReadOnly && (
+                                                                        <button
+                                                                            onClick={() => removeImage(section.id, idx)}
+                                                                            className="bg-red-500 text-white rounded-2xl p-4 shadow-2xl transform translate-y-4 group-hover/img:translate-y-0 opacity-0 group-hover/img:opacity-100 transition-all duration-500 hover:bg-red-600 active:scale-90"
+                                                                        >
+                                                                            <Trash2 size={24} />
+                                                                        </button>
+                                                                    )}
+                                                                </div>
+                                                                <div className="absolute bottom-3 left-3 bg-white/90 backdrop-blur px-2 py-0.5 rounded-full shadow-sm">
+                                                                    <span className="text-[8px] font-black text-gray-800">#{idx + 1}</span>
+                                                                </div>
                                                             </div>
                                                         ))}
 
-                                                        {/* Camera Button - Only for MASTER */}
                                                         {!isReadOnly && (
                                                             <>
-                                                                <label className={`w-28 h-28 flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:bg-white hover:border-blue-400 hover:text-blue-600 text-gray-400 transition-all bg-gray-50`}>
-                                                                    <Camera size={24} />
-                                                                    <span className="text-[10px] font-bold mt-2 uppercase tracking-wide text-center px-1">Câmera</span>
-                                                                    {/* capture="environment" forces camera on mobile */}
+                                                                <label className="aspect-square flex flex-col items-center justify-center border-3 border-dashed border-gray-100 rounded-[32px] cursor-pointer hover:bg-white hover:border-blue-400 hover:text-blue-600 text-gray-300 transition-all duration-500 bg-gray-50/50 group/upload relative overflow-hidden active:scale-95 shadow-inner-light">
+                                                                    <div className="bg-white p-4.5 rounded-[24px] shadow-xl border border-gray-50 group-hover/upload:scale-110 group-hover/upload:rotate-6 transition-all duration-500">
+                                                                        <Camera size={32} strokeWidth={2.5} />
+                                                                    </div>
+                                                                    <span className="text-[10px] font-black mt-4 uppercase tracking-[0.3em] group-hover/upload:tracking-[0.4em] transition-all">Câmera</span>
                                                                     <input type="file" className="hidden" accept="image/*" capture="environment" onChange={(e) => handleImageUpload(section.id, e)} />
+                                                                    <div className="absolute inset-x-0 bottom-0 h-1.5 bg-blue-500/10 opacity-0 group-hover/upload:opacity-100 transition-opacity" />
                                                                 </label>
 
-                                                                {/* Gallery Upload Button */}
-                                                                <label className={`w-28 h-28 flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-xl cursor-pointer hover:bg-white hover:border-gray-400 hover:text-gray-600 text-gray-400 transition-all bg-gray-50`}>
-                                                                    <Upload size={24} />
-                                                                    <span className="text-[10px] font-bold mt-2 uppercase tracking-wide text-center px-1">Galeria</span>
-                                                                    {/* Standard upload */}
+                                                                <label className="aspect-square flex flex-col items-center justify-center border-3 border-dashed border-gray-100 rounded-[32px] cursor-pointer hover:bg-white hover:border-indigo-400 hover:text-indigo-600 text-gray-300 transition-all duration-500 bg-gray-50/50 group/upload relative overflow-hidden active:scale-95 shadow-inner-light">
+                                                                    <div className="bg-white p-4.5 rounded-[24px] shadow-xl border border-gray-50 group-hover/upload:scale-110 group-hover/upload:-rotate-6 transition-all duration-500">
+                                                                        <Upload size={32} strokeWidth={2.5} />
+                                                                    </div>
+                                                                    <span className="text-[10px] font-black mt-4 uppercase tracking-[0.3em] group-hover/upload:tracking-[0.4em] transition-all">Galeria</span>
                                                                     <input type="file" className="hidden" accept="image/*" onChange={(e) => handleImageUpload(section.id, e)} />
+                                                                    <div className="absolute inset-x-0 bottom-0 h-1.5 bg-indigo-500/10 opacity-0 group-hover/upload:opacity-100 transition-opacity" />
                                                                 </label>
                                                             </>
                                                         )}
@@ -4661,23 +5105,32 @@ const App: React.FC = () => {
                                 );
                             })}
 
-                            {/* Signatures - Only for MASTER */}
+                            {/* Signatures Section - Premium Card */}
                             {!isReadOnly && (
-                                <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
-                                    <h3 className="font-bold text-lg text-gray-800 mb-6 flex items-center gap-2">
-                                        <FileCheck className={currentTheme.text} />
-                                        Assinatura e Validação
-                                    </h3>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                        <div data-signature="gestor">
+                                <div className="bg-white/80 backdrop-blur-2xl border border-white/60 rounded-[48px] p-12 shadow-card relative overflow-hidden">
+                                    <div className={`absolute top-0 right-0 w-64 h-64 bg-gradient-to-br ${currentTheme.bgGradient} opacity-5 rounded-full -mr-32 -mt-32 blur-3xl`} />
+                                    <div className="flex items-center gap-5 mb-12 relative z-10">
+                                        <div className={`p-4 rounded-2xl ${currentTheme.lightBg} ${currentTheme.text} shadow-inner-light`}>
+                                            <FileCheck size={32} strokeWidth={2.5} />
+                                        </div>
+                                        <div>
+                                            <h3 className="text-2xl font-black text-gray-900 leading-tight tracking-tight uppercase tracking-widest">
+                                                Validação do Checklist
+                                            </h3>
+                                            <p className="text-gray-500 font-bold mt-1">Capture as assinaturas digitais finais para oficializar este relatório.</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-12 relative z-10">
+                                        <div data-signature="gestor" className="group/sig shadow-xl p-2 rounded-[32px] bg-white/50 border border-white transition-all hover:shadow-2xl">
                                             <SignaturePad
-                                                label="Assinatura do Gestor"
+                                                label="ASSINATURA DO GESTOR RESPONSÁVEL"
                                                 onEnd={(data) => handleSignature('gestor', data)}
                                             />
                                         </div>
-                                        <div data-signature="coordenador">
+                                        <div data-signature="coordenador" className="group/sig shadow-xl p-2 rounded-[32px] bg-white/50 border border-white transition-all hover:shadow-2xl">
                                             <SignaturePad
-                                                label="Assinatura Coordenador / Aplicador"
+                                                label="ASSINATURA COORDENADOR / APLICADOR"
                                                 onEnd={(data) => handleSignature('coordenador', data)}
                                             />
                                         </div>
@@ -4685,33 +5138,46 @@ const App: React.FC = () => {
                                 </div>
                             )}
 
-                            {/* Next Step Navigation - Only for MASTER */}
+                            {/* Bottom Navigation (Modern Primary/Secondary Flow) */}
                             {!isReadOnly && (
-                                <div className="flex flex-col sm:flex-row justify-between pt-4 gap-4">
+                                <div className="flex flex-col md:flex-row items-center justify-between gap-8 pt-12 animate-fade-in-up">
                                     <button
                                         onClick={handleVerify}
-                                        className="px-6 py-4 rounded-xl font-bold text-gray-600 bg-white border border-gray-200 hover:bg-gray-50 transition-all flex items-center justify-center gap-2 shadow-sm"
+                                        className="w-full md:w-auto px-12 py-6 rounded-[32px] font-black text-gray-600 bg-white border border-gray-100 hover:bg-gray-50 hover:shadow-2xl hover:-translate-y-1 transition-all duration-500 flex items-center justify-center gap-4 group active:scale-95 shadow-xl"
                                     >
-                                        <CheckSquareIcon size={20} className="text-red-500" />
-                                        Verificar Pendências
+                                        <div className="p-2.5 bg-red-100 text-red-600 rounded-2xl group-hover:rotate-[15deg] transition-transform shadow-sm">
+                                            <CheckSquareIcon size={22} strokeWidth={2.5} />
+                                        </div>
+                                        <span className="tracking-[0.1em]">VERIFICAR PENDÊNCIAS</span>
                                     </button>
 
-                                    <div className="flex gap-4">
+                                    <div className="flex flex-col sm:flex-row gap-5 w-full md:w-auto">
                                         <button
                                             onClick={() => handleViewChange('summary')}
-                                            className="px-6 py-4 rounded-xl font-bold text-gray-600 bg-white border border-gray-200 hover:bg-gray-50 transition-all flex items-center justify-center gap-2 shadow-sm"
+                                            className="px-10 py-6 rounded-[32px] font-black text-gray-500 bg-white/50 border border-white/60 backdrop-blur hover:bg-white hover:shadow-2xl hover:text-gray-800 transition-all duration-500 active:scale-95 tracking-wide"
                                         >
-                                            Pular para Finalização
+                                            PULAR PARA RESUMO
                                         </button>
 
                                         <button
                                             onClick={handleNextChecklist}
-                                            className={`px-8 py-4 rounded-xl text-white font-bold text-lg shadow-lg hover:shadow-xl transition-all flex items-center justify-center gap-3 ${currentTheme.button}`}
+                                            className={`group px-14 py-6 rounded-[32px] text-white font-black text-xl transition-all duration-500 shadow-2xl hover:shadow-[0_20px_40px_rgba(34,197,94,0.3)] hover:-translate-y-1 active:scale-95 flex items-center justify-center gap-5 relative overflow-hidden ${currentTheme.button}`}
                                         >
+                                            <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/10 to-white/0 -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
                                             {checklists.findIndex(c => c.id === activeChecklistId) < checklists.length - 1 ? (
-                                                <>Próximo Checklist <ChevronRight size={20} /></>
+                                                <>
+                                                    PRÓXIMO CHECKLIST
+                                                    <div className="p-2 bg-white/20 rounded-xl group-hover:translate-x-2 transition-transform shadow-inner-light">
+                                                        <ChevronRight size={24} strokeWidth={3} />
+                                                    </div>
+                                                </>
                                             ) : (
-                                                <>Revisar e Finalizar <CheckCircle size={20} /></>
+                                                <>
+                                                    REVISAR E FINALIZAR
+                                                    <div className="p-2 bg-white/20 rounded-xl group-hover:scale-125 group-hover:rotate-[10deg] transition-transform shadow-inner-light">
+                                                        <CheckCircle size={24} strokeWidth={3} />
+                                                    </div>
+                                                </>
                                             )}
                                         </button>
                                     </div>
@@ -4720,397 +5186,197 @@ const App: React.FC = () => {
                         </div>
                     )}
 
+
                     {/* --- SUMMARY VIEW --- */}
                     {currentView === 'summary' && (
-                        <div className="max-w-4xl mx-auto space-y-6 animate-fade-in pb-24">
-                            {checklists.map(cl => {
-                                const stats = getChecklistStats(cl.id);
-                                const isIgnored = ignoredChecklists.has(cl.id);
-                                const isComplete = isChecklistComplete(cl.id);
-                                const percentPassed = stats.total > 0 ? (stats.passed / stats.total) * 100 : 0;
-                                const percentFailed = 100 - percentPassed;
+                        <div className="max-w-5xl mx-auto space-y-8 animate-fade-in pb-24">
+                            {/* Summary Cards Grid */}
+                            <div className="grid grid-cols-1 gap-8">
+                                {checklists.map((cl, idx) => {
+                                    const stats = getChecklistStats(cl.id);
+                                    const isIgnored = ignoredChecklists.has(cl.id);
+                                    const isComplete = isChecklistComplete(cl.id);
+                                    const percentPassed = stats.total > 0 ? (stats.passed / stats.total) * 100 : 0;
+                                    const percentFailed = 100 - percentPassed;
 
-                                // Animations for score
-                                const isPerfect = stats.score === 5;
-                                const isGood = stats.score >= 4;
-                                const isBad = stats.score < 3;
+                                    const isPerfect = stats.score === 5;
+                                    const isGood = stats.score >= 4;
+                                    const isBad = stats.score < 3;
 
-                                // IF INCOMPLETE AND NOT IGNORED, SHOW "CONTINUE FILLING" CARD STYLE
-                                if (!isComplete && !isIgnored) {
                                     return (
-                                        <div key={cl.id} className="bg-white rounded-2xl shadow-card border p-6 md:p-8 flex flex-col gap-6 transition-all border-gray-100 hover:shadow-lg">
-                                            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                                                <div className="flex-1">
-                                                    <h3 className="font-bold text-gray-800 text-xl flex items-center gap-2">
-                                                        {cl.title}
-                                                    </h3>
-                                                    <p className="text-sm text-gray-500 mt-1">{cl.description}</p>
-                                                </div>
-                                                <div className="flex items-center gap-4 w-full md:w-auto">
-                                                    <button
-                                                        onClick={() => toggleIgnoreChecklist(cl.id)}
-                                                        className="text-xs font-bold text-gray-400 hover:text-gray-600 uppercase tracking-wider"
-                                                    >
-                                                        Não se Aplica
-                                                    </button>
-                                                    <button
-                                                        onClick={() => { setActiveChecklistId(cl.id); handleViewChange('checklist'); }}
-                                                        className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-5 py-2.5 rounded-xl text-sm font-bold transition-colors"
-                                                    >
-                                                        Continuar Preenchimento
-                                                    </button>
-                                                </div>
-                                            </div>
+                                        <div
+                                            key={cl.id}
+                                            className={`group relative overflow-hidden transition-all duration-500 hover:shadow-2xl hover:-translate-y-1 ${isIgnored
+                                                ? 'opacity-60 grayscale border-gray-200 bg-gray-50/50'
+                                                : 'bg-white/80 backdrop-blur-xl border border-white/50 shadow-card rounded-[32px]'
+                                                }`}
+                                            style={{ animationDelay: `${idx * 100}ms` }}
+                                        >
+                                            {/* Top Theme Accent Bar */}
+                                            {!isIgnored && (
+                                                <div className={`absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r ${currentTheme.bgGradient}`} />
+                                            )}
 
-                                            <div className="space-y-6">
-                                                <div>
-                                                    <div className="flex justify-between text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">
-                                                        <span>Conformidade</span>
-                                                        <span>{Math.round(percentPassed)}%</span>
-                                                    </div>
-                                                    <div className="h-4 w-full bg-gray-100 rounded-full overflow-hidden flex shadow-inner">
-                                                        <div style={{ width: `${percentPassed}%` }} className="h-full bg-green-500 transition-all duration-1000 ease-out"></div>
-                                                        <div style={{ width: `${percentFailed}%` }} className="h-full bg-red-500 transition-all duration-1000 ease-out"></div>
-                                                    </div>
-                                                </div>
-
-                                                {/* Show missing items if any */}
-                                                {stats.missingItems.length > 0 && (
-                                                    <div className="bg-yellow-50 rounded-xl p-4 border border-yellow-100">
-                                                        <div className="flex items-center gap-2 mb-2">
-                                                            <div className="p-1.5 bg-yellow-200 rounded-full text-yellow-700"><AlertCircle size={16} /></div>
-                                                            <span className="font-bold text-yellow-800 text-sm uppercase">Pendências (Obrigatório)</span>
-                                                        </div>
-                                                        <ul className="space-y-2 mt-2 max-h-40 overflow-y-auto custom-scrollbar pr-2">
-                                                            {stats.missingItems.map((miss, i) => (
-                                                                <li key={i} className="text-xs text-yellow-700 bg-white/50 p-2 rounded border border-yellow-100 flex items-start gap-2">
-                                                                    <div className="mt-0.5 min-w-3"><AlertTriangle size={12} /></div>
-                                                                    <span><strong className="block text-yellow-800 opacity-70 mb-0.5">{miss.section}</strong> {miss.text}</span>
-                                                                </li>
-                                                            ))}
-                                                        </ul>
-                                                    </div>
-                                                )}
-
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                    <div className="bg-green-50 rounded-xl p-4 border border-green-100">
-                                                        <div className="flex items-center gap-2 mb-2">
-                                                            <div className="p-1.5 bg-green-200 rounded-full text-green-700"><Check size={16} /></div>
-                                                            <span className="font-bold text-green-800 text-sm uppercase">Itens Conformes</span>
-                                                        </div>
-                                                        <div className="text-3xl font-black text-green-700">{stats.passed} <span className="text-sm font-medium text-green-600 opacity-70">/ {stats.total}</span></div>
-                                                    </div>
-                                                    <div className="bg-red-50 rounded-xl p-4 border border-red-100">
-                                                        <div className="flex items-center gap-2 mb-2">
-                                                            <div className="p-1.5 bg-red-200 rounded-full text-red-700"><AlertTriangle size={16} /></div>
-                                                            <span className="font-bold text-red-800 text-sm uppercase">Itens Não Conformes</span>
-                                                        </div>
-                                                        {stats.failedItems.length > 0 ? (
-                                                            <div className="mt-2 max-h-40 overflow-y-auto custom-scrollbar pr-2">
-                                                                <ul className="space-y-2">
-                                                                    {stats.failedItems.map((fail, i) => (
-                                                                        <li key={i} className="text-xs text-red-700 bg-white/50 p-2 rounded border border-red-100 flex items-start gap-2">
-                                                                            <div className="mt-0.5 min-w-3"><X size={12} /></div>
-                                                                            <span><strong className="block text-red-800 opacity-70 mb-0.5">{fail.section}</strong> {fail.text}</span>
-                                                                        </li>
-                                                                    ))}
-                                                                </ul>
+                                            <div className="p-8 md:p-10">
+                                                <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 mb-10">
+                                                    <div className="flex-1 space-y-2">
+                                                        <div className="flex items-center gap-3">
+                                                            <div className={`p-2.5 rounded-2xl ${isIgnored ? 'bg-gray-200' : currentTheme.lightBg} transition-colors group-hover:scale-110 duration-500`}>
+                                                                <FileCheck size={24} className={isIgnored ? 'text-gray-400' : currentTheme.text} />
                                                             </div>
-                                                        ) : (
-                                                            <div className="text-3xl font-black text-green-600/50 flex items-center gap-2">
-                                                                0
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    );
-                                }
-
-                                // STANDARD COMPLETE/IGNORED CARD
-                                return (
-                                    <div key={cl.id} className={`bg-white rounded-2xl shadow-card border p-6 md:p-8 flex flex-col gap-6 transition-all ${isIgnored ? 'opacity-60 border-gray-200 grayscale' : 'border-gray-100 hover:shadow-lg'}`}>
-                                        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
-                                            <div className="flex-1">
-                                                <h3 className="font-bold text-gray-800 text-xl flex items-center gap-2">
-                                                    {cl.title}
-                                                    {isComplete && !isIgnored && <CheckCircle size={20} className="text-green-500" />}
-                                                </h3>
-                                                <p className="text-sm text-gray-500 mt-1">{cl.description}</p>
-                                            </div>
-                                            <div className="flex items-center gap-4 w-full md:w-auto">
-                                                <button onClick={() => toggleIgnoreChecklist(cl.id)} className="text-xs font-bold text-gray-400 hover:text-gray-600 uppercase tracking-wider">
-                                                    {isIgnored ? 'Incluir na Avaliação' : 'Não se Aplica'}
-                                                </button>
-                                                {!isIgnored && !isComplete && (
-                                                    <button
-                                                        onClick={() => { setActiveChecklistId(cl.id); handleViewChange('checklist'); }}
-                                                        className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-5 py-2.5 rounded-xl text-sm font-bold transition-colors"
-                                                    >
-                                                        Continuar Preenchimento
-                                                    </button>
-                                                )}
-                                            </div>
-                                        </div>
-
-                                        {!isIgnored && (
-                                            <div className="space-y-6">
-                                                {/* Visual Score Bar */}
-                                                <div>
-                                                    <div className="flex justify-between text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">
-                                                        <span>Conformidade</span>
-                                                        <span>{Math.round(percentPassed)}%</span>
-                                                    </div>
-                                                    <div className="h-4 w-full bg-gray-100 rounded-full overflow-hidden flex shadow-inner">
-                                                        <div style={{ width: `${percentPassed}%` }} className={`h-full bg-green-500 transition-all duration-1000 ease-out`}></div>
-                                                        <div style={{ width: `${percentFailed}%` }} className={`h-full bg-red-500 transition-all duration-1000 ease-out`}></div>
-                                                    </div>
-                                                </div>
-
-                                                {/* Detailed Breakdown Grid */}
-                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                    {/* Passed Items */}
-                                                    <div className="bg-green-50 rounded-xl p-4 border border-green-100">
-                                                        <div className="flex items-center gap-2 mb-2">
-                                                            <div className="p-1.5 bg-green-200 rounded-full text-green-700"><Check size={16} /></div>
-                                                            <span className="font-bold text-green-800 text-sm uppercase">Itens Conformes</span>
+                                                            <h3 className="font-black text-gray-800 text-2xl tracking-tight">
+                                                                {cl.title}
+                                                                {isComplete && !isIgnored && (
+                                                                    <div className="inline-flex ml-3 align-middle bg-green-100 text-green-600 p-1 rounded-full animate-bounce-subtle">
+                                                                        <CheckCircle size={20} fill="currentColor" className="text-white" />
+                                                                    </div>
+                                                                )}
+                                                            </h3>
                                                         </div>
-                                                        <div className="text-3xl font-black text-green-700">{stats.passed} <span className="text-sm font-medium text-green-600 opacity-70">/ {stats.total}</span></div>
+                                                        <p className="text-gray-500 font-medium leading-relaxed max-w-2xl">{cl.description}</p>
                                                     </div>
 
-                                                    {/* Failed Items List */}
-                                                    <div className="bg-red-50 rounded-xl p-4 border border-red-100">
-                                                        <div className="flex items-center gap-2 mb-2">
-                                                            <div className="p-1.5 bg-red-200 rounded-full text-red-700"><AlertTriangle size={16} /></div>
-                                                            <span className="font-bold text-red-800 text-sm uppercase">Itens Não Conformes</span>
-                                                        </div>
-                                                        {stats.failedItems.length > 0 ? (
-                                                            <div className="mt-2 max-h-40 overflow-y-auto custom-scrollbar pr-2">
-                                                                <ul className="space-y-2">
-                                                                    {stats.failedItems.map((fail, i) => (
-                                                                        <li key={i} className="text-xs text-red-700 bg-white/50 p-2 rounded border border-red-100 flex items-start gap-2">
-                                                                            <div className="mt-0.5 min-w-3"><X size={12} /></div>
-                                                                            <span><strong className="block text-red-800 opacity-70 mb-0.5">{fail.section}</strong> {fail.text}</span>
-                                                                        </li>
-                                                                    ))}
-                                                                </ul>
-                                                            </div>
-                                                        ) : (
-                                                            <div className="text-3xl font-black text-green-600/50 flex items-center gap-2">
-                                                                0 <span className="text-sm font-bold text-green-600/50 uppercase">Tudo certo!</span>
-                                                            </div>
+                                                    <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+                                                        <button
+                                                            onClick={() => toggleIgnoreChecklist(cl.id)}
+                                                            className="flex-1 lg:flex-none px-5 py-3 rounded-2xl text-xs font-black uppercase tracking-widest text-gray-400 hover:text-gray-600 hover:bg-gray-100/50 transition-all border border-transparent hover:border-gray-200"
+                                                        >
+                                                            {isIgnored ? 'Incluir na Avaliação' : 'Não se Aplica'}
+                                                        </button>
+                                                        {!isIgnored && (
+                                                            <button
+                                                                onClick={() => { setActiveChecklistId(cl.id); handleViewChange('checklist'); }}
+                                                                className={`flex-1 lg:flex-none px-8 py-3.5 rounded-2xl text-sm font-black transition-all shadow-lg hover:shadow-xl active:scale-95 flex items-center justify-center gap-2 ${isComplete
+                                                                    ? 'bg-gray-800 text-white hover:bg-gray-900'
+                                                                    : `${currentTheme.button} text-white`
+                                                                    }`}
+                                                            >
+                                                                {isComplete ? 'Revisar Checklist' : 'Continuar Preenchimento'}
+                                                                <ChevronRight size={18} />
+                                                            </button>
                                                         )}
                                                     </div>
                                                 </div>
 
-                                                {/* Star Rating Display */}
-                                                <div className="flex items-center justify-center p-4 bg-gray-50 rounded-xl border border-gray-100 gap-6">
-                                                    <div className="text-right">
-                                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-widest">Nota Parcial</div>
-                                                        <div className="text-3xl font-black text-gray-800 leading-none">{stats.score.toFixed(1)}</div>
-                                                    </div>
-                                                    <div className="flex gap-1">
-                                                        {[1, 2, 3, 4, 5].map(star => (
-                                                            <Star
-                                                                key={star}
-                                                                size={32}
-                                                                className={`${isPerfect ? 'animate-bounce' : ''} transition-all`}
-                                                                fill={star <= Math.round(stats.score) ? "#FBBF24" : "none"}
-                                                                color={star <= Math.round(stats.score) ? "#FBBF24" : "#D1D5DB"}
-                                                                strokeWidth={2}
-                                                            />
-                                                        ))}
-                                                    </div>
-                                                    <div className="text-left">
-                                                        {isPerfect && <PartyPopper className="text-yellow-500 animate-pulse" size={32} />}
-                                                        {isGood && !isPerfect && <Trophy className="text-blue-500" size={32} />}
-                                                        {isBad && <Frown className="text-red-500" size={32} />}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            })}
-
-                            <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8 mt-8 sticky bottom-4 z-20">
-                                <div className="flex items-center justify-between mb-6">
-                                    <div>
-                                        <h2 className="text-2xl font-bold text-gray-800">Resultado Final</h2>
-                                        <p className="text-sm text-gray-500">Média global de todos os checklists ativos.</p>
-                                    </div>
-                                    <div className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-r from-blue-600 to-purple-600">{calculateGlobalScore()}</div>
-                                </div>
-                                <div className="flex justify-end border-t border-gray-100 pt-6">
-                                    <button
-                                        onClick={handleFinalizeAndSave}
-                                        disabled={isSaving}
-                                        className={`px-8 py-4 rounded-xl text-white font-bold text-lg shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-1 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 shadow-lg shadow-blue-200 flex items-center gap-2 ${isSaving ? 'opacity-70 cursor-wait' : ''}`}
-                                    >
-                                        {isSaving ? (
-                                            <>
-                                                <Loader2 size={24} className="animate-spin" />
-                                                <span>SALVANDO AGUARDE...</span>
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Save size={20} />
-                                                <span>FINALIZAR E SALVAR RELATÓRIO</span>
-                                            </>
-                                        )}
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* --- REPORT / HISTORY VIEW (READ ONLY) --- */}
-                    {(currentView === 'report' || currentView === 'view_history') && (
-                        <div className="max-w-5xl mx-auto bg-white p-6 shadow-2xl rounded-3xl min-h-screen">
-                            <LogoPrint config={displayConfig} theme={currentTheme} />
-
-                            {/* Basic Info Block (Extracted Top) */}
-                            <div className="mb-4 pb-3">
-                                <h3 className={`text-lg font-black uppercase tracking-tight mb-3 pb-1 border-b-2 ${currentTheme.border} ${currentTheme.text}`}>Informações Básicas</h3>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Empresa</p>
-                                        <p className="text-lg font-bold text-gray-800">
-                                            {viewHistoryItem?.empresa_avaliada || getInputValue('empresa', basicInfoSourceChecklist) || 'Sem Empresa'}
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Área</p>
-                                        <p className="text-lg font-bold text-gray-800">
-                                            {viewHistoryItem?.area || getInputValue('area', basicInfoSourceChecklist) || 'N/A'}
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Filial</p>
-                                        <p className="text-lg font-bold text-gray-800">
-                                            {viewHistoryItem?.filial || getInputValue('filial', basicInfoSourceChecklist) || 'Sem Filial'}
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Nome do Coordenador / Aplicador</p>
-                                        <p className="text-lg font-bold text-gray-800">{getInputValue('nome_coordenador', basicInfoSourceChecklist) || '-'}</p>
-                                    </div>
-                                    <div>
-                                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Gestor(a)</p>
-                                        <p className="text-lg font-bold text-gray-800">
-                                            {viewHistoryItem?.gestor || getInputValue('gestor', basicInfoSourceChecklist) || 'N/A'}
-                                        </p>
-                                    </div>
-                                    <div>
-                                        <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Data de Aplicação</p>
-                                        <p className="text-lg font-bold text-gray-800">{getInputValue('data_aplicacao', basicInfoSourceChecklist) || '-'}</p>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4 mb-4 border-b-2 border-gray-100 pb-3">
-                                <div>
-                                    <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Responsável pela Avaliação (Sistema)</p>
-                                    <p className="text-lg font-bold text-gray-800">{viewHistoryItem ? viewHistoryItem.userName : currentUser.name}</p>
-                                    <p className="text-sm text-gray-500">{viewHistoryItem ? viewHistoryItem.userEmail : currentUser.email}</p>
-                                </div>
-                                <div className="text-right">
-                                    <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-1">Data do Relatório</p>
-                                    <p className="text-lg font-bold text-gray-800">
-                                        {new Date(viewHistoryItem ? viewHistoryItem.date : new Date().toISOString()).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}
-                                    </p>
-                                    <p className="text-sm text-gray-500">
-                                        {new Date(viewHistoryItem ? viewHistoryItem.date : new Date().toISOString()).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                                    </p>
-                                </div>
-                            </div>
-
-                            {/* Interactive Score Feedback */}
-                            {(() => {
-                                const scoreNum = Number(viewHistoryItem ? viewHistoryItem.score : calculateGlobalScore());
-                                const feedback = getScoreFeedback(scoreNum);
-
-                                return (
-                                    <div className="flex flex-col items-center justify-center p-3 bg-gray-50 rounded-xl border border-gray-200 mb-4 text-center">
-                                        <span className="block text-xs font-bold text-gray-400 uppercase tracking-widest mb-2">Nota Global</span>
-                                        <div className="flex items-center gap-4 mb-2">
-                                            {feedback.icon}
-                                            <span className={`text-6xl font-black ${feedback.color}`}>{scoreNum.toFixed(1)}</span>
-                                        </div>
-                                        <span className={`px-4 py-1 rounded-full text-sm font-bold uppercase tracking-wide mb-2 ${feedback.bg} ${feedback.color}`}>
-                                            {feedback.label}
-                                        </span>
-                                        {scoreNum >= 3.0 && <p className="text-sm font-bold text-gray-500 animate-pulse">{feedback.msg}</p>}
-                                        <span className="block text-xs font-bold text-gray-400 mt-2">de 5.0</span>
-                                    </div>
-                                );
-                            })()}
-
-                            <div className="space-y-4">
-                                {checklists.map(cl => {
-                                    const isIgnored = viewHistoryItem ? viewHistoryItem.ignoredChecklists.includes(cl.id) : ignoredChecklists.has(cl.id);
-                                    if (isIgnored) return null;
-
-                                    return (
-                                        <div key={cl.id} className="break-inside-avoid">
-                                            <h3 className={`text-lg font-black uppercase tracking-tight mb-3 pb-1 border-b-2 ${currentTheme.border} ${currentTheme.text}`}>{cl.title}</h3>
-                                            <div className="space-y-3">
-                                                {cl.sections.map(sec => {
-                                                    // SKIP INFO BASICA IN INDIVIDUAL SECTIONS (Already shown at top)
-                                                    if (sec.id === 'info_basica') return null;
-
-                                                    return (
-                                                        <div key={sec.id} className="mb-3">
-                                                            <h4 className="font-bold text-gray-800 mb-2 uppercase text-xs tracking-wide bg-gray-100 p-1 pl-3 rounded-lg">{sec.title}</h4>
-                                                            <div className="pl-3 space-y-2">
-                                                                {sec.items.map(item => {
-                                                                    const val = getInputValue(item.id, cl.id);
-                                                                    if (item.type === InputType.HEADER) return <h5 key={item.id} className="font-bold text-gray-700 mt-4 border-b border-gray-200">{item.text}</h5>;
-                                                                    if (item.type === InputType.INFO) return null; // Skip info in print
-
-                                                                    return (
-                                                                        <div key={item.id} className="flex justify-between items-start text-sm border-b border-gray-50 pb-2 last:border-0">
-                                                                            <span className="w-2/3 pr-4 text-gray-700">{item.text}</span>
-                                                                            <span className="font-bold">
-                                                                                {item.type === InputType.BOOLEAN_PASS_FAIL ? (
-                                                                                    val === 'pass' ? <span className="text-green-600">CONFORME</span> :
-                                                                                        val === 'fail' ? <span className="text-red-600">NÃO CONFORME</span> :
-                                                                                            val === 'na' ? <span className="text-gray-400">N/A</span> : '-'
-                                                                                ) : (
-                                                                                    val || '-'
-                                                                                )}
+                                                {!isIgnored && (
+                                                    <div className="grid grid-cols-1 xl:grid-cols-12 gap-10">
+                                                        {/* Compliance Progress - Col 1-7 */}
+                                                        <div className="xl:col-span-7 space-y-8">
+                                                            <div className="relative pt-4">
+                                                                <div className="flex justify-between items-end mb-4">
+                                                                    <div>
+                                                                        <span className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Status de Conformidade</span>
+                                                                        <div className="flex items-baseline gap-2">
+                                                                            <span className={`text-4xl font-black ${percentPassed >= 90 ? 'text-green-600' : percentPassed >= 70 ? 'text-blue-600' : 'text-orange-600'}`}>
+                                                                                {Math.round(percentPassed)}%
                                                                             </span>
+                                                                            <span className="text-gray-400 font-bold text-sm">conforme</span>
                                                                         </div>
-                                                                    );
-                                                                })}
-                                                            </div>
-                                                            {/* Images in Report */}
-                                                            {(getDataSource(cl.id).imgs[sec.id] || []).length > 0 && (
-                                                                <div className="mt-2 mb-2 grid grid-cols-2 gap-2 break-inside-avoid page-break-inside-avoid" style={{ pageBreakInside: 'avoid' }}>
-                                                                    {(getDataSource(cl.id).imgs[sec.id] || []).slice(0, 2).map((img, idx) => (
-                                                                        <div key={idx} className="report-image-container rounded-lg border border-gray-300 bg-white p-1 break-inside-avoid" style={{ height: '200px', pageBreakInside: 'avoid', breakInside: 'avoid' }}>
-                                                                            <img src={img} alt={`Imagem ${idx + 1}`} className="w-full h-full object-contain" style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }} />
-                                                                        </div>
-                                                                    ))}
+                                                                    </div>
+                                                                    <div className="text-right">
+                                                                        <span className="text-lg font-black text-gray-800">{stats.passed}</span>
+                                                                        <span className="text-xs font-bold text-gray-400 ml-1">/ {stats.total} itens</span>
+                                                                    </div>
                                                                 </div>
-                                                            )}
+
+                                                                {/* Ultra Modern Progress Bar */}
+                                                                <div className="h-6 w-full bg-gray-100/50 rounded-2xl overflow-hidden flex p-1 border border-gray-100 shadow-inner">
+                                                                    <div
+                                                                        style={{ width: `${percentPassed}%` }}
+                                                                        className={`h-full rounded-xl transition-all duration-1000 ease-out shadow-lg relative overflow-hidden bg-gradient-to-r ${percentPassed >= 70 ? 'from-green-400 to-green-600' : 'from-orange-400 to-orange-600'}`}
+                                                                    >
+                                                                        <div className="absolute inset-0 bg-[linear-gradient(45deg,rgba(255,255,255,0.2)_25%,transparent_25%,transparent_50%,rgba(255,255,255,0.2)_50%,rgba(255,255,255,0.2)_75%,transparent_75%,transparent)] bg-[length:24px_24px] animate-shimmer" />
+                                                                    </div>
+                                                                    <div
+                                                                        style={{ width: `${percentFailed}%` }}
+                                                                        className="h-full bg-red-100/50 transition-all duration-1000 ease-out"
+                                                                    ></div>
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Detailed Stats Grid */}
+                                                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                                                <div className="bg-green-50/50 p-6 rounded-[24px] border border-green-100/50 flex items-center gap-4 group/stat">
+                                                                    <div className="p-3 bg-green-100 rounded-2xl text-green-600 transition-transform group-hover/stat:rotate-12">
+                                                                        <ShieldCheck size={24} />
+                                                                    </div>
+                                                                    <div>
+                                                                        <div className="text-[10px] font-black uppercase tracking-widest text-green-600/70 mb-0.5">Itens Conformes</div>
+                                                                        <div className="text-2xl font-black text-green-700">{stats.passed}</div>
+                                                                    </div>
+                                                                </div>
+
+                                                                <div className={`p-6 rounded-[24px] border flex items-center gap-4 group/stat ${stats.failedItems.length > 0 ? 'bg-red-50/50 border-red-100/50' : 'bg-gray-50/50 border-gray-100/50'}`}>
+                                                                    <div className={`p-3 rounded-2xl transition-transform group-hover/stat:rotate-12 ${stats.failedItems.length > 0 ? 'bg-red-100 text-red-600' : 'bg-gray-100 text-gray-400'}`}>
+                                                                        {stats.failedItems.length > 0 ? <AlertTriangle size={24} /> : <ThumbsUp size={24} />}
+                                                                    </div>
+                                                                    <div>
+                                                                        <div className={`text-[10px] font-black uppercase tracking-widest mb-0.5 ${stats.failedItems.length > 0 ? 'text-red-600/70' : 'text-gray-400'}`}>Não Conformidades</div>
+                                                                        <div className={`text-2xl font-black ${stats.failedItems.length > 0 ? 'text-red-700' : 'text-gray-400'}`}>{stats.failedItems.length}</div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
                                                         </div>
-                                                    )
-                                                })}
-                                            </div>
-                                            {/* Signatures in Report */}
-                                            <div className="mt-4 flex justify-end gap-4">
-                                                {getDataSource(cl.id).sigs['gestor'] && (
-                                                    <div className="text-center">
-                                                        <img src={getDataSource(cl.id).sigs['gestor']} className="h-16 mb-1 border-b border-gray-300" />
-                                                        <p className="text-xs font-bold text-gray-500 uppercase">Assinatura Gestor</p>
+
+                                                        {/* Score and Rank - Col 8-12 */}
+                                                        <div className="xl:col-span-5 flex flex-col gap-6">
+                                                            <div className="flex-1 bg-gray-50/30 rounded-[32px] border border-gray-200/50 p-8 flex flex-col items-center justify-center text-center relative overflow-hidden">
+                                                                {/* Decorative Background Icon */}
+                                                                <Star size={120} className="absolute -bottom-6 -right-6 text-gray-200/20 rotate-12" />
+
+                                                                <div className="relative z-10">
+                                                                    <span className="text-[11px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-6">Desempenho Geral</span>
+
+                                                                    <div className="flex flex-col items-center gap-2 mb-6">
+                                                                        <div className="text-6xl font-black text-gray-900 leading-none tracking-tighter">
+                                                                            {stats.score.toFixed(1)}
+                                                                        </div>
+                                                                        <div className="text-xs font-bold text-gray-400 uppercase tracking-widest">escala de 5.0</div>
+                                                                    </div>
+
+                                                                    <div className="flex gap-1.5 justify-center mb-6">
+                                                                        {[1, 2, 3, 4, 5].map(star => (
+                                                                            <div key={star} className="relative transition-transform duration-500 hover:scale-125">
+                                                                                <Star
+                                                                                    size={32}
+                                                                                    className={`${isPerfect ? 'animate-bounce-subtle' : ''}`}
+                                                                                    fill={star <= Math.round(stats.score) ? "#FBBF24" : "none"}
+                                                                                    color={star <= Math.round(stats.score) ? "#FBBF24" : "#E5E7EB"}
+                                                                                    strokeWidth={2.5}
+                                                                                />
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+
+                                                                    <div className="inline-flex items-center gap-2 bg-white px-5 py-2.5 rounded-2xl shadow-sm border border-gray-100">
+                                                                        {isPerfect && <><span className="text-lg">🔥</span> <span className="text-xs font-black uppercase text-yellow-600">Excelência Absoluta</span></>}
+                                                                        {isGood && !isPerfect && <><span className="text-lg">🏆</span> <span className="text-xs font-black uppercase text-blue-600">Alto Padrão</span></>}
+                                                                        {!isGood && !isBad && <><span className="text-lg">📈</span> <span className="text-xs font-black uppercase text-orange-600">Em Evolução</span></>}
+                                                                        {isBad && <><span className="text-lg">⚠️</span> <span className="text-xs font-black uppercase text-red-600">Atenção Crítica</span></>}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
                                                     </div>
                                                 )}
-                                                {getDataSource(cl.id).sigs['coordenador'] && (
-                                                    <div className="text-center">
-                                                        <img src={getDataSource(cl.id).sigs['coordenador']} className="h-16 mb-1 border-b border-gray-300" />
-                                                        <p className="text-xs font-bold text-gray-500 uppercase">Assinatura Coordenador</p>
+
+                                                {/* Alerts / Missing Items */}
+                                                {!isIgnored && stats.missingItems.length > 0 && (
+                                                    <div className="mt-8 bg-amber-50/50 backdrop-blur-sm rounded-[24px] border border-amber-100 p-6 flex flex-col md:flex-row items-start gap-4">
+                                                        <div className="p-3 bg-amber-100 rounded-2xl text-amber-600">
+                                                            <AlertCircle size={24} />
+                                                        </div>
+                                                        <div className="flex-1">
+                                                            <h4 className="font-black text-amber-900 text-sm uppercase tracking-wide mb-3">Itens Obrigatórios Pendentes</h4>
+                                                            <ul className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-2">
+                                                                {stats.missingItems.map((miss, i) => (
+                                                                    <li key={i} className="flex items-start gap-2 text-xs font-bold text-amber-800/80 leading-snug">
+                                                                        <div className="mt-1 min-w-[8px] h-2 w-2 rounded-full bg-amber-400" />
+                                                                        <span><span className="opacity-60">{miss.section}:</span> {miss.text}</span>
+                                                                    </li>
+                                                                ))}
+                                                            </ul>
+                                                        </div>
                                                     </div>
                                                 )}
                                             </div>
@@ -5119,154 +5385,528 @@ const App: React.FC = () => {
                                 })}
                             </div>
 
-                            <div className="mt-6 flex justify-center no-print">
-                                <button
-                                    onClick={handleDownloadPDF}
-                                    className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-8 py-3 rounded-xl transition-all shadow-lg hover:shadow-xl hover:-translate-y-0.5 font-bold"
-                                >
-                                    <Download size={20} />
-                                    Baixar Relatório em PDF
-                                </button>
+                            {/* Final Footer Result */}
+                            <div className="relative mt-12 mb-8">
+                                <div className="absolute inset-0 bg-gradient-to-r from-blue-600/20 to-purple-600/20 blur-3xl -z-10 rounded-full opacity-50" />
+                                <div className="bg-slate-900 text-white rounded-[40px] shadow-2xl overflow-hidden border border-white/10">
+                                    <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
+                                        <Trophy size={160} />
+                                    </div>
+
+                                    <div className="p-8 md:p-12">
+                                        <div className="flex flex-col md:flex-row items-center justify-between gap-10">
+                                            <div className="text-center md:text-left space-y-2">
+                                                <h2 className="text-3xl md:text-4xl font-black tracking-tight leading-none">Resultado Final</h2>
+                                                <p className="text-slate-400 font-medium md:text-lg">Consolidado global de todos os checklists ativos</p>
+                                                <div className="flex flex-wrap justify-center md:justify-start gap-3 mt-6">
+                                                    <div className="px-4 py-2 bg-white/10 rounded-full text-xs font-black uppercase tracking-widest border border-white/5">
+                                                        {checklists.filter(c => !ignoredChecklists.has(c.id)).length} Módulos Ativos
+                                                    </div>
+                                                    <div className="px-4 py-2 bg-white/10 rounded-full text-xs font-black uppercase tracking-widest border border-white/5">
+                                                        {checklists.filter(c => isChecklistComplete(c.id)).length} Completos
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <div className="flex flex-col items-center gap-1">
+                                                <div className="text-8xl font-black tracking-tighter text-transparent bg-clip-text bg-gradient-to-br from-white via-white to-blue-300 drop-shadow-2xl">
+                                                    {calculateGlobalScore()}
+                                                </div>
+                                                <div className="text-[11px] font-black uppercase tracking-[0.4em] text-blue-400/80">SCORE FINAL</div>
+                                            </div>
+
+                                            <div className="w-full md:w-auto">
+                                                <button
+                                                    onClick={handleFinalizeAndSave}
+                                                    disabled={isSaving}
+                                                    className={`group w-full md:w-auto px-10 py-6 rounded-[28px] text-white font-black text-xl shadow-2xl transition-all active:scale-95 flex items-center justify-center gap-4 relative overflow-hidden ${isSaving
+                                                        ? 'bg-slate-800'
+                                                        : 'bg-gradient-to-br from-blue-500 to-blue-700 hover:from-blue-600 hover:to-blue-800'
+                                                        }`}
+                                                >
+                                                    {isSaving ? (
+                                                        <>
+                                                            <Loader2 size={24} className="animate-spin" />
+                                                            <span className="tracking-tight">PROCESSANDO...</span>
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <span className="relative z-10">FINALIZAR RELATÓRIO</span>
+                                                            <div className="relative z-10 p-2 bg-white/20 rounded-2xl group-hover:translate-x-1 transition-transform">
+                                                                <ArrowRight size={24} />
+                                                            </div>
+                                                            {/* Shine Effect */}
+                                                            <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
+                                                        </>
+                                                    )}
+                                                </button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                     )}
 
-                    {/* --- HISTORY LIST VIEW --- */}
-                    {currentView === 'history' && (
-                        <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-24">
-                            <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
-                                <div className="flex items-center justify-between mb-6">
-                                    <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">
-                                        <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
-                                            <History size={24} className={currentTheme.text} />
-                                        </div>
-                                        Histórico de Avaliações
-                                    </h2>
 
+                    {/* --- REPORT / HISTORY VIEW (READ ONLY) --- */}
+                    {(currentView === 'report' || currentView === 'view_history') && (
+                        <div className="max-w-5xl mx-auto bg-white/80 backdrop-blur-2xl p-10 md:p-16 shadow-2xl rounded-[48px] border border-white/60 animate-fade-in mb-24 relative overflow-hidden">
+                            {/* Decorative Background Elements */}
+                            <div className={`absolute top-0 right-0 w-96 h-96 bg-gradient-to-br ${currentTheme.bgGradient} opacity-5 rounded-full -mr-48 -mt-48 blur-3xl p-print-hidden`} />
+
+                            <div className="relative z-10">
+                                <LogoPrint config={displayConfig} theme={currentTheme} />
+
+                                {/* Basic Info Block (Premium Card) */}
+                                <div className="mb-12 mt-10 bg-white/50 border border-white rounded-3xl p-8 shadow-sm">
+                                    <h3 className={`text-sm font-black uppercase tracking-widest mb-6 flex items-center gap-3 ${currentTheme.text}`}>
+                                        <div className={`w-8 h-1 rounded-full bg-gradient-to-r ${currentTheme.bgGradient}`} />
+                                        Informações Básicas
+                                    </h3>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Empresa Avaliada</p>
+                                            <p className="text-xl font-black text-gray-800 flex items-center gap-2">
+                                                <Building2 size={18} className="text-blue-500" />
+                                                {viewHistoryItem?.empresa_avaliada || getInputValue('empresa', basicInfoSourceChecklist) || 'Sem Empresa'}
+                                            </p>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Área / Setor</p>
+                                            <p className="text-xl font-bold text-gray-800">
+                                                {viewHistoryItem?.area || getInputValue('area', basicInfoSourceChecklist) || 'N/A'}
+                                            </p>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Filial</p>
+                                            <p className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                                                <Store size={18} className="text-indigo-500" />
+                                                {viewHistoryItem?.filial || getInputValue('filial', basicInfoSourceChecklist) || 'Sem Filial'}
+                                            </p>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Coordenador / Aplicador</p>
+                                            <p className="text-lg font-bold text-gray-700">
+                                                {getInputValue('nome_coordenador', basicInfoSourceChecklist) || '-'}
+                                            </p>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Gestor(a) Responsável</p>
+                                            <p className="text-lg font-bold text-gray-700">
+                                                {viewHistoryItem?.gestor || getInputValue('gestor', basicInfoSourceChecklist) || 'N/A'}
+                                            </p>
+                                        </div>
+                                        <div className="space-y-1">
+                                            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Data de Aplicação</p>
+                                            <p className="text-lg font-extrabold text-blue-600">
+                                                {getInputValue('data_aplicacao', basicInfoSourceChecklist) || '-'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-10">
+                                    <div className="bg-white/40 border border-white rounded-[32px] p-6 flex flex-col justify-center">
+                                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4 flex items-center gap-2">
+                                            <UserCircle size={14} /> Responsável Logado no Sistema
+                                        </p>
+                                        <div className="flex items-center gap-4">
+                                            <div className={`w-12 h-12 rounded-full bg-gradient-to-br ${currentTheme.bgGradient} flex items-center justify-center text-white font-black text-xl shadow-lg`}>
+                                                {(viewHistoryItem ? viewHistoryItem.userName : currentUser.name).charAt(0)}
+                                            </div>
+                                            <div>
+                                                <p className="text-lg font-black text-gray-800 leading-tight">{viewHistoryItem ? viewHistoryItem.userName : currentUser.name}</p>
+                                                <p className="text-xs font-bold text-gray-500">{viewHistoryItem ? viewHistoryItem.userEmail : currentUser.email}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="bg-white/40 border border-white rounded-[32px] p-6 text-right flex flex-col justify-center">
+                                        <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest mb-4 flex items-center justify-end gap-2">
+                                            <Calendar size={14} /> Data do Relatório Oficial
+                                        </p>
+                                        <p className="text-2xl font-black text-gray-900 tracking-tight leading-none">
+                                            {new Date(viewHistoryItem ? viewHistoryItem.date : new Date().toISOString()).toLocaleDateString('pt-BR', { day: '2-digit', month: 'long', year: 'numeric' })}
+                                        </p>
+                                        <p className="text-sm font-bold text-blue-500 mt-1">
+                                            às {new Date(viewHistoryItem ? viewHistoryItem.date : new Date().toISOString()).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {/* Score Feedback Container (Premium Glass) */}
+                                {(() => {
+                                    const scoreNum = Number(viewHistoryItem ? viewHistoryItem.score : calculateGlobalScore());
+                                    const feedback = getScoreFeedback(scoreNum);
+
+                                    return (
+                                        <div className="relative group mb-12">
+                                            <div className={`absolute inset-0 bg-gradient-to-br ${currentTheme.bgGradient} opacity-10 blur-2xl rounded-[48px] -z-10 transition-all duration-700 group-hover:opacity-20`} />
+                                            <div className="bg-white/70 backdrop-blur-xl rounded-[40px] border border-white p-10 flex flex-col items-center text-center shadow-card relative overflow-hidden">
+                                                <div className="absolute top-0 right-0 p-6 opacity-5 rotate-12">
+                                                    <Trophy size={140} />
+                                                </div>
+
+                                                <span className="text-[11px] font-black text-gray-400 uppercase tracking-[0.3em] mb-4">Nota Global de Conformidade</span>
+
+                                                <div className="flex items-center gap-6 mb-4">
+                                                    <div className="p-5 bg-white rounded-[24px] shadow-xl border border-gray-100 transform -rotate-3 transition-transform group-hover:rotate-0 duration-500">
+                                                        {feedback.icon}
+                                                    </div>
+                                                    <div className="flex flex-col items-start leading-none">
+                                                        <span className={`text-7xl font-black tracking-tighter ${feedback.color}`}>{scoreNum.toFixed(1)}</span>
+                                                        <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest mt-1">de 5.0 pontos</span>
+                                                    </div>
+                                                </div>
+
+                                                <div className={`px-8 py-3 rounded-2xl text-sm font-black uppercase tracking-widest shadow-lg ${feedback.bg} ${feedback.color} border border-white/20 mb-4 animate-bounce-subtle`}>
+                                                    {feedback.label}
+                                                </div>
+
+                                                {scoreNum >= 3.0 && <p className="text-lg font-bold text-gray-600 max-w-lg mt-2 italic">"{feedback.msg}"</p>}
+                                            </div>
+                                        </div>
+                                    );
+                                })()}
+
+                                {/* Checklist Sections (Modern Cards) */}
+                                <div className="space-y-12">
+                                    {checklists.map(cl => {
+                                        const isIgnored = viewHistoryItem ? viewHistoryItem.ignoredChecklists.includes(cl.id) : ignoredChecklists.has(cl.id);
+                                        if (isIgnored) return null;
+
+                                        return (
+                                            <div key={cl.id} className="break-inside-avoid">
+                                                <div className="flex items-center gap-4 mb-6">
+                                                    <div className={`h-10 w-2.5 rounded-full bg-gradient-to-b ${currentTheme.bgGradient}`} />
+                                                    <h3 className="text-2xl font-black text-gray-900 uppercase tracking-tight">{cl.title}</h3>
+                                                </div>
+
+                                                <div className="grid grid-cols-1 gap-6">
+                                                    {cl.sections.map(sec => {
+                                                        if (sec.id === 'info_basica') return null;
+
+                                                        return (
+                                                            <div key={sec.id} className="bg-white/50 border border-gray-100 rounded-3xl p-6 shadow-sm hover:shadow-md transition-shadow group/section">
+                                                                <h4 className="font-black text-blue-900 border-b border-gray-100 pb-3 mb-5 uppercase text-xs tracking-[0.2em] flex items-center justify-between">
+                                                                    {sec.title}
+                                                                    <div className="h-1 w-12 bg-blue-100 rounded-full" />
+                                                                </h4>
+
+                                                                <div className="space-y-4">
+                                                                    {sec.items.map(item => {
+                                                                        const val = getInputValue(item.id, cl.id);
+                                                                        if (item.type === InputType.HEADER) return <h5 key={item.id} className="font-black text-gray-800 mt-8 mb-4 border-l-4 border-blue-500 pl-4 py-1 text-sm">{item.text}</h5>;
+                                                                        if (item.type === InputType.INFO) return null;
+
+                                                                        return (
+                                                                            <div key={item.id} className="flex justify-between items-start gap-6 py-3 border-b border-gray-50/50 group-hover/section:border-blue-50 transition-colors">
+                                                                                <span className="text-sm font-bold text-gray-600 leading-relaxed w-full">{item.text}</span>
+                                                                                <div className="min-w-fit flex items-center">
+                                                                                    {item.type === InputType.BOOLEAN_PASS_FAIL ? (
+                                                                                        val === 'pass' ? <span className="px-4 py-1.5 bg-green-100 text-green-700 rounded-full text-[10px] font-black shadow-sm ring-4 ring-green-500/5">CONFORME</span> :
+                                                                                            val === 'fail' ? <span className="px-4 py-1.5 bg-red-100 text-red-700 rounded-full text-[10px] font-black shadow-sm ring-4 ring-red-500/5">NÃO CONFORME</span> :
+                                                                                                val === 'na' ? <span className="px-4 py-1.5 bg-gray-100 text-gray-400 rounded-full text-[10px] font-black">N/A</span> : <span className="text-gray-300">-</span>
+                                                                                    ) : (
+                                                                                        <span className="text-sm font-black text-gray-800 bg-white px-3 py-1 rounded-lg border border-gray-100 shadow-sm">{val || '-'}</span>
+                                                                                    )}
+                                                                                </div>
+                                                                            </div>
+                                                                        );
+                                                                    })}
+                                                                </div>
+
+                                                                {/* Images in Section with Premium Layout */}
+                                                                {(getDataSource(cl.id).imgs[sec.id] || []).length > 0 && (
+                                                                    <div className="mt-8 grid grid-cols-2 gap-4">
+                                                                        {(getDataSource(cl.id).imgs[sec.id] || []).slice(0, 4).map((img, idx) => (
+                                                                            <div key={idx} className="relative aspect-video rounded-[24px] overflow-hidden border-2 border-white shadow-lg group/img">
+                                                                                <img src={img} alt={`Evidência ${idx + 1}`} className="w-full h-full object-cover group-hover/img:scale-110 transition-transform duration-700" />
+                                                                                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover/img:opacity-100 transition-opacity p-4 flex flex-end items-end">
+                                                                                    <span className="text-white font-black text-[10px] tracking-widest uppercase">Evidência #{idx + 1}</span>
+                                                                                </div>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                )}
+                                                            </div>
+                                                        )
+                                                    })}
+                                                </div>
+
+                                                {/* Final Signatures (Premium Cards) */}
+                                                <div className="mt-12 flex flex-wrap justify-end gap-6 p-print-hidden">
+                                                    {getDataSource(cl.id).sigs['gestor'] && (
+                                                        <div className="bg-white/60 p-6 rounded-[32px] border border-white shadow-sm flex flex-col items-center">
+                                                            <div className="bg-white p-2 rounded-2xl mb-3 shadow-inner border border-gray-50">
+                                                                <img src={getDataSource(cl.id).sigs['gestor']} className="h-24 max-w-[200px] object-contain" />
+                                                            </div>
+                                                            <div className="text-center">
+                                                                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-0.5">Assinatura Digital</p>
+                                                                <p className="text-xs font-black text-gray-800 uppercase">Gestor Responsável</p>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                    {getDataSource(cl.id).sigs['coordenador'] && (
+                                                        <div className="bg-white/60 p-6 rounded-[32px] border border-white shadow-sm flex flex-col items-center">
+                                                            <div className="bg-white p-2 rounded-2xl mb-3 shadow-inner border border-gray-50">
+                                                                <img src={getDataSource(cl.id).sigs['coordenador']} className="h-24 max-w-[200px] object-contain" />
+                                                            </div>
+                                                            <div className="text-center">
+                                                                <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] mb-0.5">Assinatura Digital</p>
+                                                                <p className="text-xs font-black text-gray-800 uppercase">Coordenador / Aplicador</p>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+
+                                <div className="mt-16 flex justify-center no-print">
                                     <button
-                                        onClick={handleReloadReports}
-                                        disabled={isReloadingReports}
-                                        className={`px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition-colors text-white ${isReloadingReports ? 'bg-blue-400 hover:bg-blue-400 cursor-wait opacity-80' : 'bg-blue-500 hover:bg-blue-600'
-                                            }`}
-                                        title="Recarregar relatórios do Supabase"
+                                        onClick={handleDownloadPDF}
+                                        className={`group flex items-center gap-4 bg-gray-900 text-white px-12 py-6 rounded-[32px] font-black text-xl transition-all duration-500 shadow-2xl hover:-translate-y-1 hover:shadow-gray-400/30 active:scale-95 relative overflow-hidden`}
                                     >
-                                        {isReloadingReports ? (
-                                            <>
-                                                <svg
-                                                    className="w-4 h-4 animate-spin"
-                                                    fill="none"
-                                                    stroke="currentColor"
-                                                    viewBox="0 0 24 24"
-                                                >
-                                                    <path
-                                                        strokeLinecap="round"
-                                                        strokeLinejoin="round"
-                                                        strokeWidth={2}
-                                                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                                                    />
-                                                </svg>
-                                                Atualizando…
-                                            </>
-                                        ) : (
-                                            <>
-                                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                                                </svg>
-                                                Atualizar
-                                            </>
-                                        )}
+                                        <div className="absolute inset-0 bg-gradient-to-r from-blue-600 to-purple-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                        <div className="relative z-10 p-2.5 bg-white/10 rounded-2xl group-hover:rotate-6 transition-transform">
+                                            <Download size={24} />
+                                        </div>
+                                        <span className="relative z-10 tracking-tight">EXPORTAR PDF PREMIUM</span>
+                                        {/* Shine Effect */}
+                                        <div className="absolute inset-0 bg-gradient-to-tr from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-1000" />
                                     </button>
                                 </div>
+                            </div>
+                        </div>
+                    )}
 
-                                {/* Filters for Master */}
-                                {canModerateHistory && (
-                                    <div className="mb-6 flex items-center gap-4 bg-gray-50 p-4 rounded-xl border border-gray-200">
-                                        <Filter size={18} className="text-gray-400" />
-                                        <span className="text-sm font-bold text-gray-600">Filtrar Usuário:</span>
-                                        <select
-                                            value={historyFilterUser}
-                                            onChange={(e) => setHistoryFilterUser(e.target.value)}
-                                            className="bg-white border border-gray-300 rounded-lg p-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"
+
+                    {/* --- HISTORY LIST VIEW --- */}
+                    {currentView === 'history' && (
+                        <div className="max-w-6xl mx-auto space-y-10 animate-fade-in pb-24">
+                            {/* Main History Header Card */}
+                            <div className="bg-white/80 backdrop-blur-xl border border-white/50 rounded-[40px] shadow-card overflow-hidden relative">
+                                <div className={`h-1.5 w-full bg-gradient-to-r ${currentTheme.bgGradient}`} />
+                                <div className="p-8 md:p-12">
+                                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-12">
+                                        <div className="flex items-center gap-6">
+                                            <div className={`p-5 rounded-[24px] ${currentTheme.lightBg} ${currentTheme.text} shadow-inner-light transition-transform hover:scale-105 duration-500`}>
+                                                <History size={36} strokeWidth={2.5} />
+                                            </div>
+                                            <div>
+                                                <h2 className="text-3xl font-black text-gray-900 tracking-tight leading-tight">Histórico de Auditorias</h2>
+                                                <p className="text-gray-500 font-bold text-lg">Gerenciamento centralizado de relatórios e desempenho</p>
+                                            </div>
+                                        </div>
+
+                                        <button
+                                            onClick={handleReloadReports}
+                                            disabled={isReloadingReports}
+                                            className={`relative group flex items-center justify-center gap-3 px-8 py-4 rounded-2xl font-black text-sm transition-all active:scale-95 shadow-lg overflow-hidden ${isReloadingReports
+                                                ? 'bg-gray-100 text-gray-400 cursor-wait'
+                                                : 'bg-white hover:bg-gray-50 text-gray-800 border-2 border-gray-100'
+                                                }`}
                                         >
-                                            <option value="all">Todos os Usuários</option>
-                                            {Array.from(new Set(reportHistory.map(r => r.userEmail))).map(email => (
-                                                <option key={email} value={email}>{users.find(u => u.email === email)?.name || email}</option>
-                                            ))}
-                                        </select>
-                                    </div>
-                                )}
-
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-sm text-left">
-                                        <thead className="text-xs text-gray-500 uppercase bg-gray-50 font-bold tracking-wider">
-                                            <tr>
-                                                <th className="px-6 py-4">Data</th>
-                                                <th className="px-6 py-4">Empresa Avaliada</th>
-                                                <th className="px-6 py-4">Área</th>
-                                                <th className="px-6 py-4">Filial Avaliada</th>
-                                                <th className="px-6 py-4">Gestor(a)</th>
-                                                <th className="px-6 py-4">Responsável</th>
-                                                <th className="px-6 py-4">Nota</th>
-                                                <th className="px-6 py-4 text-right">Ações</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody className="divide-y divide-gray-100">
-                                            {getFilteredHistory().length === 0 ? (
-                                                <tr><td colSpan={8} className="px-6 py-8 text-center text-gray-400">Nenhum relatório encontrado.</td></tr>
+                                            {isReloadingReports ? (
+                                                <Loader2 size={20} className="animate-spin" />
                                             ) : (
-                                                getFilteredHistory().map(report => (
-                                                    <tr key={report.id} className="hover:bg-gray-50 transition-colors group">
-                                                        <td className="px-6 py-4 font-medium text-gray-700">
-                                                            {new Date(report.date).toLocaleDateString('pt-BR')} <span className="text-gray-400 text-xs ml-1">{new Date(report.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span>
-                                                        </td>
-                                                        <td className="px-6 py-4 font-bold text-gray-800">
-                                                            {report.empresa_avaliada || '-'}
-                                                        </td>
-                                                        <td className="px-6 py-4 text-gray-700">
-                                                            {report.area || '-'}
-                                                        </td>
-                                                        <td className="px-6 py-4 font-bold text-gray-800">
-                                                            {report.filial || '-'}
-                                                        </td>
-                                                        <td className="px-6 py-4 text-gray-700">
-                                                            {report.gestor || '-'}
-                                                        </td>
-                                                        <td className="px-6 py-4">
-                                                            <div>{report.userName}</div>
-                                                            <div className="text-xs text-gray-400">{report.userEmail}</div>
-                                                        </td>
-                                                        <td className="px-6 py-4">
-                                                            <span className={`px-3 py-1 rounded-full text-xs font-bold ${Number(report.score) >= 4.0 ? 'bg-green-100 text-green-700' : Number(report.score) >= 3.0 ? 'bg-yellow-100 text-yellow-700' : 'bg-red-100 text-red-700'}`}>
-                                                                {report.score}
-                                                            </span>
-                                                        </td>
-                                                        <td className="px-6 py-4 text-right flex justify-end gap-2">
-                                                            <button
-                                                                onClick={() => handleViewHistoryItem(report)}
-                                                                disabled={loadingReportId === report.id}
-                                                                className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors disabled:opacity-50"
-                                                                title="Visualizar"
-                                                            >
-                                                                {loadingReportId === report.id ? (
-                                                                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-blue-600 border-t-transparent" />
-                                                                ) : (
-                                                                    <Eye size={18} />
-                                                                )}
-                                                            </button>
-                                                            {/* ONLY MASTER CAN DELETE */}
-                                                            {canModerateHistory && (
-                                                                <button onClick={() => handleDeleteHistoryItem(report.id)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors" title="Excluir">
-                                                                    <Trash2 size={18} />
-                                                                </button>
-                                                            )}
-                                                        </td>
-                                                    </tr>
-                                                ))
+                                                <RefreshCw size={20} className="group-hover:rotate-180 transition-transform duration-700" />
                                             )}
-                                        </tbody>
-                                    </table>
+                                            <span className="relative z-10">{isReloadingReports ? 'SINCRONIZANDO...' : 'ATUALIZAR DADOS'}</span>
+                                            {!isReloadingReports && <div className="absolute inset-0 bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />}
+                                        </button>
+                                    </div>
+
+                                    {/* Advanced Filters Bar */}
+                                    <div className="bg-gray-50/40 backdrop-blur-sm p-8 rounded-[32px] border border-gray-100 mb-10">
+                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                                            <div className="space-y-2">
+                                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Buscar por Empresa</label>
+                                                <div className="relative group">
+                                                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors" size={20} />
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Digite o nome da empresa..."
+                                                        value={historySearch}
+                                                        onChange={(e) => setHistorySearch(e.target.value)}
+                                                        className="w-full bg-white border border-gray-200 rounded-2xl pl-12 pr-4 py-4 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-bold text-gray-700 shadow-sm"
+                                                    />
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-2">
+                                                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Filtrar por Área</label>
+                                                <div className="relative">
+                                                    <LayoutGrid className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                                                    <select
+                                                        value={historyAreaFilter}
+                                                        onChange={(e) => setHistoryAreaFilter(e.target.value)}
+                                                        className="w-full bg-white border border-gray-200 rounded-2xl pl-12 pr-10 py-4 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-bold text-gray-700 flex appearance-none cursor-pointer shadow-sm"
+                                                    >
+                                                        <option value="">Todas as Áreas / Setores</option>
+                                                        {Array.from(new Set(reportHistory.map(r => r.area))).filter(Boolean).sort().map(area => (
+                                                            <option key={area} value={area}>{area}</option>
+                                                        ))}
+                                                    </select>
+                                                    <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={18} />
+                                                </div>
+                                            </div>
+
+                                            {canModerateHistory ? (
+                                                <div className="space-y-2">
+                                                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Responsável (Master Only)</label>
+                                                    <div className="relative">
+                                                        <UserCircle2 className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                                                        <select
+                                                            value={historyFilterUser}
+                                                            onChange={(e) => setHistoryFilterUser(e.target.value)}
+                                                            className="w-full bg-white border border-gray-200 rounded-2xl pl-12 pr-10 py-4 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-bold text-gray-700 flex appearance-none cursor-pointer shadow-sm"
+                                                        >
+                                                            <option value="all">Todos os Auditores</option>
+                                                            {Array.from(new Set(reportHistory.map(r => r.userEmail))).map(email => (
+                                                                <option key={email} value={email}>{users.find(u => u.email === email)?.name || email}</option>
+                                                            ))}
+                                                        </select>
+                                                        <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={18} />
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Período</label>
+                                                    <div className="relative">
+                                                        <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" size={20} />
+                                                        <select
+                                                            value={historyDateRange}
+                                                            onChange={(e) => setHistoryDateRange(e.target.value)}
+                                                            className="w-full bg-white border border-gray-200 rounded-2xl pl-12 pr-10 py-4 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-bold text-gray-700 flex appearance-none cursor-pointer shadow-sm"
+                                                        >
+                                                            <option value="all">Todo o Período</option>
+                                                            <option value="today">Apenas Hoje</option>
+                                                            <option value="week">Últimos 7 dias</option>
+                                                            <option value="month">Últimos 30 dias</option>
+                                                        </select>
+                                                        <ChevronDown className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" size={18} />
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Data Table */}
+                                    <div className="overflow-hidden rounded-[32px] border border-gray-100 shadow-sm bg-white">
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-left border-collapse">
+                                                <thead>
+                                                    <tr className="bg-gray-50/50 border-b border-gray-100">
+                                                        <th className="px-8 py-6 text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] w-48">Data e Hora</th>
+                                                        <th className="px-8 py-6 text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Empresa / Filial</th>
+                                                        <th className="px-8 py-6 text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Detalhes</th>
+                                                        <th className="px-8 py-6 text-center text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Score</th>
+                                                        <th className="px-8 py-6 text-right text-[10px] font-black text-gray-400 uppercase tracking-[0.2em]">Ações</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-50">
+                                                    {getFilteredHistory().length === 0 ? (
+                                                        <tr>
+                                                            <td colSpan={5} className="px-8 py-24 text-center">
+                                                                <div className="flex flex-col items-center gap-4">
+                                                                    <div className="p-6 bg-gray-50 rounded-full text-gray-200">
+                                                                        <FileSearch size={64} strokeWidth={1} />
+                                                                    </div>
+                                                                    <p className="text-xl font-black text-gray-300">Nenhum registro encontrado</p>
+                                                                    <button onClick={handleReloadReports} className="text-blue-500 font-bold hover:underline">Limpar filtros ou recarregar</button>
+                                                                </div>
+                                                            </td>
+                                                        </tr>
+                                                    ) : (
+                                                        getFilteredHistory().map(report => {
+                                                            const scoreNum = Number(report.score);
+                                                            const scoreFeedback = getScoreFeedback(scoreNum);
+
+                                                            return (
+                                                                <tr key={report.id} className="group hover:bg-blue-50/20 transition-all duration-300">
+                                                                    <td className="px-8 py-6">
+                                                                        <div className="flex flex-col">
+                                                                            <span className="text-sm font-black text-gray-800 tracking-tight">
+                                                                                {new Date(report.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                                                                            </span>
+                                                                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1">
+                                                                                ás {new Date(report.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                                            </span>
+                                                                        </div>
+                                                                    </td>
+                                                                    <td className="px-8 py-6">
+                                                                        <div className="flex flex-col">
+                                                                            <span className="text-sm font-black text-gray-900 group-hover:text-blue-600 transition-colors uppercase tracking-tight">{report.empresa_avaliada || 'Empresa não informada'}</span>
+                                                                            <span className="text-xs font-bold text-gray-500 flex items-center gap-1.5 mt-1">
+                                                                                <Store size={12} className="text-gray-400" /> {report.filial || 'Filial N/A'}
+                                                                            </span>
+                                                                        </div>
+                                                                    </td>
+                                                                    <td className="px-8 py-6">
+                                                                        <div className="flex flex-col gap-1.5">
+                                                                            <span className="inline-flex w-fit px-3 py-1 bg-gray-100 text-gray-600 rounded-full text-[9px] font-black uppercase tracking-widest border border-gray-200">
+                                                                                {report.area || 'Setor Geral'}
+                                                                            </span>
+                                                                            <div className="flex items-center gap-2">
+                                                                                <div className={`w-5 h-5 rounded-full bg-gradient-to-br ${currentTheme.bgGradient} flex items-center justify-center text-[8px] text-white font-black shadow-sm`}>
+                                                                                    {report.userName?.charAt(0)}
+                                                                                </div>
+                                                                                <span className="text-[10px] font-bold text-gray-400 truncate max-w-[150px]">{report.userName}</span>
+                                                                            </div>
+                                                                        </div>
+                                                                    </td>
+                                                                    <td className="px-8 py-6">
+                                                                        <div className="flex justify-center">
+                                                                            <div className={`inline-flex flex-col items-center justify-center w-16 h-16 rounded-[20px] ${scoreFeedback.bg} ${scoreFeedback.color} shadow-sm border border-white/60 transform group-hover:scale-110 group-hover:rotate-3 transition-all duration-500`}>
+                                                                                <span className="text-xl font-black leading-none">{scoreNum.toFixed(1)}</span>
+                                                                                <span className="text-[9px] font-black opacity-60 mt-0.5">SCORE</span>
+                                                                            </div>
+                                                                        </div>
+                                                                    </td>
+                                                                    <td className="px-8 py-6 text-right">
+                                                                        <div className="flex items-center justify-end gap-3">
+                                                                            <button
+                                                                                onClick={() => handleViewHistoryItem(report)}
+                                                                                disabled={loadingReportId === report.id}
+                                                                                className="p-3.5 bg-white text-blue-600 hover:bg-blue-600 hover:text-white rounded-2xl border border-blue-100 shadow-sm transition-all active:scale-90 group/btn relative overflow-hidden disabled:opacity-50"
+                                                                                title="Visualizar Auditoria Completa"
+                                                                            >
+                                                                                {loadingReportId === report.id ? (
+                                                                                    <Loader2 size={18} className="animate-spin" />
+                                                                                ) : (
+                                                                                    <Eye size={18} className="relative z-10 group-hover/btn:scale-110 transition-transform" />
+                                                                                )}
+                                                                            </button>
+                                                                            {canModerateHistory && (
+                                                                                <button
+                                                                                    onClick={() => {
+                                                                                        if (window.confirm('Excluir permanentemente este relatório das auditorias?')) {
+                                                                                            handleDeleteHistoryItem(report.id!);
+                                                                                        }
+                                                                                    }}
+                                                                                    className="p-3.5 bg-white text-gray-300 hover:bg-red-50 hover:text-red-600 rounded-2xl border border-gray-100 transition-all active:scale-95 group/btn"
+                                                                                    title="Remover Registro"
+                                                                                >
+                                                                                    <Trash2 size={18} />
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
+                                                                    </td>
+                                                                </tr>
+                                                            );
+                                                        })
+                                                    )}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
+
                             <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
                                 <div className="flex items-center justify-between mb-6">
                                     <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">

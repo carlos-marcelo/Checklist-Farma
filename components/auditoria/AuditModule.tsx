@@ -11,14 +11,7 @@ import {
 } from './types';
 import {
     fetchLatestAudit,
-    upsertAuditSession,
-    fetchAuditPartialTerms,
-    upsertAuditPartialTerms,
-    deleteAuditPartialTerms,
-    deleteAuditPartialTermsForAudit,
-    fetchAuditTermDrafts,
-    upsertAuditTermDrafts,
-    deleteAuditTermDraftsForAudit
+    upsertAuditSession
 } from '../../supabaseService';
 import ProgressBar from './ProgressBar';
 import Breadcrumbs from './Breadcrumbs';
@@ -200,14 +193,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     if (latest && latest.status !== 'completed') {
                         setNextAuditNumber(latest.audit_number);
                         setDbSessionId(latest.id);
-                        let dbPartialTerms: any[] = [];
-                        let dbTermDrafts: any[] = [];
-                        try {
-                            dbPartialTerms = await fetchAuditPartialTerms(selectedFilial, latest.audit_number);
-                            dbTermDrafts = await fetchAuditTermDrafts(selectedFilial, latest.audit_number);
-                        } catch (err) {
-                            console.error("Error loading audit partial terms:", err);
-                        }
+
                         if (latest.data) {
                             if ((latest.data as any).partialStart && !(latest.data as any).partialStarts) {
                                 (latest.data as any).partialStarts = [(latest.data as any).partialStart];
@@ -222,23 +208,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 });
                                 (latest.data as any).partialCompleted = Array.from(deduped.values());
                             }
-                            if (dbPartialTerms.length > 0) {
-                                const dbCompleted = dbPartialTerms.map((t: any) => ({
-                                    startedAt: t.started_at || undefined,
-                                    completedAt: t.completed_at,
-                                    batchId: t.batch_id,
-                                    groupId: t.group_id,
-                                    deptId: t.dept_id || undefined,
-                                    catId: t.cat_id || undefined
-                                }));
-                                const merged = [
-                                    ...((latest.data as any).partialCompleted || []),
-                                    ...dbCompleted
-                                ];
-                                const deduped = new Map<string, any>();
-                                merged.forEach(p => deduped.set(partialCompletedKey(p), p));
-                                (latest.data as any).partialCompleted = Array.from(deduped.values());
-                            }
+
                             if (!(latest.data as any).lastPartialBatchId) {
                                 (latest.data as any).lastPartialBatchId = getLatestBatchId((latest.data as any).partialCompleted);
                             }
@@ -261,14 +231,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             }
                             setData(latest.data);
                             const draftsFromData = (latest.data as any).termDrafts || {};
-                            const draftsFromDb = (dbTermDrafts || []).reduce((acc: Record<string, TermForm>, d: any) => {
-                                if (d?.term_key && d?.payload) acc[d.term_key] = d.payload;
-                                return acc;
-                            }, {});
-                            const mergedDrafts = { ...draftsFromData, ...draftsFromDb };
-                            if (Object.keys(mergedDrafts).length > 0) {
-                                setTermDrafts(mergedDrafts);
-                            }
+                            setTermDrafts(draftsFromData);
                             setDbSessionId(latest.id);
 
                             if (isMaster) {
@@ -342,40 +305,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         if (saved) {
             try {
                 const parsed = JSON.parse(saved);
-                if (parsed && parsed.groups) {
-                    if (parsed.partialStart && !parsed.partialStarts) {
-                        parsed.partialStarts = [parsed.partialStart];
-                    }
-                    if (!parsed.partialCompleted) {
-                        parsed.partialCompleted = [];
-                    }
-                    if (parsed.partialCompleted) {
-                        const deduped = new Map<string, any>();
-                        parsed.partialCompleted.forEach((p: any) => {
-                            deduped.set(partialCompletedKey(p), p);
-                        });
-                        parsed.partialCompleted = Array.from(deduped.values());
-                    }
-                    parsed.groups.forEach((g: any) => g.departments.forEach((d: any) => d.categories.forEach((c: any) => {
-                        c.status = normalizeAuditStatus(c.status);
-                    })));
-                    setData(parsed);
-                    if (parsed.termDrafts) {
-                        setTermDrafts(parsed.termDrafts);
-                    }
+                if (parsed) {
+                    // Restore basic settings but let loadAuditNum fetch the fresh 'data' from Supabase
                     if (parsed.filial) setSelectedFilial(parsed.filial);
                     if (parsed.inventoryNumber) setInventoryNumber(parsed.inventoryNumber);
-                    let done = 0;
-                    parsed.groups.forEach((g: any) => g.departments.forEach((d: any) => d.categories.forEach((c: any) => {
-                        if (isDoneStatus(c.status)) done += c.totalQuantity;
-                    })));
-                    setInitialDoneUnits(done);
                 }
             } catch (e) {
                 localStorage.removeItem(STORAGE_KEY);
             }
         }
     }, []);
+
 
     useEffect(() => {
         if (data) {
@@ -418,8 +358,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
                     status: 'open',
-                    data: data as any,
-                    progress: progress
+                    data: { ...data, termDrafts } as any,
+                    progress: progress,
+                    user_email: userEmail
                 });
 
                 // Clear local view state to 'exit'
@@ -461,8 +402,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
                     status: 'completed',
-                    data: data as any,
-                    progress: 100
+                    data: { ...data, termDrafts } as any,
+                    progress: 100,
+                    user_email: userEmail
                 });
 
                 alert("Auditoria finalizada com sucesso!");
@@ -1092,13 +1034,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const nextDrafts = { ...termDrafts, [key]: termForm };
             setTermDrafts(nextDrafts);
             try {
-                await upsertAuditTermDrafts([{
+                // Persistence consolidated in audit_sessions (data field)
+                const progress = calculateProgress(data || {} as any);
+                await upsertAuditSession({
+                    id: dbSessionId,
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
-                    term_key: key,
-                    payload: termForm,
+                    status: 'open',
+                    data: { ...data, termDrafts: nextDrafts } as any,
+                    progress: progress,
                     user_email: userEmail
-                }]);
+                });
             } catch (err) {
                 console.error("Error saving term draft:", err);
             }
@@ -1282,9 +1228,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: nextData as any,
-                progress: progress
+                data: { ...nextData, termDrafts } as any,
+                progress: progress,
+                user_email: userEmail
             });
+            // Update localStorage immediately
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                ...nextData,
+                filial: selectedFilial,
+                inventoryNumber
+            }));
+
             if (reason === 'expired') {
                 alert("Contagem parcial expirada. Inicie novamente para continuar.");
             }
@@ -1341,29 +1295,25 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setData(nextData);
 
         try {
-            await upsertAuditPartialTerms(
-                toComplete.map(p => ({
-                    branch: selectedFilial,
-                    audit_number: nextAuditNumber,
-                    batch_id: batchId,
-                    group_id: normalizeScopeId(p.groupId),
-                    dept_id: normalizeScopeId(p.deptId) || '',
-                    cat_id: normalizeScopeId(p.catId) || '',
-                    started_at: p.startedAt,
-                    completed_at: completedAt,
-                    user_email: userEmail
-                }))
-            );
+            // Persistence consolidated in audit_sessions (data field)
             const progress = calculateProgress(nextData);
             await upsertAuditSession({
                 id: dbSessionId,
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: nextData as any,
-                progress: progress
+                data: { ...nextData, termDrafts } as any,
+                progress: progress,
+                user_email: userEmail
             });
+            // Update localStorage immediately with the clean state
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                ...nextData,
+                filial: selectedFilial,
+                inventoryNumber
+            }));
             alert("Contagens parciais concluídas.");
+
         } catch (err) {
             console.error("Error finalizing partials:", err);
             alert("Erro ao concluir contagens parciais no Supabase.");
@@ -1437,8 +1387,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: nextData as any,
-                progress: progress
+                data: { ...nextData, termDrafts } as any,
+                progress: progress,
+                user_email: userEmail
             });
             alert(allSelected ? "Contagem parcial desativada." : "Auditoria iniciada. Contagem parcial registrada.");
         } catch (err) {
@@ -1551,12 +1502,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: nextData as any,
-                progress: progress
+                data: { ...nextData, termDrafts } as any,
+                progress: progress,
+                user_email: userEmail
             });
+            // Update localStorage immediately
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                ...nextData,
+                filial: selectedFilial,
+                inventoryNumber
+            }));
             alert(allDone
                 ? "Contagem concluída removida e zerada no Supabase."
                 : "Estoque gravado no Supabase com sucesso!");
+
         } catch (err) {
             console.error("Error persisting toggle:", err);
             alert("Erro ao gravar no Supabase. O progresso foi salvo localmente.");
@@ -1758,7 +1717,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         audit_number: nextAuditNumber,
                         status: 'open',
                         data: nextData as any,
-                        progress: progress
+                        progress: progress,
+                        user_email: userEmail
                     });
                     alert("Contagem parcial expirada. Inicie novamente para continuar.");
                 } catch (err) {
@@ -1836,8 +1796,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setInitialDoneUnits(0);
 
         try {
-            await deleteAuditPartialTermsForAudit(selectedFilial, nextAuditNumber);
-            await deleteAuditTermDraftsForAudit(selectedFilial, nextAuditNumber);
+            // Persistence consolidated in audit_sessions (data field)
             const progress = calculateProgress(nextData);
             await upsertAuditSession({
                 id: dbSessionId,
@@ -1845,9 +1804,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 audit_number: nextAuditNumber,
                 status: 'open',
                 data: nextData as any,
-                progress: progress
+                progress: progress,
+                user_email: userEmail
             });
+            // Update localStorage immediately
+            localStorage.setItem(STORAGE_KEY, JSON.stringify({
+                ...nextData,
+                filial: selectedFilial,
+                inventoryNumber
+            }));
             alert("Contagens concluídas e termos personalizados zerados.");
+
         } catch (err) {
             console.error("Error resetting partial history:", err);
             alert("Erro ao zerar no Supabase. Os dados locais foram limpos.");
@@ -2306,101 +2273,44 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         const canFinalize = isMaster && catStatus !== AuditStatus.TODO;
                         const startLabel = catStatus === AuditStatus.IN_PROGRESS ? 'PAUSAR' : 'INICIAR';
                         return (
-                        <div key={cat.id} className={`p-6 rounded-[2rem] border-2 flex items-center justify-between gap-8 transition-all hover:shadow-lg group ${catStatus === AuditStatus.DONE ? 'border-emerald-500/20 bg-emerald-50/50' : catStatus === AuditStatus.IN_PROGRESS ? 'border-blue-200 bg-blue-50/40' : 'border-slate-50 bg-white'}`}>
-                            <div className="flex items-center gap-8 flex-1">
-                                <div className="flex flex-col items-center justify-center bg-white border border-slate-200 rounded-2xl p-5 min-w-[120px] shadow-sm">
-                                    <span className="text-[9px] font-black text-slate-400 uppercase mb-1 italic">ID CAT</span>
-                                    <span className={`text-4xl font-black leading-none ${catStatus === AuditStatus.DONE ? 'text-emerald-700' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-700' : 'text-indigo-700'}`}>{cat.numericId || '--'}</span>
-                                </div>
-                                <div>
-                                    <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-2xl uppercase italic leading-none cursor-pointer hover:underline transition-all ${catStatus === AuditStatus.DONE ? 'text-emerald-900' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-900' : 'text-slate-900'} tracking-tighter`}>{cat.name}</h3>
-                                    <div className="flex gap-10 mt-3 items-center">
-                                        <div className="flex flex-col">
-                                            <span className="text-[9px] font-black text-slate-400 uppercase italic">SKUs Importados</span>
-                                            <span className="text-md font-black text-slate-800 tabular-nums leading-none whitespace-nowrap">{cat.itemsCount} Mix</span>
-                                        </div>
-                                        <div className="w-px h-6 bg-slate-100"></div>
-                                        <div className="flex flex-col">
-                                            <span className="text-[9px] font-black text-slate-400 uppercase italic">Estoque Físico</span>
-                                            <span className="text-md font-black text-indigo-600 tabular-nums leading-none whitespace-nowrap">{cat.totalQuantity.toLocaleString()} Unid.</span>
-                                        </div>
-                                        <div className="w-px h-6 bg-slate-100"></div>
-                                        <div className="flex flex-col">
-                                            <span className="text-[9px] font-black text-slate-400 uppercase italic">Valor em Custo</span>
-                                            <span className="text-md font-black text-emerald-600 tabular-nums leading-none whitespace-nowrap">R$ {cat.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                            <div key={cat.id} className={`p-6 rounded-[2rem] border-2 flex items-center justify-between gap-8 transition-all hover:shadow-lg group ${catStatus === AuditStatus.DONE ? 'border-emerald-500/20 bg-emerald-50/50' : catStatus === AuditStatus.IN_PROGRESS ? 'border-blue-200 bg-blue-50/40' : 'border-slate-50 bg-white'}`}>
+                                <div className="flex items-center gap-8 flex-1">
+                                    <div className="flex flex-col items-center justify-center bg-white border border-slate-200 rounded-2xl p-5 min-w-[120px] shadow-sm">
+                                        <span className="text-[9px] font-black text-slate-400 uppercase mb-1 italic">ID CAT</span>
+                                        <span className={`text-4xl font-black leading-none ${catStatus === AuditStatus.DONE ? 'text-emerald-700' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-700' : 'text-indigo-700'}`}>{cat.numericId || '--'}</span>
+                                    </div>
+                                    <div>
+                                        <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-2xl uppercase italic leading-none cursor-pointer hover:underline transition-all ${catStatus === AuditStatus.DONE ? 'text-emerald-900' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-900' : 'text-slate-900'} tracking-tighter`}>{cat.name}</h3>
+                                        <div className="flex gap-10 mt-3 items-center">
+                                            <div className="flex flex-col">
+                                                <span className="text-[9px] font-black text-slate-400 uppercase italic">SKUs Importados</span>
+                                                <span className="text-md font-black text-slate-800 tabular-nums leading-none whitespace-nowrap">{cat.itemsCount} Mix</span>
+                                            </div>
+                                            <div className="w-px h-6 bg-slate-100"></div>
+                                            <div className="flex flex-col">
+                                                <span className="text-[9px] font-black text-slate-400 uppercase italic">Estoque Físico</span>
+                                                <span className="text-md font-black text-indigo-600 tabular-nums leading-none whitespace-nowrap">{cat.totalQuantity.toLocaleString()} Unid.</span>
+                                            </div>
+                                            <div className="w-px h-6 bg-slate-100"></div>
+                                            <div className="flex flex-col">
+                                                <span className="text-[9px] font-black text-slate-400 uppercase italic">Valor em Custo</span>
+                                                <span className="text-md font-black text-emerald-600 tabular-nums leading-none whitespace-nowrap">R$ {cat.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                            <div className="flex gap-4">
-                                <button
-                                    onClick={() => { if (catStatus === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id }); }}
-                                    disabled={catStatus !== AuditStatus.DONE}
-                                    className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${catStatus === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:text-white hover:bg-indigo-600' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
-                                >
-                                    Termo
-                                </button>
-                                <button
-                                    onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, cat.id)}
-                                    disabled={!isMaster || catStatus === AuditStatus.DONE}
-                                    className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${!isMaster || catStatus === AuditStatus.DONE
-                                        ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
-                                        : catStatus === AuditStatus.IN_PROGRESS
-                                            ? 'bg-blue-600 text-white border-blue-500'
-                                            : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                    title={!isMaster ? 'Apenas usuário master pode iniciar parcial' : undefined}
-                                >
-                                    {startLabel}
-                                </button>
-                                <button onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className="px-6 py-4 rounded-xl bg-slate-50 text-slate-400 text-[10px] font-black uppercase hover:text-indigo-600 hover:bg-white transition-all border border-transparent hover:border-indigo-100 shadow-sm">Detalhar</button>
-                                <button
-                                    onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, cat.id)}
-                                    disabled={!canFinalize}
-                                    className={`px-10 py-4 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-md active:scale-95 ${!canFinalize ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : catStatus === AuditStatus.DONE ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}
-                                >
-                                    {!canFinalize ? 'INICIE A AUDITORIA' : catStatus === AuditStatus.DONE ? 'CONCLUÍDO' : 'FINALIZAR'}
-                                </button>
-                            </div>
-                        </div>
-                    )})}
-
-                    {view.level === 'products' && selectedCat && (() => {
-                        const catStatus = normalizeAuditStatus(selectedCat.status);
-                        const canFinalize = isMaster && catStatus !== AuditStatus.TODO;
-                        const startLabel = catStatus === AuditStatus.IN_PROGRESS ? 'PAUSAR' : 'INICIAR';
-                        return (
-                        <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-slate-200">
-                            <div className="bg-slate-900 p-10 text-white flex justify-between items-center relative">
-                                <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
-                                    <Boxes className="w-40 h-40 text-white" />
-                                </div>
-                                <div className="relative z-10">
-                                    <h2 className="text-4xl font-black uppercase italic leading-none mb-3 tracking-tighter">{selectedCat.name}</h2>
-                                    <div className="flex items-center gap-6">
-                                        <span className="text-5xl font-black text-indigo-400 leading-none drop-shadow-sm">ID: {selectedCat.numericId || '--'}</span>
-                                        <div className="w-px h-10 bg-white/20"></div>
-                                        <div className="flex flex-col">
-                                            <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest italic">{selectedGroup?.name}</p>
-                                            <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest italic">{selectedDept?.name}</p>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="flex gap-6 items-center relative z-10">
-                                    <div className="text-right mr-6 hidden lg:block">
-                                        <p className="text-[10px] font-black text-slate-500 uppercase italic mb-1">Resumo de Carga</p>
-                                        <p className="text-2xl font-black leading-none">{selectedCat.itemsCount} SKUs <span className="text-indigo-400 mx-2">|</span> {selectedCat.totalQuantity.toLocaleString()} Unid.</p>
-                                    </div>
+                                <div className="flex gap-4">
                                     <button
-                                        onClick={() => { if (catStatus === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: selectedCat.id }); }}
+                                        onClick={() => { if (catStatus === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id }); }}
                                         disabled={catStatus !== AuditStatus.DONE}
-                                        className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${catStatus === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-600 hover:text-white' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
+                                        className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${catStatus === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:text-white hover:bg-indigo-600' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
                                     >
-                                        Imprimir Termo
+                                        Termo
                                     </button>
                                     <button
-                                        onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
+                                        onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, cat.id)}
                                         disabled={!isMaster || catStatus === AuditStatus.DONE}
-                                        className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${!isMaster || catStatus === AuditStatus.DONE
+                                        className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${!isMaster || catStatus === AuditStatus.DONE
                                             ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                             : catStatus === AuditStatus.IN_PROGRESS
                                                 ? 'bg-blue-600 text-white border-blue-500'
@@ -2409,39 +2319,98 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     >
                                         {startLabel}
                                     </button>
+                                    <button onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className="px-6 py-4 rounded-xl bg-slate-50 text-slate-400 text-[10px] font-black uppercase hover:text-indigo-600 hover:bg-white transition-all border border-transparent hover:border-indigo-100 shadow-sm">Detalhar</button>
                                     <button
-                                        onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
+                                        onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, cat.id)}
                                         disabled={!canFinalize}
-                                        className={`px-10 py-5 rounded-2xl font-black text-[12px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95 border-b-4 ${!canFinalize ? 'bg-slate-300 border-slate-400 text-slate-500 cursor-not-allowed' : catStatus === AuditStatus.DONE ? 'bg-emerald-600 border-emerald-800' : 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500'}`}
+                                        className={`px-10 py-4 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-md active:scale-95 ${!canFinalize ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : catStatus === AuditStatus.DONE ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}
                                     >
-                                        {!canFinalize ? 'INICIE A AUDITORIA' : catStatus === AuditStatus.DONE ? 'REABRIR CATEGORIA' : 'CONCLUIR AUDITORIA'}
+                                        {!canFinalize ? 'INICIE A AUDITORIA' : catStatus === AuditStatus.DONE ? 'CONCLUÍDO' : 'FINALIZAR'}
                                     </button>
                                 </div>
                             </div>
-                            <div className="max-h-[650px] overflow-y-auto custom-scrollbar">
-                                <table className="w-full text-left border-collapse">
-                                    <thead className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-20 border-b shadow-sm">
-                                        <tr className="border-b border-slate-100">
-                                            <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 tracking-widest italic">Cód. de Barras</th>
-                                            <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 tracking-widest italic">Descrição Analítica do Item</th>
-                                            <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic font-mono">Custo Unit</th>
-                                            <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic font-mono">Custo Total</th>
-                                            <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic">Saldo Importado</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>{selectedCat.products.map((p, i) => (
-                                        <tr key={i} className="border-b border-slate-50 hover:bg-indigo-50/50 transition-colors group text-xs">
-                                            <td className="px-12 py-4 text-slate-500 tabular-nums">{p.code}</td>
-                                            <td className="px-12 py-4 font-black uppercase italic leading-tight text-slate-800 group-hover:text-indigo-600 transition-colors">{p.name}</td>
-                                            <td className="px-12 py-4 text-right tabular-nums text-slate-400 italic">R$ {(p.cost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                            <td className="px-12 py-4 text-right tabular-nums font-bold text-slate-600">R$ {((p.cost || 0) * p.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                            <td className="px-12 py-4 text-2xl font-black text-right tabular-nums group-hover:scale-105 transition-transform">{p.quantity.toLocaleString()}</td>
-                                        </tr>))}
-                                    </tbody>
-                                </table>
+                        )
+                    })}
+
+                    {view.level === 'products' && selectedCat && (() => {
+                        const catStatus = normalizeAuditStatus(selectedCat.status);
+                        const canFinalize = isMaster && catStatus !== AuditStatus.TODO;
+                        const startLabel = catStatus === AuditStatus.IN_PROGRESS ? 'PAUSAR' : 'INICIAR';
+                        return (
+                            <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-slate-200">
+                                <div className="bg-slate-900 p-10 text-white flex justify-between items-center relative">
+                                    <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
+                                        <Boxes className="w-40 h-40 text-white" />
+                                    </div>
+                                    <div className="relative z-10">
+                                        <h2 className="text-4xl font-black uppercase italic leading-none mb-3 tracking-tighter">{selectedCat.name}</h2>
+                                        <div className="flex items-center gap-6">
+                                            <span className="text-5xl font-black text-indigo-400 leading-none drop-shadow-sm">ID: {selectedCat.numericId || '--'}</span>
+                                            <div className="w-px h-10 bg-white/20"></div>
+                                            <div className="flex flex-col">
+                                                <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest italic">{selectedGroup?.name}</p>
+                                                <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest italic">{selectedDept?.name}</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-6 items-center relative z-10">
+                                        <div className="text-right mr-6 hidden lg:block">
+                                            <p className="text-[10px] font-black text-slate-500 uppercase italic mb-1">Resumo de Carga</p>
+                                            <p className="text-2xl font-black leading-none">{selectedCat.itemsCount} SKUs <span className="text-indigo-400 mx-2">|</span> {selectedCat.totalQuantity.toLocaleString()} Unid.</p>
+                                        </div>
+                                        <button
+                                            onClick={() => { if (catStatus === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: selectedCat.id }); }}
+                                            disabled={catStatus !== AuditStatus.DONE}
+                                            className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${catStatus === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-600 hover:text-white' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
+                                        >
+                                            Imprimir Termo
+                                        </button>
+                                        <button
+                                            onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
+                                            disabled={!isMaster || catStatus === AuditStatus.DONE}
+                                            className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${!isMaster || catStatus === AuditStatus.DONE
+                                                ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                                                : catStatus === AuditStatus.IN_PROGRESS
+                                                    ? 'bg-blue-600 text-white border-blue-500'
+                                                    : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
+                                            title={!isMaster ? 'Apenas usuário master pode iniciar parcial' : undefined}
+                                        >
+                                            {startLabel}
+                                        </button>
+                                        <button
+                                            onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
+                                            disabled={!canFinalize}
+                                            className={`px-10 py-5 rounded-2xl font-black text-[12px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95 border-b-4 ${!canFinalize ? 'bg-slate-300 border-slate-400 text-slate-500 cursor-not-allowed' : catStatus === AuditStatus.DONE ? 'bg-emerald-600 border-emerald-800' : 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500'}`}
+                                        >
+                                            {!canFinalize ? 'INICIE A AUDITORIA' : catStatus === AuditStatus.DONE ? 'REABRIR CATEGORIA' : 'CONCLUIR AUDITORIA'}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="max-h-[650px] overflow-y-auto custom-scrollbar">
+                                    <table className="w-full text-left border-collapse">
+                                        <thead className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-20 border-b shadow-sm">
+                                            <tr className="border-b border-slate-100">
+                                                <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 tracking-widest italic">Cód. de Barras</th>
+                                                <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 tracking-widest italic">Descrição Analítica do Item</th>
+                                                <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic font-mono">Custo Unit</th>
+                                                <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic font-mono">Custo Total</th>
+                                                <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic">Saldo Importado</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>{selectedCat.products.map((p, i) => (
+                                            <tr key={i} className="border-b border-slate-50 hover:bg-indigo-50/50 transition-colors group text-xs">
+                                                <td className="px-12 py-4 text-slate-500 tabular-nums">{p.code}</td>
+                                                <td className="px-12 py-4 font-black uppercase italic leading-tight text-slate-800 group-hover:text-indigo-600 transition-colors">{p.name}</td>
+                                                <td className="px-12 py-4 text-right tabular-nums text-slate-400 italic">R$ {(p.cost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                                                <td className="px-12 py-4 text-right tabular-nums font-bold text-slate-600">R$ {((p.cost || 0) * p.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                                                <td className="px-12 py-4 text-2xl font-black text-right tabular-nums group-hover:scale-105 transition-transform">{p.quantity.toLocaleString()}</td>
+                                            </tr>))}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
-                        </div>
-                    )})()}
+                        )
+                    })()}
                 </div>
             </main>
 
