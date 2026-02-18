@@ -9,7 +9,17 @@ import {
     Category,
     Product
 } from './types';
-import { fetchLatestAudit, upsertAuditSession } from '../../supabaseService';
+import {
+    fetchLatestAudit,
+    upsertAuditSession,
+    fetchAuditPartialTerms,
+    upsertAuditPartialTerms,
+    deleteAuditPartialTerms,
+    deleteAuditPartialTermsForAudit,
+    fetchAuditTermDrafts,
+    upsertAuditTermDrafts,
+    deleteAuditTermDraftsForAudit
+} from '../../supabaseService';
 import ProgressBar from './ProgressBar';
 import Breadcrumbs from './Breadcrumbs';
 import SignaturePad from '../SignaturePad';
@@ -62,6 +72,9 @@ const createBatchId = () => {
 
 const getEntryBatchId = (entry: { batchId?: string; groupId?: string | number; deptId?: string | number; catId?: string | number }) =>
     entry.batchId || partialScopeKey(entry);
+
+const partialCompletedKey = (entry: { batchId?: string; groupId?: string | number; deptId?: string | number; catId?: string | number }) =>
+    `${getEntryBatchId(entry)}|${partialScopeKey(entry)}`;
 
 const getLatestBatchId = (entries?: Array<{ completedAt?: string; startedAt?: string; batchId?: string; groupId?: string | number; deptId?: string | number; catId?: string | number }>) => {
     if (!entries || entries.length === 0) return undefined;
@@ -129,6 +142,7 @@ interface TermScope {
     catId?: string;
     customScopes?: Array<{ groupId?: string; deptId?: string; catId?: string }>;
     customLabel?: string;
+    batchId?: string;
 }
 
 interface TermCollaborator {
@@ -186,6 +200,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     if (latest && latest.status !== 'completed') {
                         setNextAuditNumber(latest.audit_number);
                         setDbSessionId(latest.id);
+                        let dbPartialTerms: any[] = [];
+                        let dbTermDrafts: any[] = [];
+                        try {
+                            dbPartialTerms = await fetchAuditPartialTerms(selectedFilial, latest.audit_number);
+                            dbTermDrafts = await fetchAuditTermDrafts(selectedFilial, latest.audit_number);
+                        } catch (err) {
+                            console.error("Error loading audit partial terms:", err);
+                        }
                         if (latest.data) {
                             if ((latest.data as any).partialStart && !(latest.data as any).partialStarts) {
                                 (latest.data as any).partialStarts = [(latest.data as any).partialStart];
@@ -196,9 +218,29 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             if ((latest.data as any).partialCompleted) {
                                 const deduped = new Map<string, any>();
                                 (latest.data as any).partialCompleted.forEach((p: any) => {
-                                    deduped.set(partialScopeKey(p), p);
+                                    deduped.set(partialCompletedKey(p), p);
                                 });
                                 (latest.data as any).partialCompleted = Array.from(deduped.values());
+                            }
+                            if (dbPartialTerms.length > 0) {
+                                const dbCompleted = dbPartialTerms.map((t: any) => ({
+                                    startedAt: t.started_at || undefined,
+                                    completedAt: t.completed_at,
+                                    batchId: t.batch_id,
+                                    groupId: t.group_id,
+                                    deptId: t.dept_id || undefined,
+                                    catId: t.cat_id || undefined
+                                }));
+                                const merged = [
+                                    ...((latest.data as any).partialCompleted || []),
+                                    ...dbCompleted
+                                ];
+                                const deduped = new Map<string, any>();
+                                merged.forEach(p => deduped.set(partialCompletedKey(p), p));
+                                (latest.data as any).partialCompleted = Array.from(deduped.values());
+                            }
+                            if (!(latest.data as any).lastPartialBatchId) {
+                                (latest.data as any).lastPartialBatchId = getLatestBatchId((latest.data as any).partialCompleted);
                             }
                             // REPAIR LOGIC: If totalCost is missing (old sessions), recalculate it
                             if (latest.data.groups) {
@@ -218,6 +260,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 });
                             }
                             setData(latest.data);
+                            const draftsFromData = (latest.data as any).termDrafts || {};
+                            const draftsFromDb = (dbTermDrafts || []).reduce((acc: Record<string, TermForm>, d: any) => {
+                                if (d?.term_key && d?.payload) acc[d.term_key] = d.payload;
+                                return acc;
+                            }, {});
+                            const mergedDrafts = { ...draftsFromData, ...draftsFromDb };
+                            if (Object.keys(mergedDrafts).length > 0) {
+                                setTermDrafts(mergedDrafts);
+                            }
                             setDbSessionId(latest.id);
 
                             if (isMaster) {
@@ -301,7 +352,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     if (parsed.partialCompleted) {
                         const deduped = new Map<string, any>();
                         parsed.partialCompleted.forEach((p: any) => {
-                            deduped.set(partialScopeKey(p), p);
+                            deduped.set(partialCompletedKey(p), p);
                         });
                         parsed.partialCompleted = Array.from(deduped.values());
                     }
@@ -309,6 +360,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         c.status = normalizeAuditStatus(c.status);
                     })));
                     setData(parsed);
+                    if (parsed.termDrafts) {
+                        setTermDrafts(parsed.termDrafts);
+                    }
                     if (parsed.filial) setSelectedFilial(parsed.filial);
                     if (parsed.inventoryNumber) setInventoryNumber(parsed.inventoryNumber);
                     let done = 0;
@@ -853,7 +907,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const buildTermKey = (scope: TermScope) => {
         if (scope.type === 'custom') {
             const customKey = (scope.customScopes || []).map(s => partialScopeKey(s)).join(',');
-            return `custom|${customKey}`;
+            return `custom|${scope.batchId || ''}|${customKey}`;
         }
         return [scope.type, scope.groupId || '', scope.deptId || '', scope.catId || ''].join('|');
     };
@@ -872,7 +926,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const openTermModal = (scope: TermScope) => {
         const key = buildTermKey(scope);
-        const draft = termDrafts[key];
+        let draft = termDrafts[key];
+        if (!draft && scope.type === 'custom' && scope.batchId) {
+            const legacyKey = `custom|${(scope.customScopes || []).map(s => partialScopeKey(s)).join(',')}`;
+            draft = termDrafts[legacyKey];
+        }
         const nextForm = draft
             ? (!draft.inventoryNumber && (inventoryNumber || data?.inventoryNumber)
                 ? { ...draft, inventoryNumber: inventoryNumber || data?.inventoryNumber || '' }
@@ -1024,10 +1082,27 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         return val;
     };
 
-    const handlePrintTerm = () => {
+    const handlePrintTerm = async () => {
         if (!data || !termModal || !termForm) return;
         const scopeInfo = buildTermScopeInfo(termModal);
         if (!scopeInfo) return;
+
+        if (isMaster) {
+            const key = buildTermKey(termModal);
+            const nextDrafts = { ...termDrafts, [key]: termForm };
+            setTermDrafts(nextDrafts);
+            try {
+                await upsertAuditTermDrafts([{
+                    branch: selectedFilial,
+                    audit_number: nextAuditNumber,
+                    term_key: key,
+                    payload: termForm,
+                    user_email: userEmail
+                }]);
+            } catch (err) {
+                console.error("Error saving term draft:", err);
+            }
+        }
         // @ts-ignore
         const { jsPDF } = (window as any).jspdf || {};
         if (!jsPDF) {
@@ -1220,6 +1295,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const finalizeActivePartials = useCallback(async () => {
         if (!data?.partialStarts || data.partialStarts.length === 0) return;
+        if (!isMaster) {
+            alert("Apenas usuário master pode concluir contagens parciais.");
+            return;
+        }
         if (!window.confirm("Deseja concluir todas as contagens parciais ativas?")) return;
 
         const toComplete = data.partialStarts;
@@ -1231,7 +1310,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         ];
         const dedupedMap = new Map<string, { startedAt?: string; completedAt: string; batchId?: string; groupId?: string; deptId?: string; catId?: string }>();
         merged.forEach(p => {
-            dedupedMap.set(partialScopeKey(p), p);
+            dedupedMap.set(partialCompletedKey(p), p);
         });
         const nextCompleted = Array.from(dedupedMap.values());
 
@@ -1262,6 +1341,19 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setData(nextData);
 
         try {
+            await upsertAuditPartialTerms(
+                toComplete.map(p => ({
+                    branch: selectedFilial,
+                    audit_number: nextAuditNumber,
+                    batch_id: batchId,
+                    group_id: normalizeScopeId(p.groupId),
+                    dept_id: normalizeScopeId(p.deptId) || '',
+                    cat_id: normalizeScopeId(p.catId) || '',
+                    started_at: p.startedAt,
+                    completed_at: completedAt,
+                    user_email: userEmail
+                }))
+            );
             const progress = calculateProgress(nextData);
             await upsertAuditSession({
                 id: dbSessionId,
@@ -1276,12 +1368,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             console.error("Error finalizing partials:", err);
             alert("Erro ao concluir contagens parciais no Supabase.");
         }
-    }, [data, dbSessionId, selectedFilial, nextAuditNumber, applyPartialScopes, calculateProgress]);
+    }, [data, dbSessionId, selectedFilial, nextAuditNumber, applyPartialScopes, calculateProgress, isMaster]);
 
     const clearActivePartialsShortcut = useCallback(async () => {
         if (!data?.partialStarts || data.partialStarts.length === 0) return;
         if (!window.confirm("Deseja desfazer todas as contagens parciais ativas?")) return;
-        await clearPartialProgress('manual', true);
+        await clearPartialProgress('manual', false);
     }, [data, clearPartialProgress]);
 
     const startScopeAudit = async (groupId?: string, deptId?: string, catId?: string) => {
@@ -1380,7 +1472,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         });
 
         const msg = allDone
-            ? "Tem certeza que deseja desmarcar? O registro será atualizado no Supabase."
+            ? "Tem certeza que deseja desmarcar? Isso vai remover os termos e zerar no Supabase."
             : "Tem certeza que deseja finalizar e gravar o estoque no Supabase?";
 
         if (!window.confirm(msg)) return;
@@ -1403,8 +1495,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 catId: normalizeScopeId(catId)
             };
             const map = new Map<string, any>();
-            baseCompleted.forEach(p => map.set(partialScopeKey(p), p));
-            map.set(partialScopeKey(scopeEntry), scopeEntry);
+            baseCompleted.forEach(p => map.set(partialCompletedKey(p), p));
+            map.set(partialCompletedKey(scopeEntry), scopeEntry);
             nextCompleted = Array.from(map.values());
             nextBatchId = batchId;
         } else {
@@ -1452,7 +1544,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 data: nextData as any,
                 progress: progress
             });
-            alert("Estoque gravado no Supabase com sucesso!");
+            alert(allDone
+                ? "Contagem concluída removida e zerada no Supabase."
+                : "Estoque gravado no Supabase com sucesso!");
         } catch (err) {
             console.error("Error persisting toggle:", err);
             alert("Erro ao gravar no Supabase. O progresso foi salvo localmente.");
@@ -1599,7 +1693,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             group?.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(deptId));
 
         data.partialCompleted.forEach(scope => {
-            const key = partialScopeKey(scope);
+            const key = partialCompletedKey(scope);
             if (byKey.has(key)) return;
             const group = findGroup(scope.groupId);
             const dept = scope.deptId ? findDept(group, scope.deptId) : undefined;
@@ -1690,9 +1784,65 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         openTermModal({
             type: 'custom',
             customScopes,
-            customLabel: 'Contagens Personalizadas (Concluídas)'
+            customLabel: 'Contagens Personalizadas (Concluídas)',
+            batchId
         });
     };
+
+    const resetPartialHistory = useCallback(async () => {
+        if (!data) return;
+        if (!isMaster) {
+            alert("Apenas usuário master pode zerar termos e contagens concluídas.");
+            return;
+        }
+        if (!window.confirm("Tem certeza que deseja zerar TODAS as contagens concluídas e termos personalizados desta auditoria?")) return;
+
+        const filteredDrafts = Object.fromEntries(
+            Object.entries(termDrafts || {}).filter(([key]) => !key.startsWith('custom|'))
+        );
+
+        const resetGroups = data.groups.map(g => ({
+            ...g,
+            departments: g.departments.map(d => ({
+                ...d,
+                categories: d.categories.map(c => ({
+                    ...c,
+                    status: AuditStatus.TODO
+                }))
+            }))
+        }));
+
+        const nextData: AuditData = {
+            ...data,
+            groups: resetGroups,
+            partialStarts: [],
+            partialCompleted: [],
+            lastPartialBatchId: undefined,
+            termDrafts: filteredDrafts
+        };
+
+        setTermDrafts(filteredDrafts);
+        setData(nextData);
+        setInitialDoneUnits(0);
+
+        try {
+            await deleteAuditPartialTermsForAudit(selectedFilial, nextAuditNumber);
+            await deleteAuditTermDraftsForAudit(selectedFilial, nextAuditNumber);
+            const progress = calculateProgress(nextData);
+            await upsertAuditSession({
+                id: dbSessionId,
+                branch: selectedFilial,
+                audit_number: nextAuditNumber,
+                status: 'open',
+                data: nextData as any,
+                progress: progress
+            });
+            alert("Contagens concluídas e termos personalizados zerados.");
+        } catch (err) {
+            console.error("Error resetting partial history:", err);
+            alert("Erro ao zerar no Supabase. Os dados locais foram limpos.");
+        }
+    }, [data, isMaster, termDrafts, selectedFilial, nextAuditNumber, dbSessionId, calculateProgress]);
 
     const batchSummaryList = useMemo(() => {
         if (!data?.partialCompleted || data.partialCompleted.length === 0) return [];
@@ -1838,10 +1988,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     </button>
                                     <button
                                         onClick={finalizeActivePartials}
-                                        disabled={partialInfoList.length === 0}
-                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-all ${partialInfoList.length === 0
+                                        disabled={partialInfoList.length === 0 || !isMaster}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-all ${partialInfoList.length === 0 || !isMaster
                                             ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                             : 'bg-white text-emerald-600 border-emerald-200 hover:bg-emerald-600 hover:text-white'}`}
+                                        title={!isMaster ? 'Apenas usuário master pode concluir' : undefined}
                                     >
                                         Concluir Ativas
                                     </button>
@@ -1877,9 +2028,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             )}
                             {completedInfoList.length > 0 && (
                                 <div className="mt-4 border-t border-blue-100 pt-3">
-                                    <div className="flex items-center gap-2 mb-3">
-                                        <FileSignature className="w-4 h-4 text-blue-600" />
-                                        <span className="text-[10px] font-black uppercase tracking-widest text-blue-700/80">Termos</span>
+                                    <div className="flex items-center gap-2 mb-3 justify-between">
+                                        <div className="flex items-center gap-2">
+                                            <FileSignature className="w-4 h-4 text-blue-600" />
+                                            <span className="text-[10px] font-black uppercase tracking-widest text-blue-700/80">Termos</span>
+                                        </div>
+                                        {isMaster && (
+                                            <button
+                                                onClick={resetPartialHistory}
+                                                className="text-[9px] font-black uppercase tracking-widest text-red-600 bg-white border border-red-200 px-3 py-1 rounded-lg hover:bg-red-600 hover:text-white transition-colors"
+                                                title="Zerar contagens concluídas e termos personalizados"
+                                            >
+                                                Zerar Termos
+                                            </button>
+                                        )}
                                     </div>
                                     <div className="rounded-2xl border border-blue-100 bg-white/70 p-3">
                                         <div className="text-[9px] font-black uppercase tracking-widest text-blue-700/60 mb-2">Termos Personalizados (Concluídos)</div>
@@ -1929,38 +2091,38 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         </div>
                     </div>
 
-                    <div className="flex flex-col items-center border-l border-slate-100 px-2">
+                    <div className="flex flex-col items-center border-l border-slate-100 px-2 min-w-0">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">SKUs Totais</span>
                         <span className="text-2xl font-black text-slate-900 tabular-nums leading-none mt-1">{branchMetrics.skus.toLocaleString()}</span>
                         <span className="text-[8px] font-bold text-slate-400 uppercase mt-1 tracking-tighter">MIX IMPORTADO</span>
                     </div>
 
-                    <div className="flex flex-col items-center border-l border-slate-100 px-2">
+                    <div className="flex flex-col items-center border-l border-slate-100 px-2 min-w-0">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Unidades Totais</span>
-                        <div className="flex items-center gap-2 mt-1 flex-nowrap whitespace-nowrap">
-                            <span className="text-xl font-black text-indigo-700 tabular-nums leading-none whitespace-nowrap">{Math.round(branchMetrics.doneUnits).toLocaleString()}</span>
-                            <span className="text-slate-200 text-sm leading-none">/</span>
-                            <span className="text-lg font-black text-slate-300 tabular-nums leading-none whitespace-nowrap">{Math.round(branchMetrics.units).toLocaleString()}</span>
+                        <div className="flex flex-wrap items-center justify-center gap-1 mt-1 text-center leading-tight">
+                            <span className="text-[clamp(0.95rem,1.4vw,1.25rem)] font-black text-indigo-700 tabular-nums leading-tight">{Math.round(branchMetrics.doneUnits).toLocaleString()}</span>
+                            <span className="text-slate-200 text-[clamp(0.7rem,1vw,0.9rem)] leading-none">/</span>
+                            <span className="text-[clamp(0.85rem,1.2vw,1.1rem)] font-black text-slate-300 tabular-nums leading-tight">{Math.round(branchMetrics.units).toLocaleString()}</span>
                         </div>
                         <span className="text-[8px] font-bold text-indigo-300 uppercase mt-1 tracking-tighter">CONFERIDAS / TOTAIS</span>
                     </div>
 
-                    <div className="flex flex-col items-center border-l border-slate-100 px-2">
+                    <div className="flex flex-col items-center border-l border-slate-100 px-2 min-w-0">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Valor em Custo</span>
-                        <div className="flex items-center gap-2 mt-1 flex-nowrap whitespace-nowrap">
-                            <span className="text-xl font-black text-emerald-700 tabular-nums leading-none whitespace-nowrap">R$ {branchMetrics.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                            <span className="text-slate-200 text-sm leading-none">/</span>
-                            <span className="text-lg font-black text-slate-300 tabular-nums leading-none whitespace-nowrap">{branchMetrics.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        <div className="flex flex-wrap items-center justify-center gap-1 mt-1 text-center leading-tight">
+                            <span className="text-[clamp(0.95rem,1.4vw,1.25rem)] font-black text-emerald-700 tabular-nums leading-tight">R$ {branchMetrics.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            <span className="text-slate-200 text-[clamp(0.7rem,1vw,0.9rem)] leading-none">/</span>
+                            <span className="text-[clamp(0.85rem,1.2vw,1.1rem)] font-black text-slate-300 tabular-nums leading-tight">{branchMetrics.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                         <span className="text-[8px] font-bold text-emerald-300 uppercase mt-1 tracking-tighter">CONFERIDO / TOTAL</span>
                     </div>
 
-                    <div className="flex flex-col items-center border-l border-slate-100 px-2">
+                    <div className="flex flex-col items-center border-l border-slate-100 px-2 min-w-0">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Mix Auditado</span>
-                        <div className="flex items-center gap-2 mt-1 flex-nowrap whitespace-nowrap">
-                            <span className="text-xl font-black text-emerald-600 tabular-nums leading-none whitespace-nowrap">{branchMetrics.doneSkus.toLocaleString()}</span>
-                            <span className="text-slate-200 text-sm leading-none">/</span>
-                            <span className="text-lg font-black text-slate-300 tabular-nums leading-none whitespace-nowrap">{branchMetrics.pendingSkus.toLocaleString()}</span>
+                        <div className="flex flex-wrap items-center justify-center gap-1 mt-1 text-center leading-tight">
+                            <span className="text-[clamp(0.95rem,1.4vw,1.25rem)] font-black text-emerald-600 tabular-nums leading-tight">{branchMetrics.doneSkus.toLocaleString()}</span>
+                            <span className="text-slate-200 text-[clamp(0.7rem,1vw,0.9rem)] leading-none">/</span>
+                            <span className="text-[clamp(0.85rem,1.2vw,1.1rem)] font-black text-slate-300 tabular-nums leading-tight">{branchMetrics.pendingSkus.toLocaleString()}</span>
                         </div>
                         <span className="text-[8px] font-bold text-emerald-500 uppercase mt-1 tracking-tighter">CONFERIDOS / PENDENTES</span>
                     </div>

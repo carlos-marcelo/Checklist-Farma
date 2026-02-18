@@ -40,6 +40,7 @@ export interface AuditData {
   filial: string;
   sessionId?: string; // ID do banco de dados
   auditNumber?: number; // Número sequencial da auditoria (1, 2, 3...)
+  termDrafts?: Record<string, any>;
   partialStarts?: Array<{
     startedAt: string;
     groupId?: string;

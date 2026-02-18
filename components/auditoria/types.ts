@@ -41,6 +41,7 @@ export interface AuditData {
     empresa: string;
     filial: string;
     inventoryNumber?: string;
+    termDrafts?: Record<string, any>;
     partialStarts?: Array<{
         startedAt: string;
         groupId?: string;
