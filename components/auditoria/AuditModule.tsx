@@ -1378,6 +1378,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const startScopeAudit = async (groupId?: string, deptId?: string, catId?: string) => {
         if (!data) return;
+        const scopeCatsGuard = getScopeCategories(groupId, deptId, catId).map(s => s.cat);
+        const scopeAllDone = scopeCatsGuard.length > 0 && scopeCatsGuard.every(c => isDoneStatus(c.status));
+        if (scopeAllDone) {
+            alert("Para iniciar contagem parcial, primeiro desmarque a conclusão.");
+            return;
+        }
         const nowIso = new Date().toISOString();
         const existing = data.partialStarts || [];
         const catMap = new Map<string, { startedAt: string; groupId: string; deptId: string; catId: string }>();
@@ -2173,10 +2179,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             </button>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); startScopeAudit(group.id); }}
-                                                className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all shadow-sm ${groupHasInProgress
-                                                    ? 'bg-blue-600 text-white border-blue-500'
-                                                    : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                                title={groupHasInProgress ? 'Desativar contagem parcial' : (groupHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial')}
+                                                disabled={isComplete}
+                                                className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all shadow-sm ${isComplete
+                                                    ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                                                    : groupHasInProgress
+                                                        ? 'bg-blue-600 text-white border-blue-500'
+                                                        : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
+                                                title={isComplete ? 'Desmarque a conclusão para iniciar parcial' : (groupHasInProgress ? 'Desativar contagem parcial' : (groupHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
                                             >
                                                 <Activity className="w-5 h-5" />
                                             </button>
@@ -2252,10 +2261,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             </button>
                                             <button
                                                 onClick={() => startScopeAudit(selectedGroup?.id, dept.id)}
-                                                className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${deptHasInProgress
-                                                    ? 'bg-blue-600 text-white border-blue-500'
-                                                    : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                                title={deptHasInProgress ? 'Desativar contagem parcial' : (deptHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial')}
+                                                disabled={deptAllDone}
+                                                className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${deptAllDone
+                                                    ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                                                    : deptHasInProgress
+                                                        ? 'bg-blue-600 text-white border-blue-500'
+                                                        : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
+                                                title={deptAllDone ? 'Desmarque a conclusão para iniciar parcial' : (deptHasInProgress ? 'Desativar contagem parcial' : (deptHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
                                             >
                                                 {deptHasInProgress ? 'PAUSAR' : 'INICIAR'}
                                             </button>
