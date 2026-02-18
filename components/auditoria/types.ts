@@ -1,6 +1,7 @@
 
 export enum AuditStatus {
     TODO = 'pendente',
+    IN_PROGRESS = 'iniciado',
     DONE = 'concluido'
 }
 
@@ -40,6 +41,21 @@ export interface AuditData {
     empresa: string;
     filial: string;
     inventoryNumber?: string;
+    partialStarts?: Array<{
+        startedAt: string;
+        groupId?: string;
+        deptId?: string;
+        catId?: string;
+    }>;
+    partialCompleted?: Array<{
+        startedAt?: string;
+        completedAt: string;
+        batchId?: string;
+        groupId?: string;
+        deptId?: string;
+        catId?: string;
+    }>;
+    lastPartialBatchId?: string;
 }
 
 export interface ViewState {

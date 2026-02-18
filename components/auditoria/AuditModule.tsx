@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
     AuditData,
     ViewState,
@@ -45,13 +45,90 @@ const GROUP_CONFIG_DEFAULTS: Record<string, string> = {
 const TRIER_API_BASE =
     ((import.meta as any).env?.VITE_TRIER_INTEGRATION_URL as string) || "http://localhost:8000";
 
-type TermScopeType = 'group' | 'department' | 'category';
+const normalizeAuditStatus = (status: unknown): AuditStatus => {
+    if (status === AuditStatus.DONE || status === 'DONE' || status === 'concluido') return AuditStatus.DONE;
+    if (status === AuditStatus.IN_PROGRESS || status === 'IN_PROGRESS' || status === 'iniciado') return AuditStatus.IN_PROGRESS;
+    return AuditStatus.TODO;
+};
+
+const isDoneStatus = (status?: AuditStatus | string) => normalizeAuditStatus(status) === AuditStatus.DONE;
+const isInProgressStatus = (status?: AuditStatus | string) => normalizeAuditStatus(status) === AuditStatus.IN_PROGRESS;
+const normalizeScopeId = (val?: string | number | null) => (val === undefined || val === null ? '' : String(val));
+const createBatchId = () => {
+    const cryptoObj = (window as any)?.crypto;
+    if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
+    return `batch_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+};
+
+const getEntryBatchId = (entry: { batchId?: string; groupId?: string | number; deptId?: string | number; catId?: string | number }) =>
+    entry.batchId || partialScopeKey(entry);
+
+const getLatestBatchId = (entries?: Array<{ completedAt?: string; startedAt?: string; batchId?: string; groupId?: string | number; deptId?: string | number; catId?: string | number }>) => {
+    if (!entries || entries.length === 0) return undefined;
+    let latest = entries[0];
+    let latestTs = new Date(latest.completedAt || latest.startedAt || 0).getTime();
+    entries.forEach(e => {
+        const ts = new Date(e.completedAt || e.startedAt || 0).getTime();
+        if (ts > latestTs) {
+            latest = e;
+            latestTs = ts;
+        }
+    });
+    return getEntryBatchId(latest);
+};
+
+const partialScopeKey = (scope: { groupId?: string | number; deptId?: string | number; catId?: string | number } | undefined) => {
+    if (!scope) return '';
+    return [normalizeScopeId(scope.groupId), normalizeScopeId(scope.deptId), normalizeScopeId(scope.catId)].join('|');
+};
+
+const isPartialScopeMatch = (
+    partial: { groupId?: string | number; deptId?: string | number; catId?: string | number } | undefined,
+    groupId?: string | number,
+    deptId?: string | number,
+    catId?: string | number
+) => {
+    if (!partial) return false;
+    const pGroup = normalizeScopeId(partial.groupId);
+    const pDept = normalizeScopeId(partial.deptId);
+    const pCat = normalizeScopeId(partial.catId);
+    const g = normalizeScopeId(groupId);
+    const d = normalizeScopeId(deptId);
+    const c = normalizeScopeId(catId);
+    if (g && pGroup && pGroup !== g) return false;
+    if (d && pDept && pDept !== d) return false;
+    if (c && pCat && pCat !== c) return false;
+    return true;
+};
+
+const scopeContainsPartial = (
+    partial: { groupId?: string | number; deptId?: string | number; catId?: string | number },
+    groupId?: string | number,
+    deptId?: string | number,
+    catId?: string | number
+) => {
+    const pGroup = normalizeScopeId(partial.groupId);
+    const pDept = normalizeScopeId(partial.deptId);
+    const pCat = normalizeScopeId(partial.catId);
+    const g = normalizeScopeId(groupId);
+    const d = normalizeScopeId(deptId);
+    const c = normalizeScopeId(catId);
+    if (!g || pGroup !== g) return false;
+    if (!d) return true;
+    if (pDept !== d) return false;
+    if (!c) return true;
+    return pCat === c;
+};
+
+type TermScopeType = 'group' | 'department' | 'category' | 'custom';
 
 interface TermScope {
     type: TermScopeType;
-    groupId: string;
+    groupId?: string;
     deptId?: string;
     catId?: string;
+    customScopes?: Array<{ groupId?: string; deptId?: string; catId?: string }>;
+    customLabel?: string;
 }
 
 interface TermCollaborator {
@@ -110,11 +187,25 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         setNextAuditNumber(latest.audit_number);
                         setDbSessionId(latest.id);
                         if (latest.data) {
+                            if ((latest.data as any).partialStart && !(latest.data as any).partialStarts) {
+                                (latest.data as any).partialStarts = [(latest.data as any).partialStart];
+                            }
+                            if (!(latest.data as any).partialCompleted) {
+                                (latest.data as any).partialCompleted = [];
+                            }
+                            if ((latest.data as any).partialCompleted) {
+                                const deduped = new Map<string, any>();
+                                (latest.data as any).partialCompleted.forEach((p: any) => {
+                                    deduped.set(partialScopeKey(p), p);
+                                });
+                                (latest.data as any).partialCompleted = Array.from(deduped.values());
+                            }
                             // REPAIR LOGIC: If totalCost is missing (old sessions), recalculate it
                             if (latest.data.groups) {
                                 latest.data.groups.forEach((g: any) => {
                                     g.departments.forEach((d: any) => {
                                         d.categories.forEach((c: any) => {
+                                            c.status = normalizeAuditStatus(c.status);
                                             if (c.totalCost === undefined || c.totalCost === null || (c.totalCost === 0 && c.totalQuantity > 0)) {
                                                 let catCost = 0;
                                                 c.products.forEach((p: any) => {
@@ -150,7 +241,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 latest.data.groups.forEach((g: any) =>
                                     g.departments.forEach((d: any) =>
                                         d.categories.forEach((c: any) => {
-                                            if (c.status === 'DONE') done += c.totalQuantity;
+                                            if (isDoneStatus(c.status)) done += c.totalQuantity;
                                         })
                                     )
                                 );
@@ -201,12 +292,28 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             try {
                 const parsed = JSON.parse(saved);
                 if (parsed && parsed.groups) {
+                    if (parsed.partialStart && !parsed.partialStarts) {
+                        parsed.partialStarts = [parsed.partialStart];
+                    }
+                    if (!parsed.partialCompleted) {
+                        parsed.partialCompleted = [];
+                    }
+                    if (parsed.partialCompleted) {
+                        const deduped = new Map<string, any>();
+                        parsed.partialCompleted.forEach((p: any) => {
+                            deduped.set(partialScopeKey(p), p);
+                        });
+                        parsed.partialCompleted = Array.from(deduped.values());
+                    }
+                    parsed.groups.forEach((g: any) => g.departments.forEach((d: any) => d.categories.forEach((c: any) => {
+                        c.status = normalizeAuditStatus(c.status);
+                    })));
                     setData(parsed);
                     if (parsed.filial) setSelectedFilial(parsed.filial);
                     if (parsed.inventoryNumber) setInventoryNumber(parsed.inventoryNumber);
                     let done = 0;
                     parsed.groups.forEach((g: any) => g.departments.forEach((d: any) => d.categories.forEach((c: any) => {
-                        if (c.status === AuditStatus.DONE) done += c.totalQuantity;
+                        if (isDoneStatus(c.status)) done += c.totalQuantity;
                     })));
                     setInitialDoneUnits(done);
                 }
@@ -405,7 +512,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 newData.groups.forEach(g => {
                     g.departments.forEach(d => {
                         d.categories.forEach(c => {
-                            if (c.status !== AuditStatus.DONE) {
+                            if (!isDoneStatus(c.status)) {
                                 c.totalQuantity = 0;
                                 c.totalCost = 0;
                                 c.products.forEach(p => {
@@ -619,7 +726,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             units += c.totalQuantity;
             cost += (c.totalCost || 0);
             totalCats++;
-            if (c.status === AuditStatus.DONE) {
+            if (isDoneStatus(c.status)) {
                 doneSkus += c.itemsCount;
                 doneUnits += c.totalQuantity;
                 doneCost += (c.totalCost || 0);
@@ -656,7 +763,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             skus += c.itemsCount;
             units += c.totalQuantity;
             cost += (c.totalCost || 0);
-            if (c.status === AuditStatus.DONE) {
+            if (isDoneStatus(c.status)) {
                 doneSkus += c.itemsCount;
                 doneUnits += c.totalQuantity;
                 doneCost += (c.totalCost || 0);
@@ -673,8 +780,82 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         };
     };
 
+    const getDeptById = (group: Group, deptId?: string) => group.departments.find(d => d.id === deptId);
+
+    const getScopeCategories = (groupId?: string | number, deptId?: string | number, catId?: string | number) => {
+        if (!data) return [] as { group: Group; dept: Department; cat: Category }[];
+        const g = data.groups.find(gr => normalizeScopeId(gr.id) === normalizeScopeId(groupId));
+        if (!g) return [];
+        if (catId) {
+            const targetDept = deptId
+                ? g.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(deptId))
+                : g.departments.find(d => d.categories.some(c => normalizeScopeId(c.id) === normalizeScopeId(catId)));
+            const cat = targetDept?.categories.find(c => normalizeScopeId(c.id) === normalizeScopeId(catId));
+            return targetDept && cat ? [{ group: g, dept: targetDept, cat }] : [];
+        }
+        if (deptId) {
+            const dept = g.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(deptId));
+            if (!dept) return [];
+            return dept.categories.map(c => ({ group: g, dept, cat: c }));
+        }
+        return g.departments.flatMap(d => d.categories.map(c => ({ group: g, dept: d, cat: c })));
+    };
+
+    const getPartialPercentForGroup = (group: Group, totalSkus: number) => {
+        if (!data?.partialStarts || data.partialStarts.length === 0 || totalSkus <= 0) return 0;
+        const catMap = new Map<string, number>();
+        group.departments.forEach(d => d.categories.forEach(c => catMap.set(c.id, c.itemsCount)));
+        const selected = new Set<string>();
+        data.partialStarts.forEach(p => {
+            if (normalizeScopeId(p.groupId) !== normalizeScopeId(group.id)) return;
+            if (!p.deptId) {
+                group.departments.forEach(d => d.categories.forEach(c => selected.add(c.id)));
+                return;
+            }
+            const dept = getDeptById(group, normalizeScopeId(p.deptId));
+            if (!dept) return;
+            if (!p.catId) {
+                dept.categories.forEach(c => selected.add(c.id));
+                return;
+            }
+            const cat = dept.categories.find(c => normalizeScopeId(c.id) === normalizeScopeId(p.catId));
+            if (cat) selected.add(cat.id);
+        });
+        let sum = 0;
+        selected.forEach(id => { sum += catMap.get(id) || 0; });
+        return totalSkus > 0 ? (sum / totalSkus) * 100 : 0;
+    };
+
+    const getPartialPercentForDept = (group: Group, dept: Department, totalSkus: number) => {
+        if (!data?.partialStarts || data.partialStarts.length === 0 || totalSkus <= 0) return 0;
+        const catMap = new Map<string, number>();
+        dept.categories.forEach(c => catMap.set(c.id, c.itemsCount));
+        const selected = new Set<string>();
+        data.partialStarts.forEach(p => {
+            if (normalizeScopeId(p.groupId) !== normalizeScopeId(group.id)) return;
+            if (!p.deptId) {
+                dept.categories.forEach(c => selected.add(c.id));
+                return;
+            }
+            if (normalizeScopeId(p.deptId) !== normalizeScopeId(dept.id)) return;
+            if (!p.catId) {
+                dept.categories.forEach(c => selected.add(c.id));
+                return;
+            }
+            const cat = dept.categories.find(c => normalizeScopeId(c.id) === normalizeScopeId(p.catId));
+            if (cat) selected.add(cat.id);
+        });
+        let sum = 0;
+        selected.forEach(id => { sum += catMap.get(id) || 0; });
+        return totalSkus > 0 ? (sum / totalSkus) * 100 : 0;
+    };
+
     const buildTermKey = (scope: TermScope) => {
-        return [scope.type, scope.groupId, scope.deptId || '', scope.catId || ''].join('|');
+        if (scope.type === 'custom') {
+            const customKey = (scope.customScopes || []).map(s => partialScopeKey(s)).join(',');
+            return `custom|${customKey}`;
+        }
+        return [scope.type, scope.groupId || '', scope.deptId || '', scope.catId || ''].join('|');
     };
 
     const createDefaultTermForm = (): TermForm => ({
@@ -718,6 +899,81 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const buildTermScopeInfo = (scope: TermScope) => {
         if (!data) return null;
+        const buildDeptLabel = (d: Department) => `${d.numericId || d.id} - ${d.name}`;
+        const buildCatLabel = (c: Category) => `${c.numericId || c.id} - ${c.name}`;
+
+        if (scope.type === 'custom') {
+            const scopes = scope.customScopes || [];
+            const departmentsMap = new Map<string, Department>();
+            const categoriesMap = new Map<string, Category>();
+            const products: { groupName: string; deptName: string; catName: string; code: string; name: string; quantity: number; cost: number }[] = [];
+            const productKeys = new Set<string>();
+            const groupLabels = new Set<string>();
+
+            const pushProducts = (groupName: string, deptName: string, catName: string, cat: Category) => {
+                cat.products.forEach(p => {
+                    const key = `${groupName}|${deptName}|${catName}|${p.code}`;
+                    if (productKeys.has(key)) return;
+                    productKeys.add(key);
+                    products.push({ groupName, deptName, catName, code: p.code, name: p.name, quantity: p.quantity, cost: p.cost || 0 });
+                });
+            };
+
+            scopes.forEach(s => {
+                const group = data.groups.find(g => g.id === s.groupId);
+                if (!group) return;
+                groupLabels.add(`${group.id} - ${group.name}`);
+
+                if (!s.deptId && !s.catId) {
+                    group.departments.forEach(d => {
+                        departmentsMap.set(d.id, { ...d, name: buildDeptLabel(d) });
+                        d.categories.forEach(c => {
+                            categoriesMap.set(c.id, { ...c, name: buildCatLabel(c) });
+                            pushProducts(group.name, d.name, c.name, c);
+                        });
+                    });
+                    return;
+                }
+
+                let dept = s.deptId ? group.departments.find(d => d.id === s.deptId) : undefined;
+                if (!dept && s.catId) {
+                    dept = group.departments.find(d => d.categories.some(c => c.id === s.catId));
+                }
+                if (dept) {
+                    departmentsMap.set(dept.id, { ...dept, name: buildDeptLabel(dept) });
+                    if (!s.catId) {
+                        dept.categories.forEach(c => {
+                            categoriesMap.set(c.id, { ...c, name: buildCatLabel(c) });
+                            pushProducts(group.name, dept!.name, c.name, c);
+                        });
+                        return;
+                    }
+                    const cat = dept.categories.find(c => c.id === s.catId);
+                    if (cat) {
+                        categoriesMap.set(cat.id, { ...cat, name: buildCatLabel(cat) });
+                        pushProducts(group.name, dept.name, cat.name, cat);
+                    }
+                }
+            });
+
+            const departments = Array.from(departmentsMap.values());
+            const categories = Array.from(categoriesMap.values());
+            const group: Group = {
+                id: 'custom',
+                name: scope.customLabel || 'Contagens Personalizadas',
+                departments: []
+            };
+            return {
+                group,
+                dept: undefined,
+                cat: undefined,
+                departments,
+                categories,
+                products,
+                groupLabelText: Array.from(groupLabels).join(', ')
+            };
+        }
+
         const group = data.groups.find(g => g.id === scope.groupId);
         if (!group) return null;
 
@@ -794,7 +1050,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         y += 6;
         doc.text(`Filial Auditada: Filial ${data.filial}`, 14, y);
         y += 6;
-        doc.text(`Grupo: ${scopeInfo.group.name}`, 14, y);
+        const groupLabelForPdf = termModal.type === 'custom'
+            ? `${(scopeInfo as any).groupLabelText || scopeInfo.group.name} (personalizado)`
+            : scopeInfo.group.name;
+        doc.text(`Grupo: ${groupLabelForPdf}`, 14, y);
         y += 6;
 
         const deptList = scopeInfo.departments.map(d => d.name).join(', ') || '-';
@@ -898,22 +1157,214 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         });
 
         const safeName = scopeInfo.group.name.replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 30);
-        const fileName = `Termo_Auditoria_F${data.filial}_${termModal.type}_${safeName}.pdf`;
+        const termTypeFile = termModal.type === 'custom' ? 'personalizado' : termModal.type;
+        const fileName = `Termo_Auditoria_F${data.filial}_${termTypeFile}_${safeName}.pdf`;
         doc.save(fileName);
     };
-    const calculateProgress = (auditData: AuditData) => {
+    const calculateProgress = useCallback((auditData: AuditData) => {
         let skus = 0, doneSkus = 0;
         if (auditData.groups) {
             auditData.groups.forEach(g => g.departments.forEach(d => d.categories.forEach(c => {
                 skus += c.itemsCount;
-                if (c.status === AuditStatus.DONE) doneSkus += c.itemsCount;
+                if (isDoneStatus(c.status)) doneSkus += c.itemsCount;
             })));
         }
         return skus > 0 ? (doneSkus / skus) * 100 : 0;
+    }, []);
+
+    const applyPartialScopes = useCallback((base: AuditData, partials: Array<{ startedAt: string; groupId?: string; deptId?: string; catId?: string }>) => {
+        const normalizedPartials = partials.filter(p => !!p.startedAt);
+        return {
+            ...base,
+            partialStarts: normalizedPartials,
+            partialCompleted: base.partialCompleted || [],
+            groups: base.groups.map(g => ({
+                ...g,
+                departments: g.departments.map(d => ({
+                    ...d,
+                    categories: d.categories.map(c => {
+                        const current = normalizeAuditStatus(c.status);
+                        if (current === AuditStatus.DONE) return { ...c, status: current };
+                        const matched = normalizedPartials.some(p => isPartialScopeMatch(p, g.id, d.id, c.id));
+                        return { ...c, status: matched ? AuditStatus.IN_PROGRESS : AuditStatus.TODO };
+                    })
+                }))
+            }))
+        };
+    }, []);
+
+    const clearPartialProgress = useCallback(async (reason?: 'expired' | 'manual' | 'invalid', discardCompleted = false) => {
+        if (!data?.partialStarts || data.partialStarts.length === 0) return;
+        const nextData = applyPartialScopes(
+            discardCompleted ? { ...data, partialCompleted: [] } : data,
+            []
+        );
+        setData(nextData);
+        try {
+            const progress = calculateProgress(nextData);
+            await upsertAuditSession({
+                id: dbSessionId,
+                branch: selectedFilial,
+                audit_number: nextAuditNumber,
+                status: 'open',
+                data: nextData as any,
+                progress: progress
+            });
+            if (reason === 'expired') {
+                alert("Contagem parcial expirada. Inicie novamente para continuar.");
+            }
+        } catch (err) {
+            console.error("Error clearing partial:", err);
+        }
+    }, [data, dbSessionId, selectedFilial, nextAuditNumber, applyPartialScopes]);
+
+    const finalizeActivePartials = useCallback(async () => {
+        if (!data?.partialStarts || data.partialStarts.length === 0) return;
+        if (!window.confirm("Deseja concluir todas as contagens parciais ativas?")) return;
+
+        const toComplete = data.partialStarts;
+        const completedAt = new Date().toISOString();
+        const batchId = createBatchId();
+        const merged = [
+            ...(data.partialCompleted || []),
+            ...toComplete.map(p => ({ ...p, completedAt, batchId }))
+        ];
+        const dedupedMap = new Map<string, { startedAt?: string; completedAt: string; batchId?: string; groupId?: string; deptId?: string; catId?: string }>();
+        merged.forEach(p => {
+            dedupedMap.set(partialScopeKey(p), p);
+        });
+        const nextCompleted = Array.from(dedupedMap.values());
+
+        const inScope = (p: { groupId?: string; deptId?: string; catId?: string }, g: Group, d: Department, c: Category) =>
+            isPartialScopeMatch(p, g.id, d.id, c.id);
+
+        const nextDataRaw: AuditData = {
+            ...data,
+            partialStarts: [],
+            partialCompleted: nextCompleted,
+            lastPartialBatchId: batchId,
+            groups: data.groups.map(g => ({
+                ...g,
+                departments: g.departments.map(d => ({
+                    ...d,
+                    categories: d.categories.map(c => {
+                        const current = normalizeAuditStatus(c.status);
+                        if (current === AuditStatus.DONE) return { ...c, status: current };
+                        const shouldFinalize = toComplete.some(p => inScope(p, g, d, c));
+                        if (shouldFinalize) return { ...c, status: AuditStatus.DONE };
+                        return { ...c, status: current };
+                    })
+                }))
+            }))
+        };
+
+        const nextData = applyPartialScopes(nextDataRaw, []);
+        setData(nextData);
+
+        try {
+            const progress = calculateProgress(nextData);
+            await upsertAuditSession({
+                id: dbSessionId,
+                branch: selectedFilial,
+                audit_number: nextAuditNumber,
+                status: 'open',
+                data: nextData as any,
+                progress: progress
+            });
+            alert("Contagens parciais concluídas.");
+        } catch (err) {
+            console.error("Error finalizing partials:", err);
+            alert("Erro ao concluir contagens parciais no Supabase.");
+        }
+    }, [data, dbSessionId, selectedFilial, nextAuditNumber, applyPartialScopes, calculateProgress]);
+
+    const clearActivePartialsShortcut = useCallback(async () => {
+        if (!data?.partialStarts || data.partialStarts.length === 0) return;
+        if (!window.confirm("Deseja desfazer todas as contagens parciais ativas?")) return;
+        await clearPartialProgress('manual', true);
+    }, [data, clearPartialProgress]);
+
+    const startScopeAudit = async (groupId?: string, deptId?: string, catId?: string) => {
+        if (!data) return;
+        const nowIso = new Date().toISOString();
+        const existing = data.partialStarts || [];
+        const catMap = new Map<string, { startedAt: string; groupId: string; deptId: string; catId: string }>();
+
+        existing.forEach(p => {
+            const expanded = getScopeCategories(p.groupId, p.deptId, p.catId);
+            expanded.forEach(({ group, dept, cat }) => {
+                const key = partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id });
+                if (!catMap.has(key)) {
+                    catMap.set(key, {
+                        startedAt: p.startedAt || nowIso,
+                        groupId: normalizeScopeId(group.id),
+                        deptId: normalizeScopeId(dept.id),
+                        catId: normalizeScopeId(cat.id)
+                    });
+                }
+            });
+        });
+
+        const scopeCats = getScopeCategories(groupId, deptId, catId);
+        const scopeKeys = scopeCats.map(({ group, dept, cat }) => partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }));
+        const allSelected = scopeKeys.length > 0 && scopeKeys.every(k => catMap.has(k));
+
+        if (allSelected) {
+            scopeKeys.forEach(k => catMap.delete(k));
+        } else {
+            scopeCats.forEach(({ group, dept, cat }) => {
+                const key = partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id });
+                catMap.set(key, {
+                    startedAt: nowIso,
+                    groupId: normalizeScopeId(group.id),
+                    deptId: normalizeScopeId(dept.id),
+                    catId: normalizeScopeId(cat.id)
+                });
+            });
+        }
+
+        const nextPartials = Array.from(catMap.values());
+        const nextData = applyPartialScopes(data, nextPartials);
+
+        setData(nextData);
+
+        try {
+            const progress = calculateProgress(nextData);
+            await upsertAuditSession({
+                id: dbSessionId,
+                branch: selectedFilial,
+                audit_number: nextAuditNumber,
+                status: 'open',
+                data: nextData as any,
+                progress: progress
+            });
+            alert(allSelected ? "Contagem parcial desativada." : "Auditoria iniciada. Contagem parcial registrada.");
+        } catch (err) {
+            console.error("Error persisting start:", err);
+            alert("Erro ao registrar início no Supabase. O progresso foi salvo localmente.");
+        }
     };
 
     const toggleScopeStatus = async (groupId?: string, deptId?: string, catId?: string) => {
         if (!data) return;
+
+        const scopeCats: Category[] = [];
+        data.groups.forEach(g => {
+            if (groupId && g.id !== groupId) return;
+            g.departments.forEach(d => {
+                if (deptId && d.id !== deptId) return;
+                d.categories.forEach(c => {
+                    if (catId && c.id !== catId) return;
+                    scopeCats.push(c);
+                });
+            });
+        });
+
+        const hasStarted = scopeCats.some(c => normalizeAuditStatus(c.status) !== AuditStatus.TODO);
+        if (!hasStarted) {
+            alert("Inicie a auditoria parcial antes de concluir.");
+            return;
+        }
 
         // Determinar se o escopo atual já está todo concluído
         let allDone = true;
@@ -923,7 +1374,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 if (deptId && d.id !== deptId) return;
                 d.categories.forEach(c => {
                     if (catId && c.id !== catId) return;
-                    if (c.status !== AuditStatus.DONE) allDone = false;
+                    if (!isDoneStatus(c.status)) allDone = false;
                 });
             });
         });
@@ -934,8 +1385,37 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         if (!window.confirm(msg)) return;
 
-        const nextData: AuditData = {
+        const existingPartials = data.partialStarts || [];
+        const filteredPartials = existingPartials.filter(p => !scopeContainsPartial(p, groupId, deptId, catId));
+        const baseCompleted = allDone
+            ? (data.partialCompleted || []).filter(p => !scopeContainsPartial(p, groupId, deptId, catId))
+            : (data.partialCompleted || []);
+        let nextCompleted = baseCompleted;
+        let nextBatchId = data.lastPartialBatchId;
+        if (!allDone) {
+            const completedAt = new Date().toISOString();
+            const batchId = createBatchId();
+            const scopeEntry = {
+                completedAt,
+                batchId,
+                groupId: normalizeScopeId(groupId),
+                deptId: normalizeScopeId(deptId),
+                catId: normalizeScopeId(catId)
+            };
+            const map = new Map<string, any>();
+            baseCompleted.forEach(p => map.set(partialScopeKey(p), p));
+            map.set(partialScopeKey(scopeEntry), scopeEntry);
+            nextCompleted = Array.from(map.values());
+            nextBatchId = batchId;
+        } else {
+            nextBatchId = getLatestBatchId(baseCompleted);
+        }
+
+        const nextDataRaw: AuditData = {
             ...data,
+            partialStarts: filteredPartials,
+            partialCompleted: nextCompleted,
+            lastPartialBatchId: nextBatchId,
             groups: data.groups.map(g => {
                 if (groupId && g.id !== groupId) return g;
                 return {
@@ -944,7 +1424,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         if (deptId && d.id !== deptId) return d;
                         let targetCats = d.categories;
                         if (catId) targetCats = d.categories.filter(c => c.id === catId);
-                        const allDone = targetCats.every(c => c.status === AuditStatus.DONE);
+                        const allDone = targetCats.every(c => isDoneStatus(c.status));
                         const newStatus = allDone ? AuditStatus.TODO : AuditStatus.DONE;
                         return {
                             ...d,
@@ -957,6 +1437,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 };
             })
         };
+
+        const nextData = applyPartialScopes(nextDataRaw, filteredPartials);
 
         setData(nextData);
 
@@ -1029,7 +1511,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 ]);
 
                 d.categories.forEach(c => {
-                    const isDone = c.status === AuditStatus.DONE;
+                    const isDone = isDoneStatus(c.status);
                     hierarchyRows.push([
                         `      - ${c.name} (${c.numericId || "--"})`,
                         c.itemsCount, isDone ? c.itemsCount : 0, isDone ? "100%" : "0%",
@@ -1058,6 +1540,174 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const selectedDept = useMemo(() => selectedGroup?.departments.find(d => d.id === view.selectedDeptId), [selectedGroup, view.selectedDeptId]);
     const selectedCat = useMemo(() => selectedDept?.categories.find(c => c.id === view.selectedCatId), [selectedDept, view.selectedCatId]);
     const termScopeInfo = useMemo(() => (termModal ? buildTermScopeInfo(termModal) : null), [termModal, data]);
+    const partialInfoList = useMemo(() => {
+        if (!data?.partialStarts || data.partialStarts.length === 0) return [];
+        const buildDeptLabel = (d: Department) => `${d.numericId || d.id} - ${d.name}`;
+        const buildCatLabel = (c: Category) => `${c.numericId || c.id} - ${c.name}`;
+
+        const bucket = new Map<string, {
+            key: string;
+            groupLabel: string | null;
+            deptLabel: string | null;
+            catItems: string[];
+            startedAt?: string;
+        }>();
+
+        const addCat = (group: Group, dept: Department, cat: Category, startedAt: string) => {
+            const key = `${normalizeScopeId(group.id)}|${normalizeScopeId(dept.id)}`;
+            const entry = bucket.get(key) || {
+                key,
+                groupLabel: `${group.id} - ${group.name}`,
+                deptLabel: buildDeptLabel(dept),
+                catItems: [],
+                startedAt
+            };
+            entry.catItems.push(buildCatLabel(cat));
+            if (!entry.startedAt || new Date(startedAt).getTime() < new Date(entry.startedAt).getTime()) {
+                entry.startedAt = startedAt;
+            }
+            bucket.set(key, entry);
+        };
+
+        data.partialStarts.forEach(scope => {
+            const startedAt = scope.startedAt || new Date().toISOString();
+            const expanded = getScopeCategories(scope.groupId, scope.deptId, scope.catId);
+            expanded.forEach(({ group, dept, cat }) => addCat(group, dept, cat, startedAt));
+        });
+
+        return Array.from(bucket.values()).map(entry => ({
+            ...entry,
+            startedAtLabel: entry.startedAt
+                ? new Date(entry.startedAt).toLocaleString('pt-BR', { hour12: false })
+                : ''
+        }));
+    }, [data]);
+
+    const completedInfoList = useMemo(() => {
+        if (!data?.partialCompleted || data.partialCompleted.length === 0) return [];
+        const byKey = new Map<string, {
+            key: string;
+            label: string;
+            scope: { groupId?: string; deptId?: string; catId?: string };
+            completedAtLabel: string;
+        }>();
+
+        const findGroup = (groupId?: string | number) =>
+            data.groups.find(g => normalizeScopeId(g.id) === normalizeScopeId(groupId));
+
+        const findDept = (group?: Group, deptId?: string | number) =>
+            group?.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(deptId));
+
+        data.partialCompleted.forEach(scope => {
+            const key = partialScopeKey(scope);
+            if (byKey.has(key)) return;
+            const group = findGroup(scope.groupId);
+            const dept = scope.deptId ? findDept(group, scope.deptId) : undefined;
+            const cat = scope.catId
+                ? (dept?.categories.find(c => normalizeScopeId(c.id) === normalizeScopeId(scope.catId)) ||
+                    group?.departments.flatMap(d => d.categories).find(c => normalizeScopeId(c.id) === normalizeScopeId(scope.catId)))
+                : undefined;
+
+            let label = 'Escopo personalizado';
+            if (cat) {
+                label = `Cat ${cat.numericId || cat.id} - ${cat.name}`;
+            } else if (dept) {
+                label = `Depto ${dept.numericId || dept.id} - ${dept.name}`;
+            } else if (group) {
+                label = `Grupo ${group.id} - ${group.name}`;
+            }
+
+            byKey.set(key, {
+                key,
+                label,
+                scope: {
+                    groupId: normalizeScopeId(scope.groupId),
+                    deptId: normalizeScopeId(scope.deptId),
+                    catId: normalizeScopeId(scope.catId)
+                },
+                completedAtLabel: scope.completedAt
+                    ? new Date(scope.completedAt).toLocaleString('pt-BR', { hour12: false })
+                    : ''
+            });
+        });
+
+        return Array.from(byKey.values());
+    }, [data]);
+
+    useEffect(() => {
+        if (!data?.partialStarts || data.partialStarts.length === 0) return;
+        const now = new Date();
+        const valid = data.partialStarts.filter(p => {
+            const startedAt = new Date(p.startedAt);
+            if (isNaN(startedAt.getTime())) return false;
+            return startedAt.toDateString() === now.toDateString();
+        });
+        if (valid.length !== data.partialStarts.length) {
+            const nextData = applyPartialScopes(data, valid);
+            setData(nextData);
+            (async () => {
+                try {
+                    const progress = calculateProgress(nextData);
+                    await upsertAuditSession({
+                        id: dbSessionId,
+                        branch: selectedFilial,
+                        audit_number: nextAuditNumber,
+                        status: 'open',
+                        data: nextData as any,
+                        progress: progress
+                    });
+                    alert("Contagem parcial expirada. Inicie novamente para continuar.");
+                } catch (err) {
+                    console.error("Error clearing partial:", err);
+                }
+            })();
+        }
+
+        const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
+        const timeoutMs = midnight.getTime() - Date.now() + 1000;
+        const timer = window.setTimeout(() => {
+            clearPartialProgress('expired');
+        }, Math.max(1000, timeoutMs));
+        return () => window.clearTimeout(timer);
+    }, [data?.partialStarts, applyPartialScopes, dbSessionId, selectedFilial, nextAuditNumber, clearPartialProgress, calculateProgress]);
+
+    const openPartialTerm = (scope: { groupId?: string; deptId?: string; catId?: string }) => {
+        if (!scope.groupId) return;
+        const type: TermScopeType = scope.catId ? 'category' : scope.deptId ? 'department' : 'group';
+        openTermModal({ type, groupId: scope.groupId, deptId: scope.deptId, catId: scope.catId });
+    };
+
+    const openUnifiedPartialTerm = (batchId: string) => {
+        if (!data?.partialCompleted || data.partialCompleted.length === 0) return;
+        const map = new Map<string, { groupId?: string; deptId?: string; catId?: string }>();
+        data.partialCompleted.forEach(p => {
+            if (getEntryBatchId(p) !== batchId) return;
+            const scope = { groupId: p.groupId, deptId: p.deptId, catId: p.catId };
+            map.set(partialScopeKey(scope), scope);
+        });
+        const customScopes = Array.from(map.values());
+        if (customScopes.length === 0) return;
+        openTermModal({
+            type: 'custom',
+            customScopes,
+            customLabel: 'Contagens Personalizadas (Concluídas)'
+        });
+    };
+
+    const batchSummaryList = useMemo(() => {
+        if (!data?.partialCompleted || data.partialCompleted.length === 0) return [];
+        const buckets = new Map<string, { batchId: string; count: number; lastAt: string }>();
+        data.partialCompleted.forEach(p => {
+            const batchId = getEntryBatchId(p);
+            const entry = buckets.get(batchId) || { batchId, count: 0, lastAt: p.completedAt || p.startedAt || new Date(0).toISOString() };
+            entry.count += 1;
+            const currentTs = new Date(entry.lastAt).getTime();
+            const incomingTs = new Date(p.completedAt || p.startedAt || 0).getTime();
+            if (incomingTs > currentTs) entry.lastAt = p.completedAt || p.startedAt || entry.lastAt;
+            buckets.set(batchId, entry);
+        });
+        return Array.from(buckets.values()).sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
+    }, [data?.partialCompleted]);
 
     if (!data || isUpdatingStock) {
         return (
@@ -1170,6 +1820,104 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             </header>
 
             <div className="sticky top-[76px] z-[1001] bg-white/90 backdrop-blur-xl border-b border-slate-200 shadow-lg px-8 py-5">
+                {(partialInfoList.length > 0 || (data?.partialCompleted && data.partialCompleted.length > 0)) && (
+                    <div className="max-w-[1400px] mx-auto mb-4">
+                        <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-2xl shadow-sm">
+                            <div className="flex flex-wrap items-center gap-3 justify-between">
+                                <Activity className="w-4 h-4" />
+                                <span className="text-[10px] font-black uppercase tracking-widest">Contagem Parcial</span>
+                                <div className="ml-auto flex items-center gap-2">
+                                    <button
+                                        onClick={clearActivePartialsShortcut}
+                                        disabled={partialInfoList.length === 0}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-all ${partialInfoList.length === 0
+                                            ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                                            : 'bg-white text-red-600 border-red-200 hover:bg-red-600 hover:text-white'}`}
+                                    >
+                                        Desfazer Ativas
+                                    </button>
+                                    <button
+                                        onClick={finalizeActivePartials}
+                                        disabled={partialInfoList.length === 0}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-all ${partialInfoList.length === 0
+                                            ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                                            : 'bg-white text-emerald-600 border-emerald-200 hover:bg-emerald-600 hover:text-white'}`}
+                                    >
+                                        Concluir Ativas
+                                    </button>
+                                </div>
+                            </div>
+                            {partialInfoList.length > 0 ? (
+                                <div className="mt-3 space-y-3">
+                                    {partialInfoList.map((info) => (
+                                        <div key={info.key} className="border border-blue-100 bg-white/60 rounded-xl p-3">
+                                            <div className="flex flex-wrap items-center gap-3 mb-2">
+                                                <span className="text-[10px] font-black text-blue-700/80 uppercase tracking-widest">Início</span>
+                                                <span className="text-xs font-semibold">{info.startedAtLabel}</span>
+                                            </div>
+                                            <div className="grid grid-cols-1 lg:grid-cols-[140px_1fr] gap-2 items-start">
+                                                <span className="text-[9px] font-black uppercase tracking-widest text-blue-700/80">Grupo</span>
+                                                <span className="text-xs font-semibold">{info.groupLabel || 'N/D'}</span>
+                                                <span className="text-[9px] font-black uppercase tracking-widest text-blue-700/80">Departamento</span>
+                                                <span className="text-xs font-semibold">{info.deptLabel || 'N/D'}</span>
+                                                <span className="text-[9px] font-black uppercase tracking-widest text-blue-700/80">Categorias</span>
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    {info.catItems.length > 0 ? info.catItems.map((item, idx) => (
+                                                        <span key={`cat-${info.key}-${idx}`} className="text-xs font-semibold bg-blue-100 border border-blue-200 px-2 py-0.5 rounded-lg whitespace-nowrap">
+                                                            {item}
+                                                        </span>
+                                                    )) : <span className="text-xs font-semibold">N/D</span>}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="mt-3 text-xs font-semibold text-blue-700/70">Nenhuma contagem parcial ativa.</div>
+                            )}
+                            {completedInfoList.length > 0 && (
+                                <div className="mt-4 border-t border-blue-100 pt-3">
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <FileSignature className="w-4 h-4 text-blue-600" />
+                                        <span className="text-[10px] font-black uppercase tracking-widest text-blue-700/80">Termos</span>
+                                    </div>
+                                    <div className="rounded-2xl border border-blue-100 bg-white/70 p-3">
+                                        <div className="text-[9px] font-black uppercase tracking-widest text-blue-700/60 mb-2">Termos Personalizados (Concluídos)</div>
+                                        <div className="flex flex-wrap gap-2">
+                                            {completedInfoList.map(info => (
+                                                <button
+                                                    key={`term-${info.key}`}
+                                                    onClick={() => openPartialTerm(info.scope)}
+                                                    className="text-xs font-semibold bg-white border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-600 hover:text-white transition-colors whitespace-nowrap"
+                                                    title={info.completedAtLabel ? `Concluído em ${info.completedAtLabel}` : undefined}
+                                                >
+                                                    {info.label}{info.completedAtLabel ? ` • ${info.completedAtLabel}` : ''}
+                                                </button>
+                                            ))}
+                                        </div>
+                                        {batchSummaryList.length > 0 && (
+                                            <div className="mt-4 pt-3 border-t border-blue-100/70">
+                                                <div className="text-[9px] font-black uppercase tracking-widest text-blue-700/60 mb-2">Termos Únicos (Por Lote)</div>
+                                                <div className="flex flex-wrap gap-2">
+                                                    {batchSummaryList.map(batch => (
+                                                        <button
+                                                            key={`batch-${batch.batchId}`}
+                                                            onClick={() => openUnifiedPartialTerm(batch.batchId)}
+                                                            className="text-xs font-semibold bg-white border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-600 hover:text-white transition-colors whitespace-nowrap"
+                                                            title={batch.lastAt ? `Concluído em ${new Date(batch.lastAt).toLocaleString('pt-BR', { hour12: false })}` : undefined}
+                                                        >
+                                                            Termo único • {batch.count} contagens • {batch.lastAt ? new Date(batch.lastAt).toLocaleString('pt-BR', { hour12: false }) : ''}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
                 <div className="max-w-[1400px] mx-auto grid grid-cols-1 md:grid-cols-6 gap-6 items-center">
                     <div className="md:col-span-2">
                         <div className="flex justify-between items-end mb-2">
@@ -1189,30 +1937,30 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                     <div className="flex flex-col items-center border-l border-slate-100 px-2">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Unidades Totais</span>
-                        <div className="flex items-center gap-2 mt-1">
-                            <span className="text-xl font-black text-indigo-700 tabular-nums">{Math.round(branchMetrics.doneUnits).toLocaleString()}</span>
-                            <span className="text-slate-200 text-sm">/</span>
-                            <span className="text-lg font-black text-slate-300 tabular-nums">{Math.round(branchMetrics.units).toLocaleString()}</span>
+                        <div className="flex items-center gap-2 mt-1 flex-nowrap whitespace-nowrap">
+                            <span className="text-xl font-black text-indigo-700 tabular-nums leading-none whitespace-nowrap">{Math.round(branchMetrics.doneUnits).toLocaleString()}</span>
+                            <span className="text-slate-200 text-sm leading-none">/</span>
+                            <span className="text-lg font-black text-slate-300 tabular-nums leading-none whitespace-nowrap">{Math.round(branchMetrics.units).toLocaleString()}</span>
                         </div>
                         <span className="text-[8px] font-bold text-indigo-300 uppercase mt-1 tracking-tighter">CONFERIDAS / TOTAIS</span>
                     </div>
 
                     <div className="flex flex-col items-center border-l border-slate-100 px-2">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Valor em Custo</span>
-                        <div className="flex items-center gap-2 mt-1">
-                            <span className="text-xl font-black text-emerald-700 tabular-nums">R$ {branchMetrics.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                            <span className="text-slate-200 text-sm">/</span>
-                            <span className="text-lg font-black text-slate-300 tabular-nums">{branchMetrics.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        <div className="flex items-center gap-2 mt-1 flex-nowrap whitespace-nowrap">
+                            <span className="text-xl font-black text-emerald-700 tabular-nums leading-none whitespace-nowrap">R$ {branchMetrics.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            <span className="text-slate-200 text-sm leading-none">/</span>
+                            <span className="text-lg font-black text-slate-300 tabular-nums leading-none whitespace-nowrap">{branchMetrics.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                         <span className="text-[8px] font-bold text-emerald-300 uppercase mt-1 tracking-tighter">CONFERIDO / TOTAL</span>
                     </div>
 
                     <div className="flex flex-col items-center border-l border-slate-100 px-2">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Mix Auditado</span>
-                        <div className="flex items-center gap-2 mt-1">
-                            <span className="text-xl font-black text-emerald-600 tabular-nums">{branchMetrics.doneSkus.toLocaleString()}</span>
-                            <span className="text-slate-200 text-sm">/</span>
-                            <span className="text-lg font-black text-slate-300 tabular-nums">{branchMetrics.pendingSkus.toLocaleString()}</span>
+                        <div className="flex items-center gap-2 mt-1 flex-nowrap whitespace-nowrap">
+                            <span className="text-xl font-black text-emerald-600 tabular-nums leading-none whitespace-nowrap">{branchMetrics.doneSkus.toLocaleString()}</span>
+                            <span className="text-slate-200 text-sm leading-none">/</span>
+                            <span className="text-lg font-black text-slate-300 tabular-nums leading-none whitespace-nowrap">{branchMetrics.pendingSkus.toLocaleString()}</span>
                         </div>
                         <span className="text-[8px] font-bold text-emerald-500 uppercase mt-1 tracking-tighter">CONFERIDOS / PENDENTES</span>
                     </div>
@@ -1239,8 +1987,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         const totalSkus = Number(m.skus);
                         const doneSkus = Number(m.doneSkus);
                         const isComplete = totalSkus > 0 && doneSkus >= totalSkus;
+                        const groupCats = group.departments.flatMap(d => d.categories);
+                        const groupHasStarted = groupCats.some(c => normalizeAuditStatus(c.status) !== AuditStatus.TODO);
+                        const groupHasInProgress = groupCats.some(c => isInProgressStatus(c.status));
+                        const groupAllDone = totalSkus > 0 && doneSkus >= totalSkus;
+                        const groupPartialPercent = groupHasInProgress ? getPartialPercentForGroup(group, totalSkus) : 0;
+                        const groupProgressValue = groupAllDone ? 100 : groupHasInProgress ? groupPartialPercent : m.progress;
                         return (
-                            <div key={group.id} className="bg-white rounded-[2.5rem] p-8 border border-slate-200 shadow-sm hover:shadow-xl transition-all group flex flex-col relative overflow-hidden">
+                            <div key={group.id} className={`rounded-[2.5rem] p-8 border shadow-sm hover:shadow-xl transition-all group flex flex-col relative overflow-hidden ${groupHasInProgress ? 'bg-blue-50/60 border-blue-200' : 'bg-white border-slate-200'}`}>
                                 <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-50 rounded-full -mr-16 -mt-16 group-hover:bg-indigo-100 transition-colors z-0"></div>
                                 <div className="relative z-10">
                                     <div className="flex justify-between items-start mb-6">
@@ -1256,9 +2010,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 Termo
                                             </button>
                                             <button
+                                                onClick={(e) => { e.stopPropagation(); startScopeAudit(group.id); }}
+                                                className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all shadow-sm ${groupHasInProgress
+                                                    ? 'bg-blue-600 text-white border-blue-500'
+                                                    : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
+                                                title={groupHasInProgress ? 'Desativar contagem parcial' : (groupHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial')}
+                                            >
+                                                <Activity className="w-5 h-5" />
+                                            </button>
+                                            <button
                                                 onClick={(e) => { e.stopPropagation(); toggleScopeStatus(group.id); }}
-                                                disabled={!isMaster}
-                                                className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all shadow-sm ${!isMaster ? 'bg-slate-50 text-slate-200 border-slate-100 cursor-not-allowed' : 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white'}`}
+                                                disabled={!isMaster || !groupHasStarted}
+                                                className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all shadow-sm ${!isMaster || !groupHasStarted ? 'bg-slate-50 text-slate-200 border-slate-100 cursor-not-allowed' : 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white'}`}
                                             >
                                                 <CheckSquare className="w-5 h-5" />
                                             </button>
@@ -1291,7 +2054,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             <span className="text-emerald-600">R$ {m.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} Aud.</span>
                                         </div>
                                     </div>
-                                    <ProgressBar percentage={m.progress} size="md" label={`Progresso do Grupo`} />
+                                    <ProgressBar percentage={groupProgressValue} size="md" label={`Progresso do Grupo`} tone={groupAllDone ? 'green' : groupHasInProgress ? 'blue' : 'auto'} />
                                 </div>
                             </div>
                         );
@@ -1302,8 +2065,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         const totalSkus = Number(m.skus);
                         const doneSkus = Number(m.doneSkus);
                         const isComplete = totalSkus > 0 && doneSkus >= totalSkus;
+                        const deptHasStarted = dept.categories.some(c => normalizeAuditStatus(c.status) !== AuditStatus.TODO);
+                        const deptHasInProgress = dept.categories.some(c => isInProgressStatus(c.status));
+                        const deptAllDone = totalSkus > 0 && doneSkus >= totalSkus;
+                        const deptPartialPercent = deptHasInProgress ? getPartialPercentForDept(selectedGroup!, dept, totalSkus) : 0;
+                        const deptProgressValue = deptAllDone ? 100 : deptHasInProgress ? deptPartialPercent : m.progress;
                         return (
-                            <div key={dept.id} className="bg-white rounded-[2rem] border border-slate-200 shadow-sm hover:shadow-md transition-all p-8 flex items-center gap-10 group">
+                            <div key={dept.id} className={`rounded-[2rem] border shadow-sm hover:shadow-md transition-all p-8 flex items-center gap-10 group ${deptHasInProgress ? 'bg-blue-50/60 border-blue-200' : 'bg-white border-slate-200'}`}>
                                 <div className="flex flex-col items-center justify-center bg-slate-50 rounded-[2rem] p-6 min-w-[160px] border border-slate-100 shadow-inner">
                                     <span className="text-[9px] font-black text-slate-400 uppercase mb-2 italic">SISTEMA ID</span>
                                     <span className="text-5xl font-black text-indigo-700 leading-none tracking-tighter">{dept.numericId || '--'}</span>
@@ -1321,9 +2089,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 Termo
                                             </button>
                                             <button
+                                                onClick={() => startScopeAudit(selectedGroup?.id, dept.id)}
+                                                className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${deptHasInProgress
+                                                    ? 'bg-blue-600 text-white border-blue-500'
+                                                    : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
+                                                title={deptHasInProgress ? 'Desativar contagem parcial' : (deptHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial')}
+                                            >
+                                                {deptHasInProgress ? 'PAUSAR' : 'INICIAR'}
+                                            </button>
+                                            <button
                                                 onClick={() => toggleScopeStatus(selectedGroup?.id, dept.id)}
-                                                disabled={!isMaster}
-                                                className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${!isMaster ? 'bg-slate-50 text-slate-200 border-slate-100 cursor-not-allowed' : 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white'}`}
+                                                disabled={!isMaster || !deptHasStarted}
+                                                className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${!isMaster || !deptHasStarted ? 'bg-slate-50 text-slate-200 border-slate-100 cursor-not-allowed' : 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white'}`}
                                             >
                                                 Alternar Tudo
                                             </button>
@@ -1340,51 +2117,79 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Custo Total</span><span className="text-lg font-black text-slate-400">R$ {m.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
                                         <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Custo Aud.</span><span className="text-xl font-black text-emerald-600 tabular-nums">R$ {m.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
                                     </div>
-                                    <ProgressBar percentage={m.progress} size="md" label={`Status do Departamento`} />
+                                    <ProgressBar percentage={deptProgressValue} size="md" label={`Status do Departamento`} tone={deptAllDone ? 'green' : deptHasInProgress ? 'blue' : 'auto'} />
                                 </div>
                             </div>
                         );
                     })}
 
-                    {view.level === 'categories' && selectedDept?.categories.map(cat => (
-                        <div key={cat.id} className={`p-6 rounded-[2rem] border-2 flex items-center justify-between gap-8 transition-all hover:shadow-lg group ${cat.status === AuditStatus.DONE ? 'border-emerald-500/20 bg-emerald-50/50' : 'border-slate-50 bg-white'}`}>
+                    {view.level === 'categories' && selectedDept?.categories.map(cat => {
+                        const catStatus = normalizeAuditStatus(cat.status);
+                        const canFinalize = isMaster && catStatus !== AuditStatus.TODO;
+                        const startLabel = catStatus === AuditStatus.IN_PROGRESS ? 'PAUSAR' : 'INICIAR';
+                        return (
+                        <div key={cat.id} className={`p-6 rounded-[2rem] border-2 flex items-center justify-between gap-8 transition-all hover:shadow-lg group ${catStatus === AuditStatus.DONE ? 'border-emerald-500/20 bg-emerald-50/50' : catStatus === AuditStatus.IN_PROGRESS ? 'border-blue-200 bg-blue-50/40' : 'border-slate-50 bg-white'}`}>
                             <div className="flex items-center gap-8 flex-1">
                                 <div className="flex flex-col items-center justify-center bg-white border border-slate-200 rounded-2xl p-5 min-w-[120px] shadow-sm">
                                     <span className="text-[9px] font-black text-slate-400 uppercase mb-1 italic">ID CAT</span>
-                                    <span className={`text-4xl font-black leading-none ${cat.status === AuditStatus.DONE ? 'text-emerald-700' : 'text-indigo-700'}`}>{cat.numericId || '--'}</span>
+                                    <span className={`text-4xl font-black leading-none ${catStatus === AuditStatus.DONE ? 'text-emerald-700' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-700' : 'text-indigo-700'}`}>{cat.numericId || '--'}</span>
                                 </div>
                                 <div>
-                                    <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-2xl uppercase italic leading-none cursor-pointer hover:underline transition-all ${cat.status === AuditStatus.DONE ? 'text-emerald-900' : 'text-slate-900'} tracking-tighter`}>{cat.name}</h3>
+                                    <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-2xl uppercase italic leading-none cursor-pointer hover:underline transition-all ${catStatus === AuditStatus.DONE ? 'text-emerald-900' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-900' : 'text-slate-900'} tracking-tighter`}>{cat.name}</h3>
                                     <div className="flex gap-10 mt-3 items-center">
-                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic">SKUs Importados</span><span className="text-md font-black text-slate-800 tabular-nums">{cat.itemsCount} Mix</span></div>
+                                        <div className="flex flex-col">
+                                            <span className="text-[9px] font-black text-slate-400 uppercase italic">SKUs Importados</span>
+                                            <span className="text-md font-black text-slate-800 tabular-nums leading-none whitespace-nowrap">{cat.itemsCount} Mix</span>
+                                        </div>
                                         <div className="w-px h-6 bg-slate-100"></div>
-                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic">Estoque Físico</span><span className="text-md font-black text-indigo-600 tabular-nums">{cat.totalQuantity.toLocaleString()} Unid.</span></div>
+                                        <div className="flex flex-col">
+                                            <span className="text-[9px] font-black text-slate-400 uppercase italic">Estoque Físico</span>
+                                            <span className="text-md font-black text-indigo-600 tabular-nums leading-none whitespace-nowrap">{cat.totalQuantity.toLocaleString()} Unid.</span>
+                                        </div>
                                         <div className="w-px h-6 bg-slate-100"></div>
-                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic">Valor em Custo</span><span className="text-md font-black text-emerald-600 tabular-nums">R$ {cat.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
+                                        <div className="flex flex-col">
+                                            <span className="text-[9px] font-black text-slate-400 uppercase italic">Valor em Custo</span>
+                                            <span className="text-md font-black text-emerald-600 tabular-nums leading-none whitespace-nowrap">R$ {cat.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                        </div>
                                     </div>
                                 </div>
                             </div>
                             <div className="flex gap-4">
                                 <button
-                                    onClick={() => { if (cat.status === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id }); }}
-                                    disabled={cat.status !== AuditStatus.DONE}
-                                    className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${cat.status === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:text-white hover:bg-indigo-600' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
+                                    onClick={() => { if (catStatus === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id }); }}
+                                    disabled={catStatus !== AuditStatus.DONE}
+                                    className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${catStatus === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:text-white hover:bg-indigo-600' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
                                 >
                                     Termo
+                                </button>
+                                <button
+                                    onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, cat.id)}
+                                    disabled={catStatus === AuditStatus.DONE}
+                                    className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${catStatus === AuditStatus.DONE
+                                        ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                                        : catStatus === AuditStatus.IN_PROGRESS
+                                            ? 'bg-blue-600 text-white border-blue-500'
+                                            : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
+                                >
+                                    {startLabel}
                                 </button>
                                 <button onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className="px-6 py-4 rounded-xl bg-slate-50 text-slate-400 text-[10px] font-black uppercase hover:text-indigo-600 hover:bg-white transition-all border border-transparent hover:border-indigo-100 shadow-sm">Detalhar</button>
                                 <button
                                     onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, cat.id)}
-                                    disabled={!isMaster}
-                                    className={`px-10 py-4 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-md active:scale-95 ${!isMaster ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : cat.status === AuditStatus.DONE ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}
+                                    disabled={!canFinalize}
+                                    className={`px-10 py-4 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-md active:scale-95 ${!canFinalize ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : catStatus === AuditStatus.DONE ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}
                                 >
-                                    {!isMaster ? 'APENAS VISUALIZAÇÃO' : cat.status === AuditStatus.DONE ? 'CONCLUÍDO' : 'FINALIZAR'}
+                                    {!canFinalize ? 'INICIE A AUDITORIA' : catStatus === AuditStatus.DONE ? 'CONCLUÍDO' : 'FINALIZAR'}
                                 </button>
                             </div>
                         </div>
-                    ))}
+                    )})}
 
-                    {view.level === 'products' && selectedCat && (
+                    {view.level === 'products' && selectedCat && (() => {
+                        const catStatus = normalizeAuditStatus(selectedCat.status);
+                        const canFinalize = isMaster && catStatus !== AuditStatus.TODO;
+                        const startLabel = catStatus === AuditStatus.IN_PROGRESS ? 'PAUSAR' : 'INICIAR';
+                        return (
                         <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-slate-200">
                             <div className="bg-slate-900 p-10 text-white flex justify-between items-center relative">
                                 <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
@@ -1407,18 +2212,29 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         <p className="text-2xl font-black leading-none">{selectedCat.itemsCount} SKUs <span className="text-indigo-400 mx-2">|</span> {selectedCat.totalQuantity.toLocaleString()} Unid.</p>
                                     </div>
                                     <button
-                                        onClick={() => { if (selectedCat.status === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: selectedCat.id }); }}
-                                        disabled={selectedCat.status !== AuditStatus.DONE}
-                                        className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${selectedCat.status === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-600 hover:text-white' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
+                                        onClick={() => { if (catStatus === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: selectedCat.id }); }}
+                                        disabled={catStatus !== AuditStatus.DONE}
+                                        className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${catStatus === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-600 hover:text-white' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
                                     >
                                         Imprimir Termo
                                     </button>
                                     <button
-                                        onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
-                                        disabled={!isMaster}
-                                        className={`px-10 py-5 rounded-2xl font-black text-[12px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95 border-b-4 ${!isMaster ? 'bg-slate-300 border-slate-400 text-slate-500 cursor-not-allowed' : selectedCat.status === AuditStatus.DONE ? 'bg-emerald-600 border-emerald-800' : 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500'}`}
+                                        onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
+                                        disabled={catStatus === AuditStatus.DONE}
+                                        className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${catStatus === AuditStatus.DONE
+                                            ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
+                                            : catStatus === AuditStatus.IN_PROGRESS
+                                                ? 'bg-blue-600 text-white border-blue-500'
+                                                : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
                                     >
-                                        {!isMaster ? 'APENAS CONSULTA' : selectedCat.status === AuditStatus.DONE ? 'REABRIR CATEGORIA' : 'CONCLUIR AUDITORIA'}
+                                        {startLabel}
+                                    </button>
+                                    <button
+                                        onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
+                                        disabled={!canFinalize}
+                                        className={`px-10 py-5 rounded-2xl font-black text-[12px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95 border-b-4 ${!canFinalize ? 'bg-slate-300 border-slate-400 text-slate-500 cursor-not-allowed' : catStatus === AuditStatus.DONE ? 'bg-emerald-600 border-emerald-800' : 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500'}`}
+                                    >
+                                        {!canFinalize ? 'INICIE A AUDITORIA' : catStatus === AuditStatus.DONE ? 'REABRIR CATEGORIA' : 'CONCLUIR AUDITORIA'}
                                     </button>
                                 </div>
                             </div>
@@ -1445,7 +2261,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 </table>
                             </div>
                         </div>
-                    )}
+                    )})()}
                 </div>
             </main>
 
@@ -1461,7 +2277,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                             <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest flex items-center gap-2">
                                 <FileSignature className="w-4 h-4 text-indigo-500" />
-                                Termo de Auditoria - {termModal.type === 'group' ? 'Grupo' : termModal.type === 'department' ? 'Departamento' : 'Categoria'}
+                                Termo de Auditoria - {termModal.type === 'custom' ? 'Personalizado' : termModal.type === 'group' ? 'Grupo' : termModal.type === 'department' ? 'Departamento' : 'Categoria'}
                             </h3>
                             <button onClick={() => { setTermModal(null); setTermForm(null); }} className="text-slate-400 hover:text-red-500 transition-colors">
                                 <X className="w-5 h-5" />
@@ -1476,11 +2292,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     </div>
                                     <div>
                                         <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Grupo</p>
-                                        <p className="font-bold">{termScopeInfo.group.name}</p>
+                                        <p className="font-bold">
+                                            {termModal.type === 'custom'
+                                                ? `${(termScopeInfo as any).groupLabelText || termScopeInfo.group.name} (personalizado)`
+                                                : termScopeInfo.group.name}
+                                        </p>
                                     </div>
                                     <div>
                                         <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Nível</p>
-                                        <p className="font-bold capitalize">{termModal.type}</p>
+                                        <p className="font-bold capitalize">{termModal.type === 'custom' ? 'personalizado' : termModal.type}</p>
                                     </div>
                                 </div>
                                 <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
