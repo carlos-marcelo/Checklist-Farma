@@ -28,6 +28,7 @@ import {
     ArrowLeft,
     Boxes,
     Activity,
+    RefreshCw,
     X
 } from 'lucide-react';
 
@@ -182,110 +183,140 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [dbSessionId, setDbSessionId] = useState<string | undefined>(undefined);
     const [isUpdatingStock, setIsUpdatingStock] = useState(false);
 
-    // Fetch next audit number when branch changes
-    useEffect(() => {
-        let active = true;
-        const loadAuditNum = async () => {
-            if (!selectedFilial) return;
-            try {
-                const latest = await fetchLatestAudit(selectedFilial);
-                if (active) {
-                    if (latest && latest.status !== 'completed') {
-                        setNextAuditNumber(latest.audit_number);
-                        setDbSessionId(latest.id);
+    const loadAuditNum = useCallback(async (silent: boolean = false) => {
+        if (!selectedFilial) return;
+        try {
+            const latest = await fetchLatestAudit(selectedFilial);
 
-                        if (latest.data) {
-                            if ((latest.data as any).partialStart && !(latest.data as any).partialStarts) {
-                                (latest.data as any).partialStarts = [(latest.data as any).partialStart];
-                            }
-                            if (!(latest.data as any).partialCompleted) {
-                                (latest.data as any).partialCompleted = [];
-                            }
-                            if ((latest.data as any).partialCompleted) {
-                                const deduped = new Map<string, any>();
-                                (latest.data as any).partialCompleted.forEach((p: any) => {
-                                    deduped.set(partialCompletedKey(p), p);
-                                });
-                                (latest.data as any).partialCompleted = Array.from(deduped.values());
-                            }
+            // Se estiver em polling (silent) e já tivermos esse ID carregado, ignoramos alertas
+            if (silent && latest && dbSessionId === latest.id) {
+                return;
+            }
 
-                            if (!(latest.data as any).lastPartialBatchId) {
-                                (latest.data as any).lastPartialBatchId = getLatestBatchId((latest.data as any).partialCompleted);
-                            }
-                            // REPAIR LOGIC: If totalCost is missing (old sessions), recalculate it
-                            if (latest.data.groups) {
-                                latest.data.groups.forEach((g: any) => {
-                                    g.departments.forEach((d: any) => {
-                                        d.categories.forEach((c: any) => {
-                                            c.status = normalizeAuditStatus(c.status);
-                                            if (c.totalCost === undefined || c.totalCost === null || (c.totalCost === 0 && c.totalQuantity > 0)) {
-                                                let catCost = 0;
-                                                c.products.forEach((p: any) => {
-                                                    catCost += (p.quantity * (p.cost || 0));
-                                                });
-                                                c.totalCost = catCost;
-                                            }
+            if (latest && latest.status !== 'completed') {
+                setNextAuditNumber(latest.audit_number);
+                setDbSessionId(latest.id);
+
+                if (latest.data) {
+                    if ((latest.data as any).partialStart && !(latest.data as any).partialStarts) {
+                        (latest.data as any).partialStarts = [(latest.data as any).partialStart];
+                    }
+                    if (!(latest.data as any).partialCompleted) {
+                        (latest.data as any).partialCompleted = [];
+                    }
+                    if ((latest.data as any).partialCompleted) {
+                        const deduped = new Map<string, any>();
+                        (latest.data as any).partialCompleted.forEach((p: any) => {
+                            deduped.set(partialCompletedKey(p), p);
+                        });
+                        (latest.data as any).partialCompleted = Array.from(deduped.values());
+                    }
+
+                    if (!(latest.data as any).lastPartialBatchId) {
+                        (latest.data as any).lastPartialBatchId = getLatestBatchId((latest.data as any).partialCompleted);
+                    }
+                    // REPAIR LOGIC: If totalCost is missing (old sessions), recalculate it
+                    if (latest.data.groups) {
+                        latest.data.groups.forEach((g: any) => {
+                            g.departments.forEach((d: any) => {
+                                d.categories.forEach((c: any) => {
+                                    c.status = normalizeAuditStatus(c.status);
+                                    if (c.totalCost === undefined || c.totalCost === null || (c.totalCost === 0 && c.totalQuantity > 0)) {
+                                        let catCost = 0;
+                                        c.products.forEach((p: any) => {
+                                            catCost += (p.quantity * (p.cost || 0));
                                         });
-                                    });
+                                        c.totalCost = catCost;
+                                    }
                                 });
-                            }
-                            setData(latest.data);
-                            const draftsFromData = (latest.data as any).termDrafts || {};
-                            setTermDrafts(draftsFromData);
-                            setDbSessionId(latest.id);
+                            });
+                        });
+                    }
+                    setData(latest.data);
+                    const draftsFromData = (latest.data as any).termDrafts || {};
+                    setTermDrafts(draftsFromData);
+                    setDbSessionId(latest.id);
 
-                            if (isMaster) {
+                    if (!silent) {
+                        const isNewSession = dbSessionId !== latest.id;
+
+                        if (isMaster) {
+                            // Só pergunta se for uma nova sessão (ou se o usuário forçado o refresh manual)
+                            // Se for refresh manual (silent=false) mas a sessão for a mesma, talvez não queira perguntar sempre.
+                            // Mas se ele clicou no botão ATUALIZAR, talvez queira. 
+                            // Vamos manter o confirm apenas se o ID mudar ou se não tivermos dados ainda.
+                            if (isNewSession || !data) {
                                 const wantsToUpdate = window.confirm(`Auditoria Nº ${latest.audit_number} em aberto encontrada.\n\nDeseja carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
                                 if (wantsToUpdate) {
                                     setIsUpdatingStock(true);
                                 } else {
                                     setIsUpdatingStock(false);
                                 }
-                                setView({ level: 'groups' });
-                            } else {
-                                // Non-master: auto-enter and warn
-                                setIsUpdatingStock(false);
-                                setView({ level: 'groups' });
+                            }
+                            setView({ level: 'groups' });
+                        } else {
+                            // Non-master: auto-enter and warn ONLY if it is a new session for this user
+                            setIsUpdatingStock(false);
+                            setView({ level: 'groups' });
+
+                            if (isNewSession || !data) {
                                 const lastLoadStr = latest.updated_at ? new Date(latest.updated_at).toLocaleString('pt-BR') : 'não informada';
                                 alert(`ENTRANDO EM MODO CONSULTA.\n\nAviso: O estoque exibido reflete a última carga realizada pelo usuário Master em ${lastLoadStr} e pode estar desatualizado.`);
                             }
-
-                            let done = 0;
-                            if (latest.data.groups) {
-                                latest.data.groups.forEach((g: any) =>
-                                    g.departments.forEach((d: any) =>
-                                        d.categories.forEach((c: any) => {
-                                            if (isDoneStatus(c.status)) done += c.totalQuantity;
-                                        })
-                                    )
-                                );
-                            }
-                            setInitialDoneUnits(done);
                         }
-                    } else {
-                        // No open audit found
-                        if (!isMaster) {
-                            alert("Esta filial não está disponível para visualização pois não possui um inventário aberto no momento.");
-                            setSelectedFilial("");
-                            setData(null);
-                        } else {
-                            if (latest && latest.status === 'completed') {
-                                setNextAuditNumber(latest.audit_number + 1);
-                            } else {
-                                setNextAuditNumber(1);
-                            }
-                            setData(null);
-                            setView({ level: 'groups' });
-                        }
+                    } else if (!data) {
+                        // Se for polling mas não estávamos em uma auditoria, entra automaticamente
+                        setIsUpdatingStock(false);
+                        setView({ level: 'groups' });
                     }
+
+                    let done = 0;
+                    if (latest.data.groups) {
+                        latest.data.groups.forEach((g: any) =>
+                            g.departments.forEach((d: any) =>
+                                d.categories.forEach((c: any) => {
+                                    if (isDoneStatus(c.status)) done += c.totalQuantity;
+                                })
+                            )
+                        );
+                    }
+                    setInitialDoneUnits(done);
                 }
-            } catch (err) {
-                console.error("Error fetching audit number:", err);
+            } else {
+                setNextAuditNumber(latest ? latest.audit_number + 1 : 1);
+                setDbSessionId(undefined);
+                if (!silent) {
+                    setData(null);
+                } else if (data) {
+                    // Se estávamos em uma auditoria e ela sumiu/fechou
+                    alert("Esta auditoria foi concluída ou removida por outro usuário.");
+                    setData(null);
+                    setView({ level: 'groups' });
+                }
             }
-        };
-        loadAuditNum();
-        return () => { active = false; };
+        } catch (error) {
+            console.error('Error loading audit info:', error);
+        }
+    }, [selectedFilial, dbSessionId, isMaster, data]);
+
+    // Carga Inicial
+    useEffect(() => {
+        if (selectedFilial) {
+            loadAuditNum();
+        }
     }, [selectedFilial]);
+
+    // Polling (30s) - SEM a chamada de loadAuditNum() inicial
+    useEffect(() => {
+        if (!selectedFilial) return;
+
+        const interval = setInterval(() => {
+            console.log('🔄 [AuditFlow] Verificação automática...');
+            loadAuditNum(true); // Silent check
+        }, 30000);
+
+        return () => clearInterval(interval);
+    }, [selectedFilial, loadAuditNum]);
 
     // Derived inventory number (Auto-generated)
     const inventoryNumber = useMemo(() => {
@@ -1328,10 +1359,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const startScopeAudit = async (groupId?: string, deptId?: string, catId?: string) => {
         if (!data) return;
-        if (!isMaster) {
-            alert("Apenas usuário master pode iniciar contagens parciais.");
-            return;
-        }
         const scopeCatsGuard = getScopeCategories(groupId, deptId, catId).map(s => s.cat);
         const scopeAllDone = scopeCatsGuard.length > 0 && scopeCatsGuard.every(c => isDoneStatus(c.status));
         if (scopeAllDone) {
@@ -1932,6 +1959,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     </div>
                 </div>
                 <div className="flex gap-3">
+                    <button onClick={() => loadAuditNum()} className="bg-indigo-500/20 hover:bg-indigo-500/40 px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all border border-indigo-400/30">
+                        <RefreshCw className="w-4 h-4" /> ATUALIZAR
+                    </button>
                     <button onClick={handleExportPDF} className="bg-white/10 hover:bg-white/20 px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all border border-white/10">
                         <FileBox className="w-4 h-4" /> PDF ANALÍTICO
                     </button>
@@ -2150,13 +2180,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             </button>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); startScopeAudit(group.id); }}
-                                                disabled={!isMaster || isComplete}
+                                                disabled={isComplete}
                                                 className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all shadow-sm ${isComplete
                                                     ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                     : groupHasInProgress
                                                         ? 'bg-blue-600 text-white border-blue-500'
                                                         : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                                title={!isMaster ? 'Apenas usuário master pode iniciar parcial' : (isComplete ? 'Desmarque a conclusão para iniciar parcial' : (groupHasInProgress ? 'Desativar contagem parcial' : (groupHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial')))}
+                                                title={isComplete ? 'Desmarque a conclusão para iniciar parcial' : (groupHasInProgress ? 'Desativar contagem parcial' : (groupHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
                                             >
                                                 <Activity className="w-5 h-5" />
                                             </button>
@@ -2232,13 +2262,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             </button>
                                             <button
                                                 onClick={() => startScopeAudit(selectedGroup?.id, dept.id)}
-                                                disabled={!isMaster || deptAllDone}
+                                                disabled={deptAllDone}
                                                 className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${deptAllDone
                                                     ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                     : deptHasInProgress
                                                         ? 'bg-blue-600 text-white border-blue-500'
                                                         : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                                title={!isMaster ? 'Apenas usuário master pode iniciar parcial' : (deptAllDone ? 'Desmarque a conclusão para iniciar parcial' : (deptHasInProgress ? 'Desativar contagem parcial' : (deptHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial')))}
+                                                title={deptAllDone ? 'Desmarque a conclusão para iniciar parcial' : (deptHasInProgress ? 'Desativar contagem parcial' : (deptHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
                                             >
                                                 {deptHasInProgress ? 'PAUSAR' : 'INICIAR'}
                                             </button>
@@ -2309,13 +2339,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     </button>
                                     <button
                                         onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, cat.id)}
-                                        disabled={!isMaster || catStatus === AuditStatus.DONE}
-                                        className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${!isMaster || catStatus === AuditStatus.DONE
+                                        disabled={catStatus === AuditStatus.DONE}
+                                        className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${catStatus === AuditStatus.DONE
                                             ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                             : catStatus === AuditStatus.IN_PROGRESS
                                                 ? 'bg-blue-600 text-white border-blue-500'
                                                 : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                        title={!isMaster ? 'Apenas usuário master pode iniciar parcial' : undefined}
                                     >
                                         {startLabel}
                                     </button>
@@ -2367,13 +2396,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         </button>
                                         <button
                                             onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
-                                            disabled={!isMaster || catStatus === AuditStatus.DONE}
-                                            className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${!isMaster || catStatus === AuditStatus.DONE
+                                            disabled={catStatus === AuditStatus.DONE}
+                                            className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${catStatus === AuditStatus.DONE
                                                 ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                 : catStatus === AuditStatus.IN_PROGRESS
                                                     ? 'bg-blue-600 text-white border-blue-500'
                                                     : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                            title={!isMaster ? 'Apenas usuário master pode iniciar parcial' : undefined}
                                         >
                                             {startLabel}
                                         </button>
