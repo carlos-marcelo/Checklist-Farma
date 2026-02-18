@@ -620,6 +620,7 @@ export async function fetchStockConferenceReportsSummary(page: number = 0, pageS
     const { data, error } = await supabase
       .from('stock_conference_reports')
       .select('id, user_email, user_name, branch, area, created_at, pharmacist, manager, summary')
+      .order('created_at', { ascending: false })
       .range(from, to);
 
     if (error) throw error;
@@ -627,6 +628,33 @@ export async function fetchStockConferenceReportsSummary(page: number = 0, pageS
   } catch (error) {
     console.error('Error fetching stock conference reports summary:', error);
     return [];
+  }
+}
+
+export async function fetchStockConferenceReportsSummaryAll(pageSize: number = 200): Promise<Partial<DbStockConferenceReport>[]> {
+  const all: Partial<DbStockConferenceReport>[] = [];
+  try {
+    let page = 0;
+    while (true) {
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+
+      const { data, error } = await supabase
+        .from('stock_conference_reports')
+        .select('id, user_email, user_name, branch, area, created_at, pharmacist, manager, summary')
+        .order('created_at', { ascending: false })
+        .range(from, to);
+
+      if (error) throw error;
+      if (!data || data.length === 0) break;
+      all.push(...data);
+      if (data.length < pageSize) break;
+      page += 1;
+    }
+    return all;
+  } catch (error) {
+    console.error('Error fetching stock conference reports summary (all):', error);
+    return all;
   }
 }
 
@@ -654,6 +682,7 @@ export async function fetchStockConferenceReports(page: number = 0, pageSize: nu
     const { data, error } = await supabase
       .from('stock_conference_reports')
       .select('*')
+      .order('created_at', { ascending: false })
       .range(from, to);
 
     if (error) throw error;
@@ -977,6 +1006,7 @@ export async function fetchAuditsHistory(branch: string): Promise<DbAuditSession
       .from('audit_sessions')
       .select('*')
       .eq('branch', branch)
+      .order('updated_at', { ascending: false })
       .order('audit_number', { ascending: false });
 
     if (error) throw error;
