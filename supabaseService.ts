@@ -186,11 +186,31 @@ export interface DbPVBranchRecordEvent {
   branch: string;
   record_id?: string | null;
   reduced_code?: string | null;
-  event_type: 'UPDATED' | 'DELETED';
+  event_type: 'CREATED' | 'UPDATED' | 'DELETED';
   previous_quantity?: number | null;
   new_quantity?: number | null;
   user_email?: string | null;
   created_at?: string;
+}
+
+export interface DbAppEventLog {
+  id?: string;
+  company_id?: string | null;
+  branch?: string | null;
+  area?: string | null;
+  user_email?: string | null;
+  user_name?: string | null;
+  app: string;
+  event_type: string;
+  entity_type?: string | null;
+  entity_id?: string | null;
+  status?: string | null;
+  success?: boolean | null;
+  duration_ms?: number | null;
+  error_code?: string | null;
+  source?: string | null;
+  event_meta?: any;
+  created_at?: string | null;
 }
 
 export interface DbPVSessionData {
@@ -1502,6 +1522,89 @@ export async function insertPVBranchRecordEvent(event: DbPVBranchRecordEvent): P
   } catch (error) {
     console.error('Error inserting PV branch record event:', error);
     return null;
+  }
+}
+
+export async function pruneAppEventLogs(companyId?: string | null, branch?: string | null, days = 30): Promise<number> {
+  try {
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    let query = supabase
+      .from('app_event_logs')
+      .delete()
+      .lt('created_at', cutoff);
+    if (companyId) query = query.eq('company_id', companyId);
+    if (branch) query = query.eq('branch', branch);
+    const { data, error } = await query.select('id');
+    if (error) throw error;
+    return data?.length || 0;
+  } catch (error) {
+    console.error('Error pruning app event logs:', error);
+    return 0;
+  }
+}
+
+export async function insertAppEventLog(event: DbAppEventLog): Promise<DbAppEventLog | null> {
+  try {
+    const payload = {
+      company_id: event.company_id ?? null,
+      branch: event.branch ?? null,
+      area: event.area ?? null,
+      user_email: event.user_email ?? null,
+      user_name: event.user_name ?? null,
+      app: event.app,
+      event_type: event.event_type,
+      entity_type: event.entity_type ?? null,
+      entity_id: event.entity_id ?? null,
+      status: event.status ?? null,
+      success: event.success ?? null,
+      duration_ms: event.duration_ms ?? null,
+      error_code: event.error_code ?? null,
+      source: event.source ?? null,
+      event_meta: event.event_meta ?? null
+    };
+    const { data, error } = await supabase
+      .from('app_event_logs')
+      .insert(payload)
+      .select()
+      .single();
+    if (error) throw error;
+    pruneAppEventLogs(event.company_id, event.branch, 30).catch(() => { });
+    return data || null;
+  } catch (error) {
+    console.error('Error inserting app event log:', error);
+    return null;
+  }
+}
+
+export async function fetchAppEventLogs(params: {
+  companyId?: string | null;
+  branch?: string | null;
+  area?: string | null;
+  app?: string | null;
+  userEmail?: string | null;
+  sinceISO?: string | null;
+  limit?: number;
+}): Promise<DbAppEventLog[]> {
+  try {
+    let query = supabase
+      .from('app_event_logs')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (params.companyId) query = query.eq('company_id', params.companyId);
+    if (params.branch) query = query.eq('branch', params.branch);
+    if (params.area) query = query.eq('area', params.area);
+    if (params.app) query = query.eq('app', params.app);
+    if (params.userEmail) query = query.eq('user_email', params.userEmail);
+    if (params.sinceISO) query = query.gte('created_at', params.sinceISO);
+    if (params.limit) query = query.limit(params.limit);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching app event logs:', error);
+    return [];
   }
 }
 

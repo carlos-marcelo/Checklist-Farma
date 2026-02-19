@@ -753,6 +753,20 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     clearLocalStockSession(userEmail || '');
     if (userEmail) {
       void SupabaseService.deleteStockConferenceSession(userEmail);
+      SupabaseService.insertAppEventLog({
+        company_id: selectedCompanyId || null,
+        branch: branch || null,
+        area: selectedAreaName || null,
+        user_email: userEmail,
+        user_name: userName || null,
+        app: 'conferencia',
+        event_type: 'stock_conference_restarted',
+        entity_type: 'stock_session',
+        entity_id: branch || null,
+        status: 'success',
+        success: true,
+        source: 'web'
+      }).catch(() => { });
     }
 
     setStep('setup');
@@ -908,6 +922,26 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
           productOverride: pMap,
           recountOverride: new Set()
         });
+        if (userEmail) {
+          SupabaseService.insertAppEventLog({
+            company_id: selectedCompanyId || null,
+            branch: branch || null,
+            area: selectedAreaName || null,
+            user_email: userEmail,
+            user_name: userName || null,
+            app: 'conferencia',
+            event_type: 'stock_conference_started',
+            entity_type: 'stock_session',
+            entity_id: branch || null,
+            status: 'success',
+            success: true,
+            source: 'web',
+            event_meta: {
+              product_file: productFile?.name || null,
+              stock_file: stockFile?.name || null
+            }
+          }).catch(() => { });
+        }
       } catch (e: any) {
         console.error("Erro:", e);
         setErrorMsg(e.message || "Erro desconhecido.");
@@ -993,6 +1027,27 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
 
     // Auto-save after accumulation
     await persistSession({ inventoryOverride: updatedInventory, step: 'conference' });
+    if (userEmail) {
+      SupabaseService.insertAppEventLog({
+        company_id: selectedCompanyId || null,
+        branch: branch || null,
+        area: selectedAreaName || null,
+        user_email: userEmail,
+        user_name: userName || null,
+        app: 'conferencia',
+        event_type: 'stock_item_count_updated',
+        entity_type: 'stock_item',
+        entity_id: product.reducedCode,
+        status: 'success',
+        success: true,
+        source: 'web',
+        event_meta: {
+          reduced_code: product.reducedCode,
+          counted_qty: updatedItem.countedQty,
+          system_qty: updatedItem.systemQty
+        }
+      }).catch(() => { });
+    }
   };
 
   const handleQuantitySubmit = async (e: React.FormEvent) => {
@@ -1027,6 +1082,27 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
 
     // Auto-save after each item counted
     await persistSession({ inventoryOverride: updatedInventory, step: 'conference' });
+    if (userEmail) {
+      SupabaseService.insertAppEventLog({
+        company_id: selectedCompanyId || null,
+        branch: branch || null,
+        area: selectedAreaName || null,
+        user_email: userEmail,
+        user_name: userName || null,
+        app: 'conferencia',
+        event_type: 'stock_item_count_updated',
+        entity_type: 'stock_item',
+        entity_id: activeItem.reducedCode,
+        status: 'success',
+        success: true,
+        source: 'web',
+        event_meta: {
+          reduced_code: activeItem.reducedCode,
+          counted_qty: newItem.countedQty,
+          system_qty: newItem.systemQty
+        }
+      }).catch(() => { });
+    }
 
     setTimeout(() => inputRef.current?.focus(), 50);
   };
@@ -1171,6 +1247,23 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
           setLastSavedSummary(summary);
           if (onReportSaved) {
             await onReportSaved();
+          }
+          if (userEmail) {
+            SupabaseService.insertAppEventLog({
+              company_id: selectedCompanyId || null,
+              branch: branch || null,
+              area: selectedAreaName || null,
+              user_email: userEmail,
+              user_name: userName || null,
+              app: 'conferencia',
+              event_type: 'stock_conference_finished',
+              entity_type: 'stock_report',
+              entity_id: saved.id || null,
+              status: 'success',
+              success: true,
+              source: 'web',
+              event_meta: { total: summary.total, matched: summary.matched, divergent: summary.divergent }
+            }).catch(() => { });
           }
         }
       } catch (error) {
@@ -1891,6 +1984,22 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     const signaturesComplete = pharmSignature && managerSignature;
 
     const exportCSV = () => {
+      if (userEmail) {
+        SupabaseService.insertAppEventLog({
+          company_id: selectedCompanyId || null,
+          branch: branch || null,
+          area: selectedAreaName || null,
+          user_email: userEmail,
+          user_name: userName || null,
+          app: 'conferencia',
+          event_type: 'stock_conference_export_csv',
+          entity_type: 'stock_report',
+          entity_id: branch || null,
+          status: 'success',
+          success: true,
+          source: 'web'
+        }).catch(() => { });
+      }
       const headers = "Codigo Reduzido;Descricao;Estoque Sistema;Contagem;Diferenca;Status\n";
       const rows = allItems.map((item: StockItem) => {
         const prod = masterProducts.get(item.reducedCode);
@@ -1907,6 +2016,22 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     };
 
     const exportPDF = () => {
+      if (userEmail) {
+        SupabaseService.insertAppEventLog({
+          company_id: selectedCompanyId || null,
+          branch: branch || null,
+          area: selectedAreaName || null,
+          user_email: userEmail,
+          user_name: userName || null,
+          app: 'conferencia',
+          event_type: 'stock_conference_printed',
+          entity_type: 'stock_report',
+          entity_id: branch || null,
+          status: 'success',
+          success: true,
+          source: 'web'
+        }).catch(() => { });
+      }
       const jsPDF = (window as any).jspdf.jsPDF;
       if (!jsPDF) {
         alert("Erro: Biblioteca PDF não carregada.");

@@ -5,6 +5,7 @@ import {
     LayoutDashboard,
     LayoutGrid,
     History,
+    FileSearch,
     Package,
     ClipboardList,
     Settings,
@@ -48,6 +49,7 @@ export const Topbar: React.FC<TopbarProps> = ({
     handleViewChange,
     handleLogout
 }) => {
+    const isMaster = currentUser.role === 'MASTER';
     const navItems = [
         { label: 'Dashboard', view: 'dashboard', color: 'blue', icon: <LayoutDashboard size={18} /> },
         { label: 'Checklists', view: 'checklist', color: 'emerald', icon: <ClipboardList size={18} /> },
@@ -57,7 +59,11 @@ export const Topbar: React.FC<TopbarProps> = ({
         { label: 'Auditoria', view: 'audit', color: 'indigo', icon: <ClipboardList size={18} /> },
         { label: 'Histórico', view: 'history', color: 'purple', icon: <History size={18} /> },
         { label: 'Suporte', view: 'support', color: 'rose', icon: <MessageSquareQuote size={18} /> }
-    ];
+    ].filter(item => (item.view !== 'logs' || isMaster));
+
+    if (isMaster) {
+        navItems.splice(navItems.findIndex(item => item.view === 'support'), 0, { label: 'Métricas Gerenciais', view: 'logs', color: 'slate', icon: <FileSearch size={18} /> });
+    }
 
     const adminItems = [
         { label: 'Configurações', view: 'settings', color: 'slate', icon: <Settings size={18} /> },

@@ -3,6 +3,7 @@ import React, { useState, useMemo } from 'react';
 import { PVRecord, SalesRecord, PVSaleClassification, SalesUploadRecord, SessionInfo } from '../../preVencidos/types';
 import { buildAnalysisReportHtml, buildAnalysisReportPayload } from '../../preVencidos/analysisReport';
 import { FileSearch, Users, ShoppingCart, TrendingUp, AlertCircle, CheckCircle, FlaskConical, Repeat, Search, Package, Trophy, CheckSquare, XCircle, Save, MinusCircle, HelpCircle, Lock, Printer } from 'lucide-react';
+import { insertAppEventLog } from '../../supabaseService';
 
 const MONTH_NAMES_PT_BR = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
 
@@ -33,6 +34,8 @@ interface AnalysisViewProps {
   inventoryCostByBarcode?: Record<string, number>;
   inventoryStockByBarcode?: Record<string, number>;
   labByReduced?: Record<string, string>;
+  userEmail?: string;
+  userName?: string;
   onUpdatePVSale: (saleId: string, classification: PVSaleClassification) => void;
   onFinalizeSale: (reducedCode: string, period: string) => void;
 }
@@ -49,6 +52,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
   inventoryCostByBarcode = {},
   inventoryStockByBarcode = {},
   labByReduced = {},
+  userEmail,
+  userName,
   onUpdatePVSale,
   onFinalizeSale
 }) => {
@@ -230,6 +235,23 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     if (!reportPayload.items.length) {
       alert('Nenhum item para imprimir nesta análise.');
       return;
+    }
+    if (sessionInfo?.companyId && sessionInfo?.filial) {
+      insertAppEventLog({
+        company_id: sessionInfo.companyId,
+        branch: sessionInfo.filial,
+        area: sessionInfo.area || null,
+        user_email: userEmail || null,
+        user_name: userName || null,
+        app: 'pre_vencidos',
+        event_type: 'pv_analysis_printed',
+        entity_type: 'sales_analysis',
+        entity_id: currentSalesPeriod || null,
+        status: 'success',
+        success: true,
+        source: 'web',
+        event_meta: { period_label: currentSalesPeriod, total_items: reportPayload.items.length }
+      }).catch(() => { });
     }
     const printWindow = window.open('', '_blank', 'width=1200,height=800');
     if (!printWindow) {

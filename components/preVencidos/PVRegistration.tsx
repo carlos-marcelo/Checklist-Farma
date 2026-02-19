@@ -1,6 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Product, PVRecord, SessionInfo } from '../../preVencidos/types';
+import { insertAppEventLog } from '../../supabaseService';
 import ScannerInput from './ScannerInput';
 import { Trash2, Calendar, Hash, FileUp, CheckCircle2, User, Building, Search, FlaskConical, ChevronRight, Info, X } from 'lucide-react';
 
@@ -16,6 +17,8 @@ interface PVRegistrationProps {
   barcodeByReduced?: Record<string, string>;
   inventoryCostByBarcode?: Record<string, number>;
   originBranches?: string[];
+  userEmail?: string;
+  userName?: string;
   onUpdatePV?: (id: string, updates: Partial<PVRecord>) => void;
   onAddPV: (record: PVRecord) => void;
   onRemovePV: (id: string) => void;
@@ -30,6 +33,8 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   barcodeByReduced = {},
   inventoryCostByBarcode = {},
   originBranches = [],
+  userEmail,
+  userName,
   onUpdatePV,
   onAddPV,
   onRemovePV,
@@ -267,6 +272,23 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
 
   // PDF Export
   const handleExportPDF = () => {
+    if (sessionInfo?.companyId && sessionInfo?.filial) {
+      insertAppEventLog({
+        company_id: sessionInfo.companyId,
+        branch: sessionInfo.filial,
+        area: sessionInfo.area || null,
+        user_email: userEmail || null,
+        user_name: userName || null,
+        app: 'pre_vencidos',
+        event_type: 'pv_registration_printed',
+        entity_type: 'pv_report',
+        entity_id: sessionInfo.filial,
+        status: 'success',
+        success: true,
+        source: 'web',
+        event_meta: { total_records: pvRecords.length }
+      }).catch(() => { });
+    }
     const jsPDF = (window as any).jspdf?.jsPDF;
     if (!jsPDF) {
       alert('Biblioteca de PDF não carregada.');

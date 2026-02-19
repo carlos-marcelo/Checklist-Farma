@@ -11,7 +11,8 @@ import {
 } from './types';
 import {
     fetchLatestAudit,
-    upsertAuditSession
+    upsertAuditSession,
+    insertAppEventLog
 } from '../../supabaseService';
 import ProgressBar from './ProgressBar';
 import Breadcrumbs from './Breadcrumbs';
@@ -179,6 +180,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
     const [selectedFilial, setSelectedFilial] = useState("");
+    const selectedCompany = useMemo(() => companies.find(c => c.name === selectedEmpresa), [companies, selectedEmpresa]);
     const [nextAuditNumber, setNextAuditNumber] = useState(1);
     const [dbSessionId, setDbSessionId] = useState<string | undefined>(undefined);
     const [isUpdatingStock, setIsUpdatingStock] = useState(false);
@@ -1211,6 +1213,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const safeName = scopeInfo.group.name.replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 30);
         const termTypeFile = termModal.type === 'custom' ? 'personalizado' : termModal.type;
         const fileName = `Termo_Auditoria_F${data.filial}_${termTypeFile}_${safeName}.pdf`;
+        insertAppEventLog({
+            company_id: selectedCompany?.id || null,
+            branch: selectedFilial || null,
+            area: null,
+            user_email: userEmail,
+            user_name: userName || null,
+            app: 'auditoria',
+            event_type: 'audit_term_printed',
+            entity_type: 'audit_term',
+            entity_id: fileName,
+            status: 'success',
+            success: true,
+            source: 'web',
+            event_meta: { type: termModal.type, group: scopeInfo.group.name }
+        }).catch(() => { });
         doc.save(fileName);
     };
     const calculateProgress = useCallback((auditData: AuditData) => {
@@ -1269,6 +1286,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 filial: selectedFilial,
                 inventoryNumber
             }));
+            insertAppEventLog({
+                company_id: selectedCompany?.id || null,
+                branch: selectedFilial || null,
+                area: null,
+                user_email: userEmail,
+                user_name: userName || null,
+                app: 'auditoria',
+                event_type: 'audit_partial_pause',
+                entity_type: 'partial_scope',
+                entity_id: selectedFilial || null,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: { reason: reason || 'manual', discarded_completed: discardCompleted }
+            }).catch(() => { });
 
             if (reason === 'expired') {
                 alert("Contagem parcial expirada. Inicie novamente para continuar.");
@@ -1343,6 +1375,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 filial: selectedFilial,
                 inventoryNumber
             }));
+            insertAppEventLog({
+                company_id: selectedCompany?.id || null,
+                branch: selectedFilial || null,
+                area: null,
+                user_email: userEmail,
+                user_name: userName || null,
+                app: 'auditoria',
+                event_type: 'audit_partial_finalize',
+                entity_type: 'partial_batch',
+                entity_id: batchId,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: { total_scopes: toComplete.length }
+            }).catch(() => { });
             alert("Contagens parciais concluídas.");
 
         } catch (err) {
@@ -1418,6 +1465,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 progress: progress,
                 user_email: userEmail
             });
+            insertAppEventLog({
+                company_id: selectedCompany?.id || null,
+                branch: selectedFilial || null,
+                area: null,
+                user_email: userEmail,
+                user_name: userName || null,
+                app: 'auditoria',
+                event_type: allSelected ? 'audit_partial_pause' : 'audit_partial_start',
+                entity_type: 'partial_scope',
+                entity_id: `${groupId || ''}:${deptId || ''}:${catId || ''}`,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: { groupId, deptId, catId }
+            }).catch(() => { });
             alert(allSelected ? "Contagem parcial desativada." : "Auditoria iniciada. Contagem parcial registrada.");
         } catch (err) {
             console.error("Error persisting start:", err);
@@ -1539,6 +1601,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 filial: selectedFilial,
                 inventoryNumber
             }));
+            insertAppEventLog({
+                company_id: selectedCompany?.id || null,
+                branch: selectedFilial || null,
+                area: null,
+                user_email: userEmail,
+                user_name: userName || null,
+                app: 'auditoria',
+                event_type: allDone ? 'audit_partial_pause' : 'audit_partial_finalize',
+                entity_type: 'partial_scope',
+                entity_id: `${groupId || ''}:${deptId || ''}:${catId || ''}`,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: { groupId, deptId, catId, action: allDone ? 'unmark' : 'finalize' }
+            }).catch(() => { });
             alert(allDone
                 ? "Contagem concluída removida e zerada no Supabase."
                 : "Estoque gravado no Supabase com sucesso!");
@@ -1623,7 +1700,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             });
         }
 
-        doc.save(`Auditoria_F${data.filial}_Analitica.pdf`);
+        const fileName = `Auditoria_F${data.filial}_Analitica.pdf`;
+        insertAppEventLog({
+            company_id: selectedCompany?.id || null,
+            branch: selectedFilial || null,
+            area: null,
+            user_email: userEmail,
+            user_name: userName || null,
+            app: 'auditoria',
+            event_type: 'audit_report_printed',
+            entity_type: 'audit_report',
+            entity_id: fileName,
+            status: 'success',
+            success: true,
+            source: 'web'
+        }).catch(() => { });
+        doc.save(fileName);
     };
 
     const selectedGroup = useMemo(() => data?.groups.find(g => g.id === view.selectedGroupId), [data, view.selectedGroupId]);

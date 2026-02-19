@@ -34,6 +34,116 @@ const createInitialAccessMatrix = () => mergeAccessMatrixWithDefaults({});
 const sanitizeStockBranch = (branch?: string) => branch?.trim() || 'Filial não informada';
 const sanitizeStockArea = (area?: string) => area?.trim() || 'Área não informada';
 
+const EVENT_TYPE_LABELS: Record<string, string> = {
+    app_view_enter: 'Entrada no app',
+    app_view_exit: 'Saída do app',
+    checklist_started: 'Checklist iniciado',
+    checklist_report_saved: 'Checklist salvo',
+    checklist_printed: 'Checklist impresso',
+    checklist_image_added: 'Imagem adicionada ao checklist',
+    pv_created: 'PV criado',
+    pv_updated: 'PV atualizado',
+    pv_deleted: 'PV excluído',
+    pv_sales_upload_success: 'Upload de vendas (sucesso)',
+    pv_sales_upload_error: 'Upload de vendas (erro)',
+    pv_inventory_upload_success: 'Upload de estoque (sucesso)',
+    pv_inventory_upload_error: 'Upload de estoque (erro)',
+    pv_analysis_printed: 'Impressão análise de vendas',
+    pv_dashboard_finalized: 'Dashboard PV finalizado',
+    pv_dashboard_cleared: 'Dashboard PV limpo',
+    pv_dashboard_preview: 'Simulação ranking PV',
+    pv_dashboard_printed: 'Impressão ranking PV',
+    pv_dashboard_downloaded: 'Download ranking PV',
+    pv_registration_printed: 'Cadastro PV impresso',
+    stock_conference_started: 'Conferência iniciada',
+    stock_conference_restarted: 'Conferência reiniciada',
+    stock_conference_finished: 'Conferência finalizada',
+    stock_conference_printed: 'Conferência impressa',
+    stock_conference_export_csv: 'Conferência exportada (CSV)',
+    stock_item_count_updated: 'Item conferência atualizado',
+    audit_partial_start: 'Auditoria parcial iniciada',
+    audit_partial_pause: 'Auditoria parcial pausada',
+    audit_partial_finalize: 'Auditoria parcial concluída',
+    audit_term_printed: 'Termo de auditoria impresso',
+    audit_report_printed: 'Relatório analítico impresso',
+    ticket_created: 'Ticket criado',
+    user_created: 'Usuário criado',
+    user_updated: 'Usuário atualizado',
+    user_approved: 'Usuário aprovado',
+    user_blocked: 'Usuário bloqueado',
+    company_updated: 'Empresa atualizada',
+    company_created: 'Empresa criada',
+    login: 'Login',
+    login_auto: 'Login automático (recarregamento)',
+    logout: 'Logout'
+};
+
+const EVENT_TYPE_GROUPS: Record<string, string> = {
+    app_view_enter: 'Sistema',
+    app_view_exit: 'Sistema',
+    login: 'Sistema',
+    login_auto: 'Sistema',
+    logout: 'Sistema',
+    checklist_started: 'Checklists',
+    checklist_report_saved: 'Checklists',
+    checklist_printed: 'Checklists',
+    checklist_image_added: 'Checklists',
+    pv_created: 'Pré‑Vencidos',
+    pv_updated: 'Pré‑Vencidos',
+    pv_deleted: 'Pré‑Vencidos',
+    pv_sales_upload_success: 'Pré‑Vencidos',
+    pv_sales_upload_error: 'Pré‑Vencidos',
+    pv_inventory_upload_success: 'Pré‑Vencidos',
+    pv_inventory_upload_error: 'Pré‑Vencidos',
+    pv_analysis_printed: 'Pré‑Vencidos',
+    pv_dashboard_finalized: 'Pré‑Vencidos',
+    pv_dashboard_cleared: 'Pré‑Vencidos',
+    pv_dashboard_preview: 'Pré‑Vencidos',
+    pv_dashboard_printed: 'Pré‑Vencidos',
+    pv_dashboard_downloaded: 'Pré‑Vencidos',
+    pv_registration_printed: 'Pré‑Vencidos',
+    stock_conference_started: 'Conferência',
+    stock_conference_restarted: 'Conferência',
+    stock_conference_finished: 'Conferência',
+    stock_conference_printed: 'Conferência',
+    stock_conference_export_csv: 'Conferência',
+    stock_item_count_updated: 'Conferência',
+    audit_partial_start: 'Auditoria',
+    audit_partial_pause: 'Auditoria',
+    audit_partial_finalize: 'Auditoria',
+    audit_term_printed: 'Auditoria',
+    audit_report_printed: 'Auditoria',
+    ticket_created: 'Suporte',
+    user_created: 'Configurações',
+    user_updated: 'Configurações',
+    user_approved: 'Configurações',
+    user_blocked: 'Configurações',
+    company_updated: 'Configurações',
+    company_created: 'Configurações'
+};
+
+const formatEventTypeLabel = (type?: string | null) => {
+    const key = String(type || '').trim();
+    const label = EVENT_TYPE_LABELS[key] || key || '-';
+    const group = EVENT_TYPE_GROUPS[key];
+    return group ? `${group}: ${label}` : label;
+};
+
+const extractEventLocation = (log: SupabaseService.DbAppEventLog) => {
+    const meta = (() => {
+        if (!log.event_meta) return {};
+        if (typeof log.event_meta === 'string') {
+            try {
+                return JSON.parse(log.event_meta);
+            } catch {
+                return {};
+            }
+        }
+        return log.event_meta as Record<string, any>;
+    })();
+    return meta.url || meta.location || meta.source || log.source || '-';
+};
+
 const canonicalizeFilterLabel = (value: string) => {
     const normalized = value.normalize('NFKC').replace(/\s+/g, ' ').trim();
     return normalized.replace(/\d+/g, digits => {
@@ -287,6 +397,23 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
     }, [onClose]);
 
     const exportCSV = () => {
+        if (currentUser?.email) {
+            SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: currentUser.filial || null,
+                area: currentUser.area || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: 'conferencia',
+                event_type: 'stock_conference_export_csv',
+                entity_type: 'stock_report',
+                entity_id: report?.id || null,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: { report_id: report?.id || null }
+            }).catch(() => { });
+        }
         const headers = 'Codigo Reduzido;Descricao;Estoque Sistema;Contagem;Diferenca;Status\n';
         const rows = sortedItems.map(item => {
             const diff = (item.counted_qty ?? 0) - (item.system_qty ?? 0);
@@ -306,6 +433,23 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
     };
 
     const exportPDF = () => {
+        if (currentUser?.email) {
+            SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: currentUser.filial || null,
+                area: currentUser.area || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: 'conferencia',
+                event_type: 'stock_conference_printed',
+                entity_type: 'stock_report',
+                entity_id: report?.id || null,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: { report_id: report?.id || null }
+            }).catch(() => { });
+        }
         const jsPDF = (window as any).jspdf?.jsPDF;
         if (!jsPDF) {
             alert('Biblioteca de PDF não carregada.');
@@ -1102,7 +1246,7 @@ const App: React.FC = () => {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [showErrors, setShowErrors] = useState(false);
 
-    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit'>(() => {
+    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit' | 'logs'>(() => {
         const saved = localStorage.getItem('APP_CURRENT_VIEW');
         return (saved as any) || 'checklist';
     });
@@ -1131,6 +1275,17 @@ const App: React.FC = () => {
     const [viewingStockConferenceReport, setViewingStockConferenceReport] = useState<EnhancedStockConferenceReport | null>(null);
     const [stockBranchFilters, setStockBranchFilters] = useState<string[]>([]);
     const [stockAreaFilter, setStockAreaFilter] = useState<string>('all');
+
+    // Logs & Eventos
+    const [appEventLogs, setAppEventLogs] = useState<SupabaseService.DbAppEventLog[]>([]);
+    const [isLoadingLogs, setIsLoadingLogs] = useState(false);
+    const [logsBranchFilter, setLogsBranchFilter] = useState<string>('all');
+    const [logsAreaFilter, setLogsAreaFilter] = useState<string>('all');
+    const [logsAppFilter, setLogsAppFilter] = useState<string>('all');
+    const [logsUserFilter, setLogsUserFilter] = useState<string>('all');
+    const [logsEventFilter, setLogsEventFilter] = useState<string>('all');
+    const [logsGroupRepeats, setLogsGroupRepeats] = useState(true);
+    const [logsDateRange, setLogsDateRange] = useState<'7d' | '30d' | 'all'>('30d');
 
     // Master User Management State
     const [newUserName, setNewUserName] = useState('');
@@ -1164,6 +1319,9 @@ const App: React.FC = () => {
     // User Activity
     const [lastUserActivity, setLastUserActivity] = useState<number>(Date.now());
     const ACTIVITY_TIMEOUT = 5000;
+    const viewStartRef = useRef<{ view: string; startedAt: number } | null>(null);
+    const autoLoginLoggedRef = useRef(false);
+    const lastChecklistLogRef = useRef<string | null>(null);
 
     // Company Editing
     const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
@@ -1471,6 +1629,26 @@ const App: React.FC = () => {
         }
     }, [checklists, activeChecklistId]);
 
+    useEffect(() => {
+        if (!currentUser || !activeChecklistId) return;
+        if (lastChecklistLogRef.current === activeChecklistId) return;
+        lastChecklistLogRef.current = activeChecklistId;
+        SupabaseService.insertAppEventLog({
+            company_id: currentUser.company_id || null,
+            branch: currentUser.filial || null,
+            area: currentUser.area || null,
+            user_email: currentUser.email,
+            user_name: currentUser.name,
+            app: 'checklists',
+            event_type: 'checklist_started',
+            entity_type: 'checklist',
+            entity_id: activeChecklistId,
+            status: 'success',
+            success: true,
+            source: 'web'
+        }).catch(() => { });
+    }, [activeChecklistId, currentUser]);
+
     // Save Users to LocalStorage
     useEffect(() => {
         if (!isLoadingData && users.length > 0) {
@@ -1519,7 +1697,28 @@ const App: React.FC = () => {
         const savedEmail = localStorage.getItem('APP_CURRENT_EMAIL');
         if (savedEmail && !currentUser) {
             const u = users.find(u => u.email === savedEmail);
-            if (u) setCurrentUser(u);
+            if (u) {
+                setCurrentUser(u);
+                if (!autoLoginLoggedRef.current) {
+                    autoLoginLoggedRef.current = true;
+                    SupabaseService.insertAppEventLog({
+                        company_id: u.company_id || null,
+                        branch: u.filial || null,
+                        area: u.area || null,
+                        user_email: u.email,
+                        user_name: u.name,
+                        app: 'sistema',
+                        event_type: 'login_auto',
+                        status: 'success',
+                        success: true,
+                        source: window.location.pathname || 'web',
+                        event_meta: {
+                            url: window.location.href,
+                            view: localStorage.getItem('APP_CURRENT_VIEW') || 'checklist'
+                        }
+                    }).catch(() => { });
+                }
+            }
         }
     }, [users]);
 
@@ -1747,8 +1946,39 @@ const App: React.FC = () => {
         // Persist session so F5 doesn't log the user out
         localStorage.setItem('APP_CURRENT_EMAIL', user.email);
         setCurrentUser(user);
+        SupabaseService.insertAppEventLog({
+            company_id: user.company_id || null,
+            branch: user.filial || null,
+            area: user.area || null,
+            user_email: user.email,
+            user_name: user.name,
+            app: 'sistema',
+            event_type: 'login',
+            status: 'success',
+            success: true,
+            source: window.location.pathname || 'web',
+            event_meta: {
+                url: window.location.href,
+                view: localStorage.getItem('APP_CURRENT_VIEW') || 'checklist'
+            }
+        }).catch(() => { });
     };
     const handleLogout = () => {
+        if (currentUser?.email) {
+            SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: currentUser.filial || null,
+                area: currentUser.area || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: 'sistema',
+                event_type: 'logout',
+                status: 'success',
+                success: true,
+                source: window.location.pathname || 'web',
+                event_meta: { view: currentView }
+            }).catch(() => { });
+        }
         if (currentUser?.email) {
             clearLocalPVSession(currentUser.email);
             clearLocalPVReports(currentUser.email).catch(() => { });
@@ -1772,6 +2002,23 @@ const App: React.FC = () => {
         try {
             const created = await SupabaseService.createUser(newUser);
             setUsers(prev => [...prev, created]);
+            if (currentUser?.email) {
+                SupabaseService.insertAppEventLog({
+                    company_id: currentUser.company_id || null,
+                    branch: currentUser.filial || null,
+                    area: currentUser.area || null,
+                    user_email: currentUser.email,
+                    user_name: currentUser.name,
+                    app: 'configuracoes',
+                    event_type: 'user_created',
+                    entity_type: 'user',
+                    entity_id: created?.email || newUser.email,
+                    status: 'success',
+                    success: true,
+                    source: 'web',
+                    event_meta: { created_user: created?.email || newUser.email, role: created?.role || newUser.role }
+                }).catch(() => { });
+            }
         } catch (error) {
             const message = error instanceof Error ? error.message : JSON.stringify(error);
             console.error('Erro ao registrar usuário:', error);
@@ -1785,6 +2032,23 @@ const App: React.FC = () => {
         await SupabaseService.updateUser(email, { approved, rejected: false });
         // Update local state
         setUsers(prev => prev.map(u => u.email === email ? { ...u, approved, rejected: false } : u));
+        if (currentUser?.email) {
+            SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: currentUser.filial || null,
+                area: currentUser.area || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: 'configuracoes',
+                event_type: approved ? 'user_approved' : 'user_updated',
+                entity_type: 'user',
+                entity_id: email,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: { target_user: email, approved }
+            }).catch(() => { });
+        }
     };
 
     const handleRejectUser = async (email: string, skipConfirm = true) => {
@@ -1792,6 +2056,23 @@ const App: React.FC = () => {
         await SupabaseService.updateUser(email, { approved: false, rejected: true });
         // Update local state
         setUsers(prev => prev.map(u => u.email === email ? { ...u, approved: false, rejected: true } : u));
+        if (currentUser?.email) {
+            SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: currentUser.filial || null,
+                area: currentUser.area || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: 'configuracoes',
+                event_type: 'user_blocked',
+                entity_type: 'user',
+                entity_id: email,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: { target_user: email }
+            }).catch(() => { });
+        }
     };
 
     const handleUpdateUserProfile = async (field: keyof User, value: string | null) => {
@@ -1810,6 +2091,23 @@ const App: React.FC = () => {
             setUsers(prevUsers => prevUsers.map(u => u.email === currentUser.email ? { ...u, [field]: value } : u));
             // Update in Supabase
             await SupabaseService.updateUser(currentUser.email, { [field]: value } as any);
+            if (currentUser?.email && ['company_id', 'area', 'filial', 'role'].includes(field)) {
+                SupabaseService.insertAppEventLog({
+                    company_id: currentUser.company_id || null,
+                    branch: currentUser.filial || null,
+                    area: currentUser.area || null,
+                    user_email: currentUser.email,
+                    user_name: currentUser.name,
+                    app: 'configuracoes',
+                    event_type: 'user_updated',
+                    entity_type: 'user',
+                    entity_id: currentUser.email,
+                    status: 'success',
+                    success: true,
+                    source: 'web',
+                    event_meta: { field, value }
+                }).catch(() => { });
+            }
         }
     };
 
@@ -1830,6 +2128,21 @@ const App: React.FC = () => {
                 // Update in Supabase
                 if (currentUser) {
                     await SupabaseService.updateUser(currentUser.email, { photo });
+                    SupabaseService.insertAppEventLog({
+                        company_id: currentUser.company_id || null,
+                        branch: currentUser.filial || null,
+                        area: currentUser.area || null,
+                        user_email: currentUser.email,
+                        user_name: currentUser.name,
+                        app: 'configuracoes',
+                        event_type: 'user_updated',
+                        entity_type: 'user',
+                        entity_id: currentUser.email,
+                        status: 'success',
+                        success: true,
+                        source: 'web',
+                        event_meta: { field: 'photo' }
+                    }).catch(() => { });
                 }
             };
             reader.readAsDataURL(e.target.files[0]);
@@ -1846,6 +2159,21 @@ const App: React.FC = () => {
 
         // Save to Supabase (map camelCase to snake_case)
         await SupabaseService.updateUser(currentUser.email, { preferred_theme: theme } as any);
+        SupabaseService.insertAppEventLog({
+            company_id: currentUser.company_id || null,
+            branch: currentUser.filial || null,
+            area: currentUser.area || null,
+            user_email: currentUser.email,
+            user_name: currentUser.name,
+            app: 'configuracoes',
+            event_type: 'user_updated',
+            entity_type: 'user',
+            entity_id: currentUser.email,
+            status: 'success',
+            success: true,
+            source: 'web',
+            event_meta: { field: 'preferred_theme', value: theme }
+        }).catch(() => { });
     }; const handleSaveProfileAndSecurity = async () => {
         if (!currentUser) return;
 
@@ -2296,6 +2624,23 @@ const App: React.FC = () => {
 
                                     return newImages;
                                 });
+                                if (currentUser?.email) {
+                                    SupabaseService.insertAppEventLog({
+                                        company_id: currentUser.company_id || null,
+                                        branch: currentUser.filial || null,
+                                        area: currentUser.area || null,
+                                        user_email: currentUser.email,
+                                        user_name: currentUser.name,
+                                        app: 'checklists',
+                                        event_type: 'checklist_image_added',
+                                        entity_type: 'checklist_section',
+                                        entity_id: `${activeChecklistId || 'unknown'}:${sectionId}`,
+                                        status: 'success',
+                                        success: true,
+                                        source: 'web',
+                                        event_meta: { checklist_id: activeChecklistId, section_id: sectionId }
+                                    }).catch(() => { });
+                                }
 
                                 e.target.value = '';
 
@@ -2605,6 +2950,24 @@ const App: React.FC = () => {
             }
 
             console.log('✅ Relatório salvo:', dbReport.id);
+            SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: currentUser.filial || null,
+                area: currentUser.area || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: 'checklists',
+                event_type: 'checklist_report_saved',
+                entity_type: 'report',
+                entity_id: dbReport.id,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: {
+                    score,
+                    ignored_checklists: Array.from(ignoredChecklists)
+                }
+            }).catch(() => { });
 
             const newReport: ReportHistoryItem = {
                 id: dbReport.id,
@@ -2698,6 +3061,26 @@ const App: React.FC = () => {
     };
 
     const handleDownloadPDF = () => {
+        if (currentUser?.email) {
+            SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: currentUser.filial || null,
+                area: currentUser.area || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: 'checklists',
+                event_type: 'checklist_printed',
+                entity_type: 'report',
+                entity_id: viewHistoryItem?.id || null,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: {
+                    report_id: viewHistoryItem?.id || null,
+                    location: window.location.href
+                }
+            }).catch(() => { });
+        }
         // 1. Get current title
         const originalTitle = document.title;
 
@@ -2939,6 +3322,10 @@ const App: React.FC = () => {
     };
 
     const handleViewChange = (view: typeof currentView) => {
+        if (view === 'logs' && currentUser?.role !== 'MASTER') {
+            alert('Apenas usuários master podem acessar Métricas Gerenciais.');
+            return;
+        }
         if (view === 'checklist') {
             handleCloseReport(); // Clear history view if going back to draft
             setShowErrors(false);
@@ -2978,6 +3365,337 @@ const App: React.FC = () => {
     };
 
     const handleResetStockBranchFilters = () => setStockBranchFilters([]);
+
+    // --- LOGS & EVENTOS ---
+    const mapViewToAppName = (view: typeof currentView) => {
+        const map: Record<typeof currentView, string> = {
+            checklist: 'checklists',
+            summary: 'visao_geral',
+            dashboard: 'dashboard',
+            report: 'relatorio',
+            settings: 'configuracoes',
+            history: 'historico',
+            view_history: 'historico',
+            support: 'suporte',
+            stock: 'conferencia',
+            access: 'acessos',
+            pre: 'pre_vencidos',
+            audit: 'auditoria',
+            logs: 'metricas_gerenciais'
+        };
+        return map[view] || view;
+    };
+
+    useEffect(() => {
+        if (!currentUser) return;
+        const now = Date.now();
+        const currentApp = mapViewToAppName(currentView);
+
+        if (!viewStartRef.current) {
+            viewStartRef.current = { view: currentView, startedAt: now };
+            SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: currentUser.filial || null,
+                area: currentUser.area || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: currentApp,
+                event_type: 'app_view_enter',
+                entity_type: 'view',
+                entity_id: currentView,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: { view: currentView }
+            }).catch(() => { });
+            return;
+        }
+
+        const prev = viewStartRef.current;
+        if (prev.view === currentView) return;
+        const prevApp = mapViewToAppName(prev.view as typeof currentView);
+        const durationMs = Math.max(0, now - prev.startedAt);
+
+        SupabaseService.insertAppEventLog({
+            company_id: currentUser.company_id || null,
+            branch: currentUser.filial || null,
+            area: currentUser.area || null,
+            user_email: currentUser.email,
+            user_name: currentUser.name,
+            app: prevApp,
+            event_type: 'app_view_exit',
+            entity_type: 'view',
+            entity_id: prev.view,
+            status: 'success',
+            success: true,
+            duration_ms: durationMs,
+            source: 'web',
+            event_meta: { from: prev.view, to: currentView }
+        }).catch(() => { });
+
+        SupabaseService.insertAppEventLog({
+            company_id: currentUser.company_id || null,
+            branch: currentUser.filial || null,
+            area: currentUser.area || null,
+            user_email: currentUser.email,
+            user_name: currentUser.name,
+            app: currentApp,
+            event_type: 'app_view_enter',
+            entity_type: 'view',
+            entity_id: currentView,
+            status: 'success',
+            success: true,
+            source: 'web',
+            event_meta: { view: currentView }
+        }).catch(() => { });
+
+        viewStartRef.current = { view: currentView, startedAt: now };
+    }, [currentView, currentUser]);
+
+    useEffect(() => {
+        if (currentView !== 'logs') return;
+        if (!currentUser?.company_id) return;
+
+        const sinceDate = logsDateRange === '7d'
+            ? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+            : logsDateRange === '30d'
+                ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)
+                : null;
+
+        const effectiveBranch = currentUser.role === 'MASTER' ? null : (currentUser.filial || null);
+
+        setIsLoadingLogs(true);
+        SupabaseService.fetchAppEventLogs({
+            companyId: currentUser.company_id,
+            branch: effectiveBranch,
+            sinceISO: sinceDate ? sinceDate.toISOString() : null,
+            limit: 2000
+        })
+            .then(logs => {
+                setAppEventLogs(logs || []);
+                if (currentUser.role !== 'MASTER' && currentUser.filial) {
+                    setLogsBranchFilter(currentUser.filial);
+                }
+            })
+            .finally(() => setIsLoadingLogs(false));
+    }, [currentView, currentUser?.company_id, currentUser?.filial, currentUser?.role, logsDateRange]);
+
+    const filteredEventLogs = useMemo(() => {
+        let filtered = [...appEventLogs];
+        if (logsBranchFilter !== 'all') {
+            filtered = filtered.filter(l => (l.branch || '-') === logsBranchFilter);
+        }
+        if (logsAreaFilter !== 'all') {
+            filtered = filtered.filter(l => (l.area || '-') === logsAreaFilter);
+        }
+        if (logsAppFilter !== 'all') {
+            filtered = filtered.filter(l => (l.app || '-') === logsAppFilter);
+        }
+        if (logsUserFilter !== 'all') {
+            filtered = filtered.filter(l => (l.user_email || '-') === logsUserFilter);
+        }
+        if (logsEventFilter !== 'all') {
+            filtered = filtered.filter(l => (l.event_type || '-') === logsEventFilter);
+        }
+        return filtered;
+    }, [appEventLogs, logsBranchFilter, logsAreaFilter, logsAppFilter, logsUserFilter, logsEventFilter]);
+
+    const displayEventLogs = useMemo(() => {
+        if (!logsGroupRepeats) {
+            return filteredEventLogs.map(l => ({ ...l, count: 1 }));
+        }
+        const collapseEntityFor = new Set(['stock_item_count_updated']);
+        const grouped = new Map<string, SupabaseService.DbAppEventLog & { count: number; first_at?: string }>();
+        filteredEventLogs.forEach(log => {
+            const collapseEntity = log.event_type && collapseEntityFor.has(log.event_type);
+            const entityId = collapseEntity ? null : (log.entity_id || null);
+            const key = [
+                log.app || '-',
+                log.event_type || '-',
+                log.branch || '-',
+                log.user_email || '-',
+                log.area || '-',
+                log.entity_type || '-',
+                entityId || '-',
+                log.success === false ? 'error' : 'ok'
+            ].join('|');
+            const existing = grouped.get(key);
+            const ts = log.created_at ? new Date(log.created_at).getTime() : 0;
+            if (!existing) {
+                grouped.set(key, { ...log, count: 1, first_at: log.created_at || null });
+                return;
+            }
+            existing.count += 1;
+            const existingTs = existing.created_at ? new Date(existing.created_at).getTime() : 0;
+            if (ts > existingTs) {
+                existing.created_at = log.created_at;
+            }
+        });
+        return Array.from(grouped.values()).sort((a, b) => {
+            const aTs = a.created_at ? new Date(a.created_at).getTime() : 0;
+            const bTs = b.created_at ? new Date(b.created_at).getTime() : 0;
+            return bTs - aTs;
+        });
+    }, [filteredEventLogs, logsGroupRepeats]);
+
+    const logsBranches = useMemo(() => {
+        const map = new Map<string, { branch: string; count: number; lastAt: number; users: Set<string> }>();
+        filteredEventLogs.forEach(l => {
+            const key = l.branch || 'Sem Filial';
+            const ts = l.created_at ? new Date(l.created_at).getTime() : 0;
+            const current = map.get(key) || { branch: key, count: 0, lastAt: 0, users: new Set<string>() };
+            current.count += 1;
+            current.lastAt = Math.max(current.lastAt, ts);
+            if (l.user_email) current.users.add(l.user_email);
+            map.set(key, current);
+        });
+        return Array.from(map.values()).sort((a, b) => b.lastAt - a.lastAt);
+    }, [filteredEventLogs]);
+
+    const logsUsers = useMemo(() => {
+        const map = new Map<string, { user: string; count: number; lastAt: number; branch: string | null }>();
+        filteredEventLogs.forEach(l => {
+            const key = l.user_email || 'Sem usuário';
+            const ts = l.created_at ? new Date(l.created_at).getTime() : 0;
+            const current = map.get(key) || { user: key, count: 0, lastAt: 0, branch: l.branch || null };
+            current.count += 1;
+            current.lastAt = Math.max(current.lastAt, ts);
+            map.set(key, current);
+        });
+        return Array.from(map.values()).sort((a, b) => b.count - a.count);
+    }, [filteredEventLogs]);
+
+    const logsApps = useMemo(() => {
+        const map = new Map<string, number>();
+        filteredEventLogs.forEach(l => {
+            const key = l.app || 'outros';
+            map.set(key, (map.get(key) || 0) + 1);
+        });
+        return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+    }, [filteredEventLogs]);
+
+    const userActivityStats = useMemo(() => {
+        if (!currentUser) return [];
+        const now = Date.now();
+        const logs = appEventLogs.filter(l => !currentUser.company_id || l.company_id === currentUser.company_id);
+        const byUser = new Map<string, { lastAt: number; activeDays: Set<string>; durationMs: number }>();
+
+        logs.forEach(l => {
+            if (!l.user_email) return;
+            const ts = l.created_at ? new Date(l.created_at).getTime() : NaN;
+            if (Number.isNaN(ts)) return;
+            const dateKey = new Date(ts).toISOString().slice(0, 10);
+            const entry = byUser.get(l.user_email) || { lastAt: 0, activeDays: new Set<string>(), durationMs: 0 };
+            entry.lastAt = Math.max(entry.lastAt, ts);
+            entry.activeDays.add(dateKey);
+            if (typeof l.duration_ms === 'number' && l.duration_ms > 0) {
+                entry.durationMs += l.duration_ms;
+            }
+            byUser.set(l.user_email, entry);
+        });
+
+        const companyUsers = currentUser.role === 'MASTER'
+            ? users.filter(u => !currentUser.company_id || u.company_id === currentUser.company_id)
+            : users.filter(u => u.email === currentUser.email);
+
+        return companyUsers.map(u => {
+            const stats = byUser.get(u.email);
+            const lastAt = stats?.lastAt || 0;
+            const daysInactive = lastAt ? Math.floor((now - lastAt) / (1000 * 60 * 60 * 24)) : null;
+            return {
+                email: u.email,
+                name: u.name || u.email,
+                filial: u.filial || '-',
+                area: u.area || '-',
+                lastAt: lastAt || null,
+                daysInactive,
+                activeDays: stats?.activeDays.size || 0,
+                durationMs: stats?.durationMs || 0
+            };
+        }).sort((a, b) => {
+            if (a.daysInactive === null && b.daysInactive === null) return 0;
+            if (a.daysInactive === null) return -1;
+            if (b.daysInactive === null) return 1;
+            return b.daysInactive - a.daysInactive;
+        });
+    }, [appEventLogs, users, currentUser]);
+
+    const logAppOptions = useMemo(() => {
+        const set = new Set<string>();
+        appEventLogs.forEach(l => {
+            if (l.app) set.add(l.app);
+        });
+        return Array.from(set).sort();
+    }, [appEventLogs]);
+
+    const logEventOptions = useMemo(() => {
+        const set = new Set<string>();
+        Object.keys(EVENT_TYPE_LABELS).forEach(key => set.add(key));
+        appEventLogs.forEach(l => {
+            if (l.event_type) set.add(l.event_type);
+        });
+        return Array.from(set).sort((a, b) => formatEventTypeLabel(a).localeCompare(formatEventTypeLabel(b)));
+    }, [appEventLogs]);
+
+    const scopedCompanies = useMemo(() => {
+        if (!currentUser?.company_id) return companies;
+        return companies.filter(c => c.id === currentUser.company_id);
+    }, [companies, currentUser?.company_id]);
+
+    const scopedUsers = useMemo(() => {
+        if (!currentUser) return [];
+        if (currentUser.role !== 'MASTER') {
+            return users.filter(u => u.email === currentUser.email);
+        }
+        if (currentUser.company_id) {
+            return users.filter(u => u.company_id === currentUser.company_id);
+        }
+        return users;
+    }, [users, currentUser]);
+
+    const logBranchOptions = useMemo(() => {
+        const set = new Set<string>();
+        scopedUsers.forEach(u => {
+            if (u.filial) set.add(u.filial);
+        });
+        scopedCompanies.forEach(c => {
+            (c.areas || []).forEach((a: any) => {
+                (a.branches || []).forEach((b: string) => set.add(b));
+            });
+        });
+        return Array.from(set).sort();
+    }, [scopedUsers, scopedCompanies]);
+
+    const logAreaOptions = useMemo(() => {
+        const set = new Set<string>();
+        scopedUsers.forEach(u => {
+            if (u.area) set.add(u.area);
+        });
+        scopedCompanies.forEach(c => {
+            (c.areas || []).forEach((a: any) => {
+                if (a.name) set.add(a.name);
+            });
+        });
+        return Array.from(set).sort();
+    }, [scopedUsers, scopedCompanies]);
+
+    const logUserOptions = useMemo(() => {
+        return scopedUsers
+            .filter(u => u.email)
+            .map(u => ({
+                value: u.email,
+                label: `${u.name || u.email} (${u.email})`
+            }))
+            .sort((a, b) => a.label.localeCompare(b.label));
+    }, [scopedUsers]);
+
+    const logLastEventLabel = useMemo(() => {
+        const last = filteredEventLogs[0]?.created_at;
+        if (!last) return 'Sem registros';
+        const date = new Date(last);
+        if (Number.isNaN(date.getTime())) return 'Sem registros';
+        return date.toLocaleString('pt-BR', { hour12: false });
+    }, [filteredEventLogs]);
 
     const handleStockAreaFilterChange = (value: string) => setStockAreaFilter(value);
 
@@ -3594,6 +4312,23 @@ const App: React.FC = () => {
                                                                             await saveConfig({ pharmacy_name: editCompanyName, logo: editCompanyLogo });
                                                                         }
                                                                         alert('Alterações salvas com sucesso!');
+                                                                        if (currentUser?.email) {
+                                                                            SupabaseService.insertAppEventLog({
+                                                                                company_id: currentUser.company_id || null,
+                                                                                branch: currentUser.filial || null,
+                                                                                area: currentUser.area || null,
+                                                                                user_email: currentUser.email,
+                                                                                user_name: currentUser.name,
+                                                                                app: 'configuracoes',
+                                                                                event_type: 'company_updated',
+                                                                                entity_type: 'company',
+                                                                                entity_id: selectedCompanyId,
+                                                                                status: 'success',
+                                                                                success: true,
+                                                                                source: 'web',
+                                                                                event_meta: { name: editCompanyName }
+                                                                            }).catch(() => { });
+                                                                        }
                                                                     } catch (error) {
                                                                         console.error(error);
                                                                         alert('Erro ao salvar.');
@@ -3798,6 +4533,23 @@ const App: React.FC = () => {
                                                             setNewCompanyLogo(null);
                                                             setNewCompanyAreas([]);
                                                             alert('Empresa cadastrada com sucesso!');
+                                                            if (currentUser?.email) {
+                                                                SupabaseService.insertAppEventLog({
+                                                                    company_id: currentUser.company_id || null,
+                                                                    branch: currentUser.filial || null,
+                                                                    area: currentUser.area || null,
+                                                                    user_email: currentUser.email,
+                                                                    user_name: currentUser.name,
+                                                                    app: 'configuracoes',
+                                                                    event_type: 'company_created',
+                                                                    entity_type: 'company',
+                                                                    entity_id: created.id,
+                                                                    status: 'success',
+                                                                    success: true,
+                                                                    source: 'web',
+                                                                    event_meta: { name: created.name }
+                                                                }).catch(() => { });
+                                                            }
                                                         } else {
                                                             alert('Erro ao cadastrar empresa.');
                                                         }
@@ -4364,6 +5116,294 @@ const App: React.FC = () => {
                         </div>
                     )}
 
+                    {/* --- LOGS & EVENTOS VIEW --- */}
+                    {currentView === 'logs' && currentUser?.role === 'MASTER' && (
+                        <div className="max-w-6xl mx-auto space-y-10 animate-fade-in pb-24">
+                            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+                                <div>
+                                    <h1 className="text-3xl font-black text-gray-900 tracking-tight">Métricas Gerenciais</h1>
+                                    <p className="text-gray-500 font-bold text-sm mt-1">Acompanhe o uso do sistema por filial, usuário e app (últimos 30 dias).</p>
+                                </div>
+                                <button
+                                    onClick={() => {
+                                        if (!currentUser?.company_id) return;
+                                        setIsLoadingLogs(true);
+                                        SupabaseService.fetchAppEventLogs({
+                                            companyId: currentUser.company_id,
+                                            branch: currentUser.role === 'MASTER' ? null : (currentUser.filial || null),
+                                            sinceISO: logsDateRange === '7d'
+                                                ? new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString()
+                                                : logsDateRange === '30d'
+                                                    ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
+                                                    : null,
+                                            limit: 2000
+                                        }).then(logs => setAppEventLogs(logs || []))
+                                            .finally(() => setIsLoadingLogs(false));
+                                    }}
+                                    className="px-5 py-2 rounded-2xl border border-gray-200 bg-white text-gray-600 text-[10px] font-black uppercase tracking-widest hover:bg-gray-50"
+                                >
+                                    {isLoadingLogs ? 'Atualizando...' : 'Atualizar Logs'}
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Eventos (filtrados)</p>
+                                    <p className="text-3xl font-black text-slate-900 mt-2">{filteredEventLogs.length}</p>
+                                </div>
+                                <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Filiais Ativas</p>
+                                    <p className="text-3xl font-black text-blue-600 mt-2">{logsBranches.length}</p>
+                                </div>
+                                <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Usuários Ativos</p>
+                                    <p className="text-3xl font-black text-emerald-600 mt-2">{logsUsers.length}</p>
+                                </div>
+                                <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Última Atividade</p>
+                                    <p className="text-sm font-black text-slate-700 mt-2">{logLastEventLabel}</p>
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm space-y-4">
+                                <div className="flex flex-wrap gap-3">
+                                    <div className="flex flex-col">
+                                        <label className="text-[9px] font-black uppercase tracking-widest text-gray-400">Filial</label>
+                                        <select value={logsBranchFilter} onChange={e => setLogsBranchFilter(e.target.value)} className="text-xs font-bold rounded-xl border border-gray-200 px-3 py-2 bg-white">
+                                            <option value="all">Todas</option>
+                                            {logBranchOptions.map(b => <option key={b} value={b}>{b}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <label className="text-[9px] font-black uppercase tracking-widest text-gray-400">Área</label>
+                                        <select value={logsAreaFilter} onChange={e => setLogsAreaFilter(e.target.value)} className="text-xs font-bold rounded-xl border border-gray-200 px-3 py-2 bg-white">
+                                            <option value="all">Todas</option>
+                                            {logAreaOptions.map(a => <option key={a} value={a}>{a}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <label className="text-[9px] font-black uppercase tracking-widest text-gray-400">App</label>
+                                        <select value={logsAppFilter} onChange={e => setLogsAppFilter(e.target.value)} className="text-xs font-bold rounded-xl border border-gray-200 px-3 py-2 bg-white">
+                                            <option value="all">Todos</option>
+                                            {logAppOptions.map(a => <option key={a} value={a}>{a}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <label className="text-[9px] font-black uppercase tracking-widest text-gray-400">Usuário</label>
+                                        <select value={logsUserFilter} onChange={e => setLogsUserFilter(e.target.value)} className="text-xs font-bold rounded-xl border border-gray-200 px-3 py-2 bg-white">
+                                            <option value="all">Todos</option>
+                                            {logUserOptions.map(u => <option key={u.value} value={u.value}>{u.label}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <label className="text-[9px] font-black uppercase tracking-widest text-gray-400">Evento</label>
+                                        <select value={logsEventFilter} onChange={e => setLogsEventFilter(e.target.value)} className="text-xs font-bold rounded-xl border border-gray-200 px-3 py-2 bg-white">
+                                            <option value="all">Todos</option>
+                                            {logEventOptions.map(e => <option key={e} value={e}>{formatEventTypeLabel(e)}</option>)}
+                                        </select>
+                                    </div>
+                                    <div className="flex flex-col justify-end">
+                                        <label className="text-[9px] font-black uppercase tracking-widest text-gray-400">Agrupar</label>
+                                        <button
+                                            type="button"
+                                            onClick={() => setLogsGroupRepeats(prev => !prev)}
+                                            className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${logsGroupRepeats ? 'bg-indigo-50 border-indigo-200 text-indigo-700' : 'bg-white border-gray-200 text-gray-500'}`}
+                                        >
+                                            {logsGroupRepeats ? 'Ativo' : 'Desativado'}
+                                        </button>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <label className="text-[9px] font-black uppercase tracking-widest text-gray-400">Período</label>
+                                        <select value={logsDateRange} onChange={e => setLogsDateRange(e.target.value as any)} className="text-xs font-bold rounded-xl border border-gray-200 px-3 py-2 bg-white">
+                                            <option value="7d">Últimos 7 dias</option>
+                                            <option value="30d">Últimos 30 dias</option>
+                                            <option value="all">Todos</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                                <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm">
+                                    <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Atividade por Filial</h3>
+                                    <div className="space-y-3">
+                                        {logsBranches.slice(0, 6).map(branch => (
+                                            <div key={branch.branch} className="flex items-center justify-between rounded-2xl border border-gray-100 px-4 py-3 gap-3">
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-black text-gray-800 truncate">{branch.branch}</p>
+                                                    <p className="text-[10px] text-gray-400 font-bold truncate">{branch.users.size} usuário(s)</p>
+                                                </div>
+                                                <div className="text-right min-w-[96px]">
+                                                    <p className="text-sm font-black text-blue-600 whitespace-nowrap">{branch.count}</p>
+                                                    <p className="text-[9px] text-gray-400 font-bold whitespace-nowrap">{branch.lastAt ? new Date(branch.lastAt).toLocaleString('pt-BR', { hour12: false }) : '-'}</p>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {logsBranches.length === 0 && (
+                                            <div className="text-sm text-gray-400 font-semibold">Sem eventos ainda.</div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm">
+                                    <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Usuários mais ativos</h3>
+                                    <div className="space-y-3">
+                                        {logsUsers.slice(0, 6).map(user => (
+                                            <div key={user.user} className="flex items-center justify-between rounded-2xl border border-gray-100 px-4 py-3 gap-3">
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-black text-gray-800 truncate">{user.user}</p>
+                                                    <p className="text-[10px] text-gray-400 font-bold truncate">{user.branch || '-'}</p>
+                                                </div>
+                                                <div className="text-right min-w-[96px]">
+                                                    <p className="text-sm font-black text-emerald-600 whitespace-nowrap">{user.count}</p>
+                                                    <p className="text-[9px] text-gray-400 font-bold whitespace-nowrap">{user.lastAt ? new Date(user.lastAt).toLocaleString('pt-BR', { hour12: false }) : '-'}</p>
+                                                </div>
+                                            </div>
+                                        ))}
+                                        {logsUsers.length === 0 && (
+                                            <div className="text-sm text-gray-400 font-semibold">Sem eventos ainda.</div>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm">
+                                    <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Apps mais usados</h3>
+                                    <div className="space-y-3">
+                                        {logsApps.slice(0, 6).map(app => {
+                                            const isActive = logsAppFilter === app[0];
+                                            return (
+                                                <button
+                                                    key={app[0]}
+                                                    type="button"
+                                                    onClick={() => setLogsAppFilter(isActive ? 'all' : app[0])}
+                                                    className={`w-full flex items-center justify-between rounded-2xl border px-4 py-3 text-left transition-all ${isActive ? 'border-indigo-200 bg-indigo-50' : 'border-gray-100 hover:bg-gray-50'}`}
+                                                    title="Clique para filtrar eventos deste app"
+                                                >
+                                                    <p className="text-sm font-black text-gray-800 truncate min-w-0">{app[0]}</p>
+                                                    <p className="text-sm font-black text-indigo-600 whitespace-nowrap">{app[1]}</p>
+                                                </button>
+                                            );
+                                        })}
+                                        {logsApps.length === 0 && (
+                                            <div className="text-sm text-gray-400 font-semibold">Sem eventos ainda.</div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+                                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                                    <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest">Eventos Detalhados</h3>
+                                    <span className="text-xs font-bold text-gray-400">{displayEventLogs.length} registros</span>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full text-sm">
+                                        <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase tracking-widest">
+                                            <tr>
+                                                <th className="px-6 py-3 text-left">Data/Hora</th>
+                                                <th className="px-6 py-3 text-left">App</th>
+                                                <th className="px-6 py-3 text-left">Evento</th>
+                                                <th className="px-6 py-3 text-left">Filial</th>
+                                                <th className="px-6 py-3 text-left">Usuário</th>
+                                                <th className="px-6 py-3 text-left">Local</th>
+                                                <th className="px-6 py-3 text-left">Qtde</th>
+                                                <th className="px-6 py-3 text-left">Status</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {displayEventLogs.map(log => (
+                                                <tr key={log.id} className="hover:bg-gray-50/50">
+                                                    <td className="px-6 py-3 text-xs font-bold text-gray-600 whitespace-nowrap">{log.created_at ? new Date(log.created_at).toLocaleString('pt-BR', { hour12: false }) : '-'}</td>
+                                                    <td className="px-6 py-3 font-bold text-gray-800 whitespace-nowrap">{log.app}</td>
+                                                    <td className="px-6 py-3 text-gray-600 whitespace-nowrap">{formatEventTypeLabel(log.event_type)}</td>
+                                                    <td className="px-6 py-3 text-gray-600 whitespace-nowrap">{log.branch || '-'}</td>
+                                                    <td className="px-6 py-3 text-gray-600 whitespace-nowrap">{log.user_email || '-'}</td>
+                                                    <td className="px-6 py-3 text-gray-600 whitespace-nowrap max-w-[280px] truncate" title={extractEventLocation(log)}>{extractEventLocation(log)}</td>
+                                                    <td className="px-6 py-3 text-gray-700 font-bold whitespace-nowrap">{(log as any).count || 1}</td>
+                                                    <td className="px-6 py-3">
+                                                        <span className={`text-[10px] font-black uppercase px-2 py-1 rounded-lg whitespace-nowrap ${log.success === false ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                                            {log.success === false ? 'Erro' : 'OK'}
+                                                        </span>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            {displayEventLogs.length === 0 && (
+                                                <tr>
+                                                    <td colSpan={8} className="px-6 py-10 text-center text-gray-400 font-semibold">
+                                                        Nenhum evento encontrado.
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
+                                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                                    <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest">Atividade por Usuário</h3>
+                                    <span className="text-xs font-bold text-gray-400">{userActivityStats.length} usuários</span>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full text-sm">
+                                        <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase tracking-widest">
+                                            <tr>
+                                                <th className="px-6 py-3 text-left">Usuário</th>
+                                                <th className="px-6 py-3 text-left">Filial</th>
+                                                <th className="px-6 py-3 text-left">Dias Ativos (30d)</th>
+                                                <th className="px-6 py-3 text-left">Tempo Ativo</th>
+                                                <th className="px-6 py-3 text-left">Última Atividade</th>
+                                                <th className="px-6 py-3 text-left">Dias Sem Atividade</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {userActivityStats.map(user => (
+                                                <tr key={user.email} className="hover:bg-gray-50/50">
+                                                    <td className="px-6 py-3">
+                                                        <div className="flex flex-col">
+                                                            <span className="font-bold text-gray-800 whitespace-nowrap">{user.name}</span>
+                                                            <span className="text-[10px] text-gray-400 font-bold whitespace-nowrap">{user.email}</span>
+                                                        </div>
+                                                    </td>
+                                                    <td className="px-6 py-3 text-gray-600 whitespace-nowrap">{user.filial}</td>
+                                                    <td className="px-6 py-3 font-bold text-slate-700 whitespace-nowrap">{user.activeDays}</td>
+                                                    <td className="px-6 py-3 text-gray-600 whitespace-nowrap">{formatDurationMs(user.durationMs) || '00:00'}</td>
+                                                    <td className="px-6 py-3 text-gray-600 whitespace-nowrap">
+                                                        {user.lastAt ? new Date(user.lastAt).toLocaleString('pt-BR', { hour12: false }) : 'Sem atividade'}
+                                                    </td>
+                                                    <td className="px-6 py-3 whitespace-nowrap">
+                                                        {user.daysInactive === null ? (
+                                                            <span className="text-xs font-bold text-gray-400">Sem registro</span>
+                                                        ) : user.daysInactive === 0 ? (
+                                                            <span className="text-xs font-bold text-emerald-600">Hoje</span>
+                                                        ) : (
+                                                            <span className={`text-xs font-bold ${user.daysInactive >= 7 ? 'text-red-600' : 'text-amber-600'}`}>
+                                                                {user.daysInactive} dia(s)
+                                                            </span>
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                            {userActivityStats.length === 0 && (
+                                                <tr>
+                                                    <td colSpan={6} className="px-6 py-10 text-center text-gray-400 font-semibold">
+                                                        Nenhum usuário encontrado.
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                    {currentView === 'logs' && currentUser?.role !== 'MASTER' && (
+                        <div className="max-w-4xl mx-auto p-10 text-center bg-white rounded-3xl border border-gray-100 shadow-sm">
+                            <h2 className="text-xl font-black text-gray-800">Acesso restrito</h2>
+                            <p className="text-sm text-gray-500 mt-2">A aba Métricas Gerenciais está disponível apenas para usuários master.</p>
+                        </div>
+                    )}
+
                     {/* --- SUPPORT/TICKETS VIEW --- */}
                     {currentView === 'support' && (
                         <div className="max-w-5xl mx-auto space-y-10 animate-fade-in relative pb-32">
@@ -4480,6 +5520,21 @@ const App: React.FC = () => {
                                                     setNewTicketDesc('');
                                                     setNewTicketImages([]);
                                                     alert('Solicitação enviada com sucesso! Obrigado.');
+                                                    SupabaseService.insertAppEventLog({
+                                                        company_id: currentUser.company_id || null,
+                                                        branch: currentUser.filial || null,
+                                                        area: currentUser.area || null,
+                                                        user_email: currentUser.email,
+                                                        user_name: currentUser.name,
+                                                        app: 'suporte',
+                                                        event_type: 'ticket_created',
+                                                        entity_type: 'ticket',
+                                                        entity_id: created.id,
+                                                        status: 'success',
+                                                        success: true,
+                                                        source: 'web',
+                                                        event_meta: { title: created.title }
+                                                    }).catch(() => { });
                                                 } else {
                                                     alert('Erro ao enviar solicitação.');
                                                 }

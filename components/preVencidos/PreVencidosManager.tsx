@@ -50,6 +50,7 @@ import {
   insertPVDashboardReport,
   fetchPVBranchRecordEvents,
   insertPVBranchRecordEvent,
+  insertAppEventLog,
   fetchPVInventoryReport,
   upsertPVInventoryReport
 } from '../../supabaseService';
@@ -1069,6 +1070,25 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       if (saved) {
         upsertLocalPVEvent(saved);
       }
+      insertAppEventLog({
+        company_id: sessionInfo.companyId,
+        branch: sessionInfo.filial,
+        area: sessionInfo.area || null,
+        user_email: userEmail || null,
+        user_name: userName || null,
+        app: 'pre_vencidos',
+        event_type: 'pv_updated',
+        entity_type: 'pv_record',
+        entity_id: existing.id,
+        status: 'success',
+        success: true,
+        source: 'web',
+        event_meta: {
+          reduced_code: existing.reducedCode,
+          previous_quantity: existing.quantity,
+          new_quantity: updates.quantity
+        }
+      }).catch(() => { });
     }
   };
 
@@ -1442,6 +1462,27 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     const uploadedAt = new Date().toISOString();
     processAndSetSales(sales, normalizedLabel, fileName, parsedRange, uploadedAt);
     await persistSalesUploadRecord(normalizedLabel, parsedRange, fileName, uploadedAt);
+    if (sessionInfo?.companyId && sessionInfo?.filial) {
+      insertAppEventLog({
+        company_id: sessionInfo.companyId,
+        branch: sessionInfo.filial,
+        area: sessionInfo.area || null,
+        user_email: userEmail || null,
+        user_name: userName || null,
+        app: 'pre_vencidos',
+        event_type: 'pv_sales_upload_success',
+        entity_type: 'sales_upload',
+        entity_id: normalizedLabel,
+        status: 'success',
+        success: true,
+        source: 'web',
+        event_meta: {
+          period_label: normalizedLabel,
+          file_name: fileName,
+          total_sales: sales.length
+        }
+      }).catch(() => { });
+    }
   };
 
   const handleSalesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1472,7 +1513,28 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       }
       return 'Erro ao processar arquivo de vendas. Verifique se o arquivo está no formato correto (código, descrição, laboratório, quantidade e valor).';
     };
-    const notifyError = (err?: unknown) => alert(formatSalesUploadError(err));
+    const notifyError = (err?: unknown) => {
+      if (sessionInfo?.companyId && sessionInfo?.filial) {
+        const message = err instanceof Error ? err.message : String(err || '');
+        insertAppEventLog({
+          company_id: sessionInfo.companyId,
+          branch: sessionInfo.filial,
+          area: sessionInfo.area || null,
+          user_email: userEmail || null,
+          user_name: userName || null,
+          app: 'pre_vencidos',
+          event_type: 'pv_sales_upload_error',
+          entity_type: 'sales_upload',
+          entity_id: fileName || null,
+          status: 'error',
+          success: false,
+          source: 'web',
+          error_code: message || null,
+          event_meta: { file_name: fileName || null }
+        }).catch(() => { });
+      }
+      alert(formatSalesUploadError(err));
+    };
 
     if (fileNameLower.endsWith('.csv') || fileNameLower.endsWith('.txt')) {
       const reader = new FileReader();
@@ -1538,14 +1600,60 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         if (saved) {
           setInventoryReport(saved);
           alert(`Estoque atualizado! ${records.length} itens carregados.`);
+          insertAppEventLog({
+            company_id: sessionInfo.companyId,
+            branch: sessionInfo.filial,
+            area: sessionInfo.area || null,
+            user_email: userEmail || null,
+            user_name: userName || null,
+            app: 'pre_vencidos',
+            event_type: 'pv_inventory_upload_success',
+            entity_type: 'inventory_upload',
+            entity_id: fileName,
+            status: 'success',
+            success: true,
+            source: 'web',
+            event_meta: { file_name: fileName, total_records: records.length }
+          }).catch(() => { });
         } else {
           setInventoryReport(report);
           alert('Estoque carregado, mas não foi possível confirmar o salvamento no banco.');
+          insertAppEventLog({
+            company_id: sessionInfo.companyId,
+            branch: sessionInfo.filial,
+            area: sessionInfo.area || null,
+            user_email: userEmail || null,
+            user_name: userName || null,
+            app: 'pre_vencidos',
+            event_type: 'pv_inventory_upload_error',
+            entity_type: 'inventory_upload',
+            entity_id: fileName,
+            status: 'error',
+            success: false,
+            source: 'web',
+            event_meta: { file_name: fileName, reason: 'save_failed' }
+          }).catch(() => { });
         }
       } catch (error) {
         console.error('Erro ao carregar estoque:', error);
         const details = error instanceof Error ? error.message : String(error || '');
         alert(details ? `Erro ao carregar estoque:\n${details}` : 'Erro ao carregar estoque.');
+        insertAppEventLog({
+          company_id: sessionInfo.companyId,
+          branch: sessionInfo.filial,
+          area: sessionInfo.area || null,
+          user_email: userEmail || null,
+          user_name: userName || null,
+          app: 'pre_vencidos',
+          event_type: 'pv_inventory_upload_error',
+          entity_type: 'inventory_upload',
+          entity_id: fileName,
+          status: 'error',
+          success: false,
+          source: 'web',
+          error_code: details || null,
+          event_meta: { file_name: fileName }
+        }).catch(() => { });
       }
     })();
 
@@ -1786,6 +1894,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         const saved = await insertPVDashboardReport(reportPayload);
         if (saved) {
           setLastDashboardReport(saved);
+          insertAppEventLog({
+            company_id: sessionInfo.companyId,
+            branch: sessionInfo.filial,
+            area: sessionInfo.area || null,
+            user_email: userEmail || null,
+            user_name: userName || null,
+            app: 'pre_vencidos',
+            event_type: 'pv_dashboard_finalized',
+            entity_type: 'dashboard_report',
+            entity_id: saved.id,
+            status: 'success',
+            success: true,
+            source: 'web',
+            event_meta: { period_label: periodLabel, file_name: pdfData.fileName }
+          }).catch(() => { });
         } else {
           alert('Relatório gerado, mas não foi possível salvar no banco.');
         }
@@ -1807,6 +1930,20 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       setSalesPeriod('');
       setShowStockDetail(false);
       alert('Dashboard limpo com sucesso! Os registros de vendas foram arquivados (PDF) e removidos da visualização.');
+      insertAppEventLog({
+        company_id: sessionInfo.companyId,
+        branch: sessionInfo.filial,
+        area: sessionInfo.area || null,
+        user_email: userEmail || null,
+        user_name: userName || null,
+        app: 'pre_vencidos',
+        event_type: 'pv_dashboard_cleared',
+        entity_type: 'dashboard',
+        entity_id: sessionInfo.filial,
+        status: 'success',
+        success: true,
+        source: 'web'
+      }).catch(() => { });
     } finally {
       setIsClearingDashboard(false);
     }
@@ -1854,6 +1991,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     }
 
     openPdfBlob(pdfData.blob, pdfData.fileName, 'preview');
+    insertAppEventLog({
+      company_id: sessionInfo.companyId,
+      branch: sessionInfo.filial,
+      area: sessionInfo.area || null,
+      user_email: userEmail || null,
+      user_name: userName || null,
+      app: 'pre_vencidos',
+      event_type: 'pv_dashboard_preview',
+      entity_type: 'dashboard_report',
+      entity_id: saved?.id || null,
+      status: 'success',
+      success: true,
+      source: 'web',
+      event_meta: { period_label: periodLabel, file_name: pdfData.fileName }
+    }).catch(() => { });
   };
 
   const persistPVSession = useCallback(async () => {
@@ -2342,17 +2494,22 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         {/* HEADER COMPACTO DE SESSÃO */}
-        <header className="h-12 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-20 shadow-sm shadow-slate-200/50">
-          <div className="flex items-center gap-6">
+        <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-20 shadow-sm shadow-slate-200/50">
+          <div className="flex items-center gap-6 flex-wrap">
             <div className="flex items-center gap-2 text-blue-600">
               <Building size={16} />
               <span className="text-[10px] font-black uppercase tracking-widest">{sessionInfo?.company || 'DROGARIA CIDADE'}</span>
             </div>
             <div className="w-px h-4 bg-slate-200"></div>
-            <div className="flex items-center gap-2 text-slate-600">
+            <div className="flex items-center gap-2 text-slate-600 flex-wrap">
               <User size={16} className="text-blue-500" />
-              <span className="text-[10px] font-bold uppercase">{sessionInfo?.pharmacist || 'Convidado'}</span>
-              <span className="text-[9px] text-slate-400 font-bold bg-slate-100 px-1.5 py-0.5 rounded">Filial: {sessionInfo?.filial || '-'}</span>
+              <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Farmacêutico</span>
+              <span className="text-[10px] font-bold uppercase text-slate-700">{sessionInfo?.pharmacist || 'Convidado'}</span>
+              <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 ml-2">Gestor</span>
+              <span className="text-[10px] font-bold uppercase text-slate-700">{sessionInfo?.manager || '-'}</span>
+              <span className="text-[10px] text-white font-black bg-gradient-to-r from-blue-600 to-indigo-500 px-2.5 py-1 rounded-full shadow-lg shadow-blue-500/30 ring-1 ring-blue-300/60 whitespace-nowrap">
+                Filial: {sessionInfo?.filial || '-'}
+              </span>
             </div>
           </div>
 
@@ -2442,6 +2599,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
               barcodeByReduced={barcodeByReduced}
               inventoryCostByBarcode={inventoryCostByBarcode}
               originBranches={originBranches}
+              userEmail={userEmail}
+              userName={userName}
               onRefresh={handleRefresh}
               onUpdatePV={handleUpdatePVRecord}
               onAddPV={async (rec) => {
@@ -2489,6 +2648,25 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                   if (savedEvent) {
                     upsertLocalPVEvent(savedEvent);
                   }
+                  insertAppEventLog({
+                    company_id: sessionInfo.companyId,
+                    branch: sessionInfo.filial,
+                    area: sessionInfo.area || null,
+                    user_email: userEmail || null,
+                    user_name: userName || null,
+                    app: 'pre_vencidos',
+                    event_type: 'pv_created',
+                    entity_type: 'pv_record',
+                    entity_id: rec.id,
+                    status: 'success',
+                    success: true,
+                    source: 'web',
+                    event_meta: {
+                      reduced_code: rec.reducedCode,
+                      quantity: rec.quantity,
+                      expiry_date: rec.expiryDate
+                    }
+                  }).catch(() => { });
                 }
 
                 // Adiciona infos do usuário localmente para exibição imediata
@@ -2520,6 +2698,24 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                   if (saved) {
                     upsertLocalPVEvent(saved);
                   }
+                  insertAppEventLog({
+                    company_id: sessionInfo.companyId,
+                    branch: sessionInfo.filial,
+                    area: sessionInfo.area || null,
+                    user_email: userEmail || null,
+                    user_name: userName || null,
+                    app: 'pre_vencidos',
+                    event_type: 'pv_deleted',
+                    entity_type: 'pv_record',
+                    entity_id: target.id,
+                    status: 'success',
+                    success: true,
+                    source: 'web',
+                    event_meta: {
+                      reduced_code: target.reducedCode,
+                      previous_quantity: target.quantity
+                    }
+                  }).catch(() => { });
                 }
               }}
             />
@@ -2553,6 +2749,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                 inventoryCostByBarcode={inventoryCostByBarcode}
                 inventoryStockByBarcode={inventoryStockByBarcode}
                 labByReduced={labByReduced}
+                userEmail={userEmail}
+                userName={userName}
                 onUpdatePVSale={handleUpdatePVSale} onFinalizeSale={handleFinalizeSale}
               />
             </div>
@@ -2821,6 +3019,22 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                     } catch {
                       window.print();
                     }
+                    if (sessionInfo?.companyId && sessionInfo?.filial) {
+                      insertAppEventLog({
+                        company_id: sessionInfo.companyId,
+                        branch: sessionInfo.filial,
+                        area: sessionInfo.area || null,
+                        user_email: userEmail || null,
+                        user_name: userName || null,
+                        app: 'pre_vencidos',
+                        event_type: 'pv_dashboard_printed',
+                        entity_type: 'dashboard_report',
+                        entity_id: pdfPreview.fileName,
+                        status: 'success',
+                        success: true,
+                        source: 'web'
+                      }).catch(() => { });
+                    }
                   }}
                   className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-[11px] font-bold uppercase tracking-widest hover:bg-blue-700"
                 >
@@ -2829,6 +3043,24 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                 <a
                   href={pdfPreview.url}
                   download={pdfPreview.fileName}
+                  onClick={() => {
+                    if (sessionInfo?.companyId && sessionInfo?.filial) {
+                      insertAppEventLog({
+                        company_id: sessionInfo.companyId,
+                        branch: sessionInfo.filial,
+                        area: sessionInfo.area || null,
+                        user_email: userEmail || null,
+                        user_name: userName || null,
+                        app: 'pre_vencidos',
+                        event_type: 'pv_dashboard_downloaded',
+                        entity_type: 'dashboard_report',
+                        entity_id: pdfPreview.fileName,
+                        status: 'success',
+                        success: true,
+                        source: 'web'
+                      }).catch(() => { });
+                    }
+                  }}
                   className="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 text-[11px] font-bold uppercase tracking-widest hover:bg-slate-200"
                 >
                   Baixar PDF
