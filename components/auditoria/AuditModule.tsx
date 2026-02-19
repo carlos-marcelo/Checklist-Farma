@@ -33,7 +33,9 @@ import {
     X
 } from 'lucide-react';
 
-const ALLOWED_IDS = [66, 67, 2000, 3000, 4000, 8000, 10000];
+const GROUP_UPLOAD_IDS = ['2000', '3000', '4000', '8000', '10000', '66', '67'] as const;
+type GroupUploadId = typeof GROUP_UPLOAD_IDS[number];
+const ALLOWED_IDS = GROUP_UPLOAD_IDS.map(id => Number(id));
 const FILIAIS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18];
 const STORAGE_KEY = 'audit_flow_v72_master';
 
@@ -47,6 +49,16 @@ const GROUP_CONFIG_DEFAULTS: Record<string, string> = {
     "10000": "Conveniência"
 };
 
+const createInitialGroupFiles = (): Record<GroupUploadId, File | null> => ({
+    "2000": null,
+    "3000": null,
+    "4000": null,
+    "8000": null,
+    "10000": null,
+    "66": null,
+    "67": null
+});
+
 const TRIER_API_BASE =
     ((import.meta as any).env?.VITE_TRIER_INTEGRATION_URL as string) || "http://localhost:8000";
 
@@ -54,6 +66,87 @@ const normalizeAuditStatus = (status: unknown): AuditStatus => {
     if (status === AuditStatus.DONE || status === 'DONE' || status === 'concluido') return AuditStatus.DONE;
     if (status === AuditStatus.IN_PROGRESS || status === 'IN_PROGRESS' || status === 'iniciado') return AuditStatus.IN_PROGRESS;
     return AuditStatus.TODO;
+};
+
+const parseNumericToken = (token: string): number | null => {
+    if (!token) return null;
+
+    const hasDot = token.includes('.');
+    const hasComma = token.includes(',');
+    let normalized = token;
+
+    if (hasDot && hasComma) {
+        if (token.lastIndexOf(',') > token.lastIndexOf('.')) {
+            normalized = token.replace(/\./g, '').replace(',', '.');
+        } else {
+            normalized = token.replace(/,/g, '');
+        }
+    } else if (hasComma) {
+        normalized = /,\d{1,2}$/.test(token) ? token.replace(',', '.') : token.replace(/,/g, '');
+    } else if (hasDot) {
+        const dotCount = (token.match(/\./g) || []).length;
+        normalized = (dotCount === 1 && /\.\d{1,2}$/.test(token)) ? token : token.replace(/\./g, '');
+    }
+
+    const parsed = Number(normalized);
+    if (!Number.isFinite(parsed)) return null;
+    return Math.round(parsed);
+};
+
+const extractSheetNumericCodes = (value: unknown): number[] => {
+    if (value === null || value === undefined) return [];
+    if (typeof value === 'number' && Number.isFinite(value)) return [Math.round(value)];
+
+    const raw = String(value).trim();
+    if (!raw) return [];
+
+    const tokens = raw.match(/\d[\d.,]*/g) || [];
+    const parsed = tokens
+        .map(parseNumericToken)
+        .filter((v): v is number => v !== null);
+
+    return Array.from(new Set(parsed));
+};
+
+const parseSheetNumericCode = (value: unknown): number | null => {
+    const values = extractSheetNumericCodes(value);
+    return values.length ? values[0] : null;
+};
+
+const parseHierarchyCell = (value: unknown, fallbackName: string) => {
+    const raw = (value ?? '').toString().trim();
+    if (!raw) return { numericId: '', name: fallbackName };
+
+    const numericId = parseSheetNumericCode(raw);
+    const name = raw
+        .replace(/^\s*\d[\d.,]*\s*[-:/.]*\s*/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return {
+        numericId: numericId !== null ? String(numericId) : '',
+        name: name || raw || fallbackName
+    };
+};
+
+const findBarcodeInRow = (row: any[]): string => {
+    const normalize = (val: any) => {
+        if (val === null || val === undefined) return '';
+        let s = val.toString().trim();
+        if (s.includes('E+') || s.includes('e+')) {
+            s = Number(val).toLocaleString('fullwide', { useGrouping: false });
+        }
+        return s.replace(/\D/g, '').replace(/^0+/, '');
+    };
+
+    const fromMainCol = normalize(row?.[11]);
+    if (fromMainCol) return fromMainCol;
+
+    for (const cell of row || []) {
+        const candidate = normalize(cell);
+        if (candidate.length >= 8 && candidate.length <= 14) return candidate;
+    }
+    return '';
 };
 
 const isDoneStatus = (status?: AuditStatus | string) => normalizeAuditStatus(status) === AuditStatus.DONE;
@@ -248,9 +341,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             // Mas se ele clicou no botão ATUALIZAR, talvez queira. 
                             // Vamos manter o confirm apenas se o ID mudar ou se não tivermos dados ainda.
                             if (isNewSession || !data) {
-                                const wantsToUpdate = window.confirm(`Auditoria Nº ${latest.audit_number} em aberto encontrada.\n\nDeseja carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
+                                const wantsToUpdate = window.confirm(`Auditoria Nº ${latest.audit_number} em aberto encontrada.\n\nDeseja abrir a tela para carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
                                 if (wantsToUpdate) {
                                     setIsUpdatingStock(true);
+                                    // Em auditoria já iniciada, só permitimos troca de SALDOS.
+                                    setGroupFiles(createInitialGroupFiles());
+                                    setFileDeptIds(null);
+                                    setFileCatIds(null);
+                                    setFileStock(null);
                                 } else {
                                     setIsUpdatingStock(false);
                                 }
@@ -290,10 +388,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 if (!silent) {
                     setData(null);
                 } else if (data) {
-                    // Se estávamos em uma auditoria e ela sumiu/fechou
-                    alert("Esta auditoria foi concluída ou removida por outro usuário.");
-                    setData(null);
-                    setView({ level: 'groups' });
+                    // Evita limpar sessão local ainda não sincronizada.
+                    if (dbSessionId) {
+                        alert("Esta auditoria foi concluída ou removida por outro usuário.");
+                        setData(null);
+                        setView({ level: 'groups' });
+                    }
                 }
             }
         } catch (error) {
@@ -328,10 +428,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     // Dummy setter to keep existing logic working without massive refactor
     const setInventoryNumber = (val: string) => { };
 
-    const [fileGroups, setFileGroups] = useState<File | null>(null);
+    const [groupFiles, setGroupFiles] = useState<Record<GroupUploadId, File | null>>(createInitialGroupFiles);
     const [fileStock, setFileStock] = useState<File | null>(null);
     const [fileDeptIds, setFileDeptIds] = useState<File | null>(null);
     const [fileCatIds, setFileCatIds] = useState<File | null>(null);
+    const selectedGroupFiles = useMemo(
+        () => GROUP_UPLOAD_IDS
+            .map(groupId => ({ groupId, file: groupFiles[groupId] }))
+            .filter((entry): entry is { groupId: GroupUploadId; file: File } => !!entry.file),
+        [groupFiles]
+    );
+
+    const setGroupFile = (groupId: GroupUploadId, file: File | null) => {
+        setGroupFiles(prev => ({ ...prev, [groupId]: file }));
+    };
 
     useEffect(() => {
         const saved = localStorage.getItem(STORAGE_KEY);
@@ -369,7 +479,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             setData(null);
             setDbSessionId(undefined);
             setSelectedFilial("");
-            setFileGroups(null);
+            setGroupFiles(createInitialGroupFiles());
             setFileStock(null);
             setFileDeptIds(null);
             setFileCatIds(null);
@@ -401,7 +511,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 setData(null);
                 setDbSessionId(undefined);
                 setSelectedFilial("");
-                setFileGroups(null);
+                setGroupFiles(createInitialGroupFiles());
                 setFileStock(null);
                 setFileDeptIds(null);
                 setFileCatIds(null);
@@ -447,7 +557,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 setData(null);
                 setDbSessionId(undefined);
                 setSelectedFilial("");
-                setFileGroups(null);
+                setGroupFiles(createInitialGroupFiles());
                 setFileStock(null);
                 setFileDeptIds(null);
                 setFileCatIds(null);
@@ -498,26 +608,62 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         return str.toString().replace(/^[0-9\s\-\.]+/, "").trim().toUpperCase();
     };
 
+    const toUploadedFileMeta = (file: File | null) => {
+        if (!file) return null;
+        return {
+            name: file.name,
+            size: file.size,
+            type: file.type || null,
+            lastModified: file.lastModified
+        };
+    };
+
+    const buildStructureSourceMeta = () => {
+        const nowIso = new Date().toISOString();
+        return {
+            mode: 'initial-structure-import',
+            importedAt: nowIso,
+            groups: selectedGroupFiles.map(({ groupId, file }) => ({
+                groupId,
+                file: toUploadedFileMeta(file)
+            })),
+            stock: toUploadedFileMeta(fileStock),
+            deptIds: toUploadedFileMeta(fileDeptIds),
+            catIds: toUploadedFileMeta(fileCatIds)
+        };
+    };
+
     const handleStartAudit = async () => {
         if (!selectedFilial) {
             alert("Selecione a filial.");
             return;
         }
 
-        if (isUpdatingStock) {
-            if (!fileStock) {
-                alert("Por favor, carregue o arquivo de SALDOS.");
-                return;
-            }
-        } else {
-            if (data && data.groups && data.groups.length > 0) {
-                setView({ level: 'groups' });
-                return;
-            }
-            if (!fileGroups || !fileStock || !fileDeptIds || !fileCatIds) {
-                alert("Por favor, carregue todos os arquivos para iniciar uma nova auditoria.");
-                return;
-            }
+        const hasStructureFiles = selectedGroupFiles.length > 0;
+        const hasOpenStructure = !!(data && data.groups && data.groups.length > 0);
+        const shouldMergeStockOnly = hasOpenStructure;
+
+        if (!fileStock) {
+            alert("Por favor, carregue o arquivo de SALDOS.");
+            return;
+        }
+
+        if (shouldMergeStockOnly && hasStructureFiles) {
+            alert("A auditoria já foi iniciada. Após o início, somente o arquivo de SALDOS pode ser alterado.");
+            return;
+        }
+
+        if (!shouldMergeStockOnly && !hasStructureFiles) {
+            alert("Por favor, carregue ao menos um arquivo de CADASTRO por grupo para classificar a estrutura.");
+            return;
+        }
+
+        if (shouldMergeStockOnly && !data) {
+            alert("Não existe auditoria aberta para atualizar apenas saldos.");
+            return;
+        }
+
+        if (!shouldMergeStockOnly) {
             if (!window.confirm(`ATENÇÃO: Você está prestes a criar um NOVO inventário (Nº ${nextAuditNumber}) para a Filial ${selectedFilial}.\n\nDeseja realmente prosseguir?`)) {
                 return;
             }
@@ -525,7 +671,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         setIsProcessing(true);
         try {
-            if (isUpdatingStock && data) {
+            if (shouldMergeStockOnly && data) {
                 // Lógica de MERGE de estoque
                 const rowsStock = await readExcel(fileStock!);
                 const stockMap: Record<string, { q: number; c: number }> = {};
@@ -556,17 +702,54 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     });
                 });
 
-                setData(newData);
+                const nowIso = new Date().toISOString();
+                const prevSourceFiles = ((data as any).sourceFiles || {}) as any;
+                const stockMeta = toUploadedFileMeta(fileStock);
+                const stockUpdates = Array.isArray(prevSourceFiles.stockUpdates) ? prevSourceFiles.stockUpdates : [];
+                const nextSourceFiles = {
+                    ...prevSourceFiles,
+                    stock: stockMeta,
+                    lastStockUpdateAt: nowIso,
+                    stockUpdates: [
+                        ...stockUpdates,
+                        { ...stockMeta, updatedAt: nowIso }
+                    ]
+                };
+                const persistedData = { ...newData, sourceFiles: nextSourceFiles } as any;
+                const progress = calculateProgress(persistedData as AuditData);
+                const savedSession = await upsertAuditSession({
+                    id: dbSessionId,
+                    branch: selectedFilial,
+                    audit_number: nextAuditNumber,
+                    status: 'open',
+                    data: persistedData,
+                    progress: progress,
+                    user_email: userEmail
+                });
+                if (!savedSession) {
+                    throw new Error("Falha ao salvar atualização de saldos no Supabase.");
+                }
+
+                setDbSessionId(savedSession.id);
+                setNextAuditNumber(savedSession.audit_number);
+                setData((savedSession.data as AuditData) || (persistedData as AuditData));
+                setGroupFiles(createInitialGroupFiles());
+                setFileDeptIds(null);
+                setFileCatIds(null);
+                setFileStock(null);
                 setIsUpdatingStock(false);
                 setView({ level: 'groups' });
                 alert("Estoques atualizados (apenas para itens não finalizados).");
                 return;
             }
 
-            const rowsGroups = await readExcel(fileGroups!);
+            if (!hasStructureFiles) {
+                alert("Carregue arquivos de CADASTRO por grupo para reclassificar.");
+                return;
+            }
+
+            const rowsGroupsByFile = await Promise.all(selectedGroupFiles.map(entry => readExcel(entry.file)));
             const rowsStock = await readExcel(fileStock);
-            const rowsDepts = await readExcel(fileDeptIds);
-            const rowsCats = await readExcel(fileCatIds);
 
             const mapIdsAndBarcodes = (rows: any[][]) => {
                 const nameToId: Record<string, string> = {};
@@ -574,7 +757,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 let lastId = "";
                 rows.forEach(row => {
                     if (!row) return;
-                    const currentId = row[5]?.toString().trim();
+                    const parsedId = parseSheetNumericCode(row[5]);
+                    const currentId = parsedId !== null ? String(parsedId) : row[5]?.toString().trim();
                     if (currentId) lastId = currentId;
                     const currentDesc = row[7]?.toString();
                     if (lastId) {
@@ -588,67 +772,121 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 return { nameToId, barcodeToId };
             };
 
-            const deptIdMaps = mapIdsAndBarcodes(rowsDepts);
-            const catIdMaps = mapIdsAndBarcodes(rowsCats);
+            const emptyIdsMap = { nameToId: {} as Record<string, string>, barcodeToId: {} as Record<string, string> };
+            const deptIdMaps = fileDeptIds ? mapIdsAndBarcodes(await readExcel(fileDeptIds)) : emptyIdsMap;
+            const catIdMaps = fileCatIds ? mapIdsAndBarcodes(await readExcel(fileCatIds)) : emptyIdsMap;
 
-            const productsLookup: Record<string, any> = {};
-            let currentGroupId: string | null = null;
-            let currentGroupName: string | null = null;
+            type ProductScope = { groupId: string; groupName: string; deptId: string; deptName: string; catId: string; catName: string };
+            const productsByBarcode: Record<string, ProductScope[]> = {};
+            const productsByReduced: Record<string, ProductScope[]> = {};
 
-            rowsGroups.forEach((row) => {
-                if (!row || row.length < 8) return;
-                const valF = row[5]?.toString().trim() || "";
-                const matchF = valF.match(/(\d+)/);
-                if (matchF) {
-                    const idNum = parseInt(matchF[1]);
-                    if (ALLOWED_IDS.includes(idNum)) {
-                        currentGroupId = idNum.toString();
-                        currentGroupName = row[7]?.toString().trim() || GROUP_CONFIG_DEFAULTS[currentGroupId] || `Grupo ${currentGroupId}`;
-                    }
+            const addScope = (bucket: Record<string, ProductScope[]>, key: string, scope: ProductScope) => {
+                if (!key) return;
+                const deptKey = scope.deptId || scope.deptName;
+                const catKey = scope.catId || scope.catName;
+                const scopeKey = `${scope.groupId}|${deptKey}|${catKey}`;
+                const list = bucket[key] || [];
+                if (!list.some(s => {
+                    const existingDeptKey = s.deptId || s.deptName;
+                    const existingCatKey = s.catId || s.catName;
+                    return `${s.groupId}|${existingDeptKey}|${existingCatKey}` === scopeKey;
+                })) {
+                    list.push(scope);
+                    bucket[key] = list;
                 }
-                if (currentGroupId) {
-                    const barcode = normalizeBarcode(row[11]);
-                    if (barcode) {
-                        productsLookup[barcode] = {
-                            groupId: currentGroupId,
-                            groupName: currentGroupName,
-                            deptName: row[19]?.toString() || "OUTROS",
-                            catName: row[23]?.toString() || "GERAL"
-                        };
-                    }
-                }
+            };
+
+            const groupFileRows = selectedGroupFiles.map((entry, idx) => ({
+                groupId: entry.groupId,
+                rows: rowsGroupsByFile[idx] || []
+            }));
+
+            groupFileRows.forEach(({ groupId, rows }) => {
+                const groupName = GROUP_CONFIG_DEFAULTS[groupId] || `Grupo ${groupId}`;
+
+                rows.forEach((row) => {
+                    if (!row || row.length < 4) return;
+
+                    // Cadastro individual: K = código de barras, C = código reduzido, S = departamento, W = categoria
+                    const barcodeFromCadastro = normalizeBarcode(row[10]);
+                    const reducedFromCadastro = normalizeBarcode(row[2]);
+                    if (!barcodeFromCadastro && !reducedFromCadastro) return;
+
+                    const deptCell = parseHierarchyCell(row[18], "OUTROS");
+                    const catCell = parseHierarchyCell(row[22], "GERAL");
+
+                    const scope: ProductScope = {
+                        groupId,
+                        groupName,
+                        deptId: deptCell.numericId,
+                        deptName: deptCell.name,
+                        catId: catCell.numericId,
+                        catName: catCell.name
+                    };
+
+                    addScope(productsByBarcode, barcodeFromCadastro, scope);
+                    addScope(productsByReduced, reducedFromCadastro, scope);
+                });
             });
 
             const groupsMap: Record<string, Group> = {};
             rowsStock.forEach((row) => {
                 if (!row || row.length < 14) return;
+                // Estoque: B = código de barras
                 const barcode = normalizeBarcode(row[1]);
                 const productName = row[4]?.toString() || "Sem Descrição";
                 const stockQty = parseFloat(row[13]?.toString() || "0");
                 const stockCost = parseFloat(row[9]?.toString() || "0"); // Coluna J
 
-                if (barcode && stockQty > 0) {
-                    const productInfo = productsLookup[barcode];
-                    if (productInfo) {
-                        const isMargemZero = productInfo.groupId === "66" || productInfo.groupId === "67";
-                        const finalGroupId = isMargemZero ? "66+67" : productInfo.groupId;
-                        const finalGroupName = isMargemZero ? "Genérico + Similar sem margem" : productInfo.groupName;
+                if (stockQty > 0) {
+                    // Fallback por código reduzido caso o barcode não esteja no cadastro
+                    const reducedCandidates = [
+                        normalizeBarcode(row[2]), // C
+                        normalizeBarcode(row[7]), // H
+                        normalizeBarcode(row[0])  // A
+                    ].filter(Boolean);
+                    const reduced = reducedCandidates[0] || "";
+
+                    const byBarcode = barcode ? (productsByBarcode[barcode] || []) : [];
+                    const byReduced = reduced ? (productsByReduced[reduced] || []) : [];
+                    const mergedMap = new Map<string, ProductScope>();
+                    [...byBarcode, ...byReduced].forEach(scope => {
+                        const deptKey = scope.deptId || scope.deptName;
+                        const catKey = scope.catId || scope.catName;
+                        mergedMap.set(`${scope.groupId}|${deptKey}|${catKey}`, scope);
+                    });
+                    const productInfos = Array.from(mergedMap.values());
+                    if (productInfos.length === 0) return;
+
+                    productInfos.forEach(productInfo => {
+                        const finalGroupId = productInfo.groupId;
+                        const finalGroupName = productInfo.groupName;
 
                         if (!groupsMap[finalGroupId]) groupsMap[finalGroupId] = { id: finalGroupId, name: finalGroupName, departments: [] };
 
-                        let dept = groupsMap[finalGroupId].departments.find(d => d.name === productInfo.deptName);
+                        const deptIdentity = productInfo.deptId || productInfo.deptName;
+                        let dept = groupsMap[finalGroupId].departments.find(d => d.id === deptIdentity || d.name === productInfo.deptName);
                         const resolvedDeptId = deptIdMaps.barcodeToId[barcode] || deptIdMaps.nameToId[cleanDescription(productInfo.deptName)] || "";
                         if (!dept) {
-                            dept = { id: productInfo.deptName, numericId: resolvedDeptId, name: productInfo.deptName, categories: [] };
+                            dept = {
+                                id: deptIdentity,
+                                numericId: productInfo.deptId || resolvedDeptId || undefined,
+                                name: productInfo.deptName,
+                                categories: []
+                            };
                             groupsMap[finalGroupId].departments.push(dept);
-                        } else if (!dept.numericId && resolvedDeptId) dept.numericId = resolvedDeptId;
+                        } else if (!dept.numericId && (productInfo.deptId || resolvedDeptId)) {
+                            dept.numericId = productInfo.deptId || resolvedDeptId;
+                        }
 
-                        let cat = dept.categories.find(c => c.name === productInfo.catName);
+                        const catIdentity = productInfo.catId || productInfo.catName;
+                        const catNodeId = `${finalGroupId}-${deptIdentity}-${catIdentity}`;
+                        let cat = dept.categories.find(c => c.id === catNodeId || c.name === productInfo.catName);
                         const resolvedCatId = catIdMaps.barcodeToId[barcode] || catIdMaps.nameToId[cleanDescription(productInfo.catName)] || "";
                         if (!cat) {
                             cat = {
-                                id: `${finalGroupId}-${productInfo.deptName}-${productInfo.catName}`,
-                                numericId: resolvedCatId,
+                                id: catNodeId,
+                                numericId: productInfo.catId || resolvedCatId || undefined,
                                 name: productInfo.catName,
                                 itemsCount: 0,
                                 totalQuantity: 0,
@@ -657,24 +895,57 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 products: []
                             };
                             dept.categories.push(cat);
-                        } else if (!cat.numericId && resolvedCatId) cat.numericId = resolvedCatId;
+                        } else if (!cat.numericId && (productInfo.catId || resolvedCatId)) {
+                            cat.numericId = productInfo.catId || resolvedCatId;
+                        }
 
                         cat.itemsCount++;
                         cat.totalQuantity += stockQty;
                         cat.totalCost += (stockQty * stockCost);
                         cat.products.push({ code: barcode, name: productName, quantity: stockQty, cost: stockCost });
-                    }
+                    });
                 }
             });
 
-            setData({
+            const nextData: AuditData = {
                 groups: Object.values(groupsMap).sort((a, b) => parseInt(a.id.split('+')[0]) - parseInt(b.id.split('+')[0])),
                 empresa: selectedEmpresa,
                 filial: selectedFilial,
                 inventoryNumber: inventoryNumber.trim()
+            };
+            const persistedData = {
+                ...nextData,
+                termDrafts: {},
+                sourceFiles: buildStructureSourceMeta()
+            } as any;
+            const progress = calculateProgress(nextData);
+            const savedSession = await upsertAuditSession({
+                id: dbSessionId,
+                branch: selectedFilial,
+                audit_number: nextAuditNumber,
+                status: 'open',
+                data: persistedData,
+                progress: progress,
+                user_email: userEmail
             });
+            if (!savedSession) {
+                throw new Error("Falha ao salvar auditoria inicial no Supabase.");
+            }
+
+            setDbSessionId(savedSession.id);
+            setNextAuditNumber(savedSession.audit_number);
+            setTermDrafts({});
+            setData((savedSession.data as AuditData) || nextData);
+            setGroupFiles(createInitialGroupFiles());
+            setFileDeptIds(null);
+            setFileCatIds(null);
+            setFileStock(null);
+            setIsUpdatingStock(false);
             setView({ level: 'groups' });
-        } catch (err) { alert("Erro ao processar arquivos."); console.error(err); }
+        } catch (err) {
+            alert("Erro ao processar/salvar arquivos da auditoria.");
+            console.error(err);
+        }
         finally { setIsProcessing(false); }
     };
 
@@ -709,11 +980,28 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             if (!payload || !payload.groups) {
                 throw new Error("Resposta invalida do servidor Trier.");
             }
-            setData({ ...payload, inventoryNumber: inventoryNumber.trim() || payload.inventoryNumber || "" });
+            const nextData = { ...payload, inventoryNumber: inventoryNumber.trim() || payload.inventoryNumber || "" };
+            const progress = calculateProgress(nextData as AuditData);
+            const savedSession = await upsertAuditSession({
+                id: dbSessionId,
+                branch: selectedFilial,
+                audit_number: nextAuditNumber,
+                status: 'open',
+                data: nextData as any,
+                progress: progress,
+                user_email: userEmail
+            });
+            if (!savedSession) {
+                throw new Error("Falha ao salvar dados iniciais do Trier no Supabase.");
+            }
+
+            setDbSessionId(savedSession.id);
+            setNextAuditNumber(savedSession.audit_number);
+            setData((savedSession.data as AuditData) || (nextData as AuditData));
             setView({ level: 'groups' });
             setInitialDoneUnits(0);
             setSessionStartTime(Date.now());
-            setFileGroups(null);
+            setGroupFiles(createInitialGroupFiles());
             setFileStock(null);
             setFileDeptIds(null);
             setFileCatIds(null);
@@ -1991,6 +2279,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     }, [data?.partialCompleted]);
 
     if (!data || isUpdatingStock) {
+        const structureLocked = !!(data && data.groups && data.groups.length > 0);
         return (
             <div className="min-h-screen bg-slate-950 flex items-center justify-center p-6 font-sans">
                 <div className="max-w-2xl w-full bg-white rounded-[2rem] shadow-2xl overflow-hidden">
@@ -2023,26 +2312,67 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 </div>
                             </div>
                         </div>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                            {[
-                                { f: fileGroups, set: setFileGroups, label: 'Estrutura' },
-                                { f: fileStock, set: setFileStock, label: 'Saldos' },
-                                { f: fileDeptIds, set: setFileDeptIds, label: 'IDs Depto' },
-                                { f: fileCatIds, set: setFileCatIds, label: 'IDs Cat' }
-                            ].map((item, i) => {
-                                const isDisabled = (isUpdatingStock && item.label !== 'Saldos') || !isMaster;
+                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                            {GROUP_UPLOAD_IDS.map((groupId) => {
+                                const selectedFile = groupFiles[groupId];
                                 return (
-                                    <label key={i} className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${isDisabled ? 'opacity-30 cursor-not-allowed' : ''} ${item.f ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
-                                        <input type="file" className="hidden" disabled={isDisabled} onChange={e => item.set(e.target.files?.[0] || null)} />
-                                        <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${item.f ? 'text-emerald-500' : 'text-slate-300'}`} />
-                                        <p className="text-[8px] font-black uppercase truncate">{item.f ? item.f.name : item.label}</p>
+                                    <label
+                                        key={`group-upload-${groupId}`}
+                                        className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${(!isMaster || structureLocked) ? 'opacity-30 cursor-not-allowed' : ''} ${selectedFile ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}
+                                    >
+                                        <input
+                                            type="file"
+                                            className="hidden"
+                                            disabled={!isMaster || structureLocked}
+                                            onChange={e => setGroupFile(groupId, e.target.files?.[0] || null)}
+                                        />
+                                        <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${selectedFile ? 'text-emerald-500' : 'text-slate-300'}`} />
+                                        <p className="text-[8px] font-black uppercase truncate">{selectedFile ? selectedFile.name : `Cadastro ${groupId}`}</p>
+                                        <p className="text-[8px] font-bold text-slate-500 mt-1">
+                                            {selectedFile ? `Grupo ${groupId} carregado` : `Grupo ${groupId}`}
+                                        </p>
                                     </label>
                                 );
                             })}
+
+                            <label className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${!isMaster ? 'opacity-30 cursor-not-allowed' : ''} ${fileStock ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
+                                <input type="file" className="hidden" disabled={!isMaster} onChange={e => setFileStock(e.target.files?.[0] || null)} />
+                                <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${fileStock ? 'text-emerald-500' : 'text-slate-300'}`} />
+                                <p className="text-[8px] font-black uppercase truncate">{fileStock ? fileStock.name : 'Saldos'}</p>
+                            </label>
+
+                            <label className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${(!isMaster || structureLocked) ? 'opacity-30 cursor-not-allowed' : ''} ${fileDeptIds ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
+                                <input type="file" className="hidden" disabled={!isMaster || structureLocked} onChange={e => setFileDeptIds(e.target.files?.[0] || null)} />
+                                <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${fileDeptIds ? 'text-emerald-500' : 'text-slate-300'}`} />
+                                <p className="text-[8px] font-black uppercase truncate">{fileDeptIds ? fileDeptIds.name : 'IDs Depto (opcional)'}</p>
+                            </label>
+
+                            <label className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${(!isMaster || structureLocked) ? 'opacity-30 cursor-not-allowed' : ''} ${fileCatIds ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
+                                <input type="file" className="hidden" disabled={!isMaster || structureLocked} onChange={e => setFileCatIds(e.target.files?.[0] || null)} />
+                                <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${fileCatIds ? 'text-emerald-500' : 'text-slate-300'}`} />
+                                <p className="text-[8px] font-black uppercase truncate">{fileCatIds ? fileCatIds.name : 'IDs Cat (opcional)'}</p>
+                            </label>
                         </div>
+                        {structureLocked && (
+                            <p className="text-[10px] font-bold text-amber-600">
+                                Estrutura já iniciada nesta auditoria. Após o início, somente o arquivo de SALDOS pode ser alterado.
+                            </p>
+                        )}
+                        <p className="text-[10px] font-bold text-slate-500">
+                            Cadastros por grupo carregados em caixas fixas (2000, 3000, 4000, 8000, 10000, 66 e 67). Carregados: <span className="text-slate-700">{selectedGroupFiles.length}/{GROUP_UPLOAD_IDS.length}</span>.
+                        </p>
+                        <p className="text-[10px] font-bold text-slate-500">
+                            Classificação: cruza <span className="text-slate-700">Estoque B</span> com <span className="text-slate-700">Cadastro K</span> (fallback por código reduzido), e lê <span className="text-slate-700">Departamento S</span> + <span className="text-slate-700">Categoria W</span>.
+                        </p>
                         <div className="space-y-3">
                             <button onClick={handleStartAudit} disabled={isProcessing || !isMaster} className={`w-full py-4 rounded-xl text-white font-black uppercase tracking-widest transition-all shadow-xl active:scale-95 ${isProcessing || !isMaster ? 'bg-slate-300 cursor-not-allowed' : 'bg-slate-900 hover:bg-indigo-600'}`}>
-                                {isProcessing ? 'Sincronizando Banco de Dados...' : isMaster ? 'Iniciar Inventário Master' : 'Apenas Master pode Iniciar'}
+                                {isProcessing
+                                    ? 'Sincronizando Banco de Dados...'
+                                    : isMaster
+                                        ? (isUpdatingStock
+                                            ? 'Atualizar Somente Saldos'
+                                            : 'Iniciar Inventário Master')
+                                        : 'Apenas Master pode Iniciar'}
                             </button>
                             <button onClick={handleLoadFromTrier} disabled={isTrierLoading || !isMaster} className={`w-full py-4 rounded-xl text-white font-black uppercase tracking-widest transition-all shadow-xl active:scale-95 flex items-center justify-center gap-2 ${isTrierLoading || !isMaster ? 'bg-slate-300 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-500'}`}>
                                 <Activity className="w-5 h-5" />
@@ -2094,7 +2424,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     </button>
                     {Math.round(branchMetrics.progress) === 100 && (
                         <button onClick={handleFinishAudit} disabled={!isMaster} className={`px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all shadow-lg ${!isMaster ? 'bg-slate-400 opacity-50 cursor-not-allowed' : 'bg-emerald-500 hover:bg-emerald-400 animate-pulse'}`}>
-                            <CheckSquare className="w-4 h-4" /> CONCLUIR AUDITORIA
+                            <CheckSquare className="w-4 h-4" /> ENCERRAR INVENTÁRIO Nº {nextAuditNumber}
                         </button>
                     )}
                     <button onClick={handleSafeExit} className="w-10 h-10 rounded-xl bg-red-600/20 text-red-500 border border-red-500/30 flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-lg active:scale-90" title="Sair e Salvar">
