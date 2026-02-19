@@ -4,7 +4,6 @@ import { CHECKLISTS as BASE_CHECKLISTS, THEMES, ACCESS_MODULES, ACCESS_LEVELS, I
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem, ThemeColor, AppConfig, User, ReportHistoryItem, StockConferenceHistoryItem, CompanyArea, AccessLevelId, AccessModule, AccessLevelMeta, UserRole, StockConferenceSummary } from './types';
 import PreVencidosManager from './components/preVencidos/PreVencidosManager';
 import AuditModule from './components/auditoria/AuditModule';
-import { clearLocalPVReports, clearLocalPVSession } from './preVencidos/storage';
 import SignaturePad from './components/SignaturePad';
 import { StockConference } from './components/StockConference';
 import { supabase } from './supabaseClient';
@@ -1978,10 +1977,6 @@ const App: React.FC = () => {
                 source: window.location.pathname || 'web',
                 event_meta: { view: currentView }
             }).catch(() => { });
-        }
-        if (currentUser?.email) {
-            clearLocalPVSession(currentUser.email);
-            clearLocalPVReports(currentUser.email).catch(() => { });
         }
         // Clear persisted session on logout
         localStorage.removeItem('APP_CURRENT_EMAIL');

@@ -71,7 +71,9 @@ interface PreVencidosManagerProps {
   userEmail?: string;
   userName?: string;
   userRole?: UserRole;
+  userBranch?: string | null;
   companies: DbCompany[];
+  onLogout?: () => void;
 }
 
 const CONFIRMED_META_KEY = '__pv_meta__';
@@ -146,7 +148,16 @@ const normalizeBarcode = (value?: string) => {
   return raw.replace(/\D/g, '');
 };
 
-const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, userName, userRole, companies = [] }) => {
+const buildSetupDraftKey = (email: string) => `PV_SETUP_DRAFT_${(email || '').trim().toLowerCase()}`;
+
+const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
+  userEmail,
+  userName,
+  userRole,
+  userBranch,
+  companies = [],
+  onLogout
+}) => {
   const [currentView, setCurrentView] = useState<AppView>(AppView.SETUP);
   const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
   const [hasCompletedSetup, setHasCompletedSetup] = useState(false);
@@ -164,6 +175,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   const [isLoadingSession, setIsLoadingSession] = useState(false);
   const [isClearingDashboard, setIsClearingDashboard] = useState(false);
   const [isInitialSyncDone, setIsInitialSyncDone] = useState(false);
+  const [reportsSyncStatus, setReportsSyncStatus] = useState<'idle' | 'loading' | 'ready' | 'missing' | 'error'>('idle');
+  const [reportsReady, setReportsReady] = useState(false);
+  const [reportSyncedAt, setReportSyncedAt] = useState<{ system: string | null; dcb: string | null }>({ system: null, dcb: null });
+  const [pendingReportPersist, setPendingReportPersist] = useState<{ system: boolean; dcb: boolean }>({ system: false, dcb: false });
+  const [setupDraftInfo, setSetupDraftInfo] = useState<SessionInfo | null>(null);
+  const [isBranchPrefetching, setIsBranchPrefetching] = useState(false);
+  const [branchPrefetchReady, setBranchPrefetchReady] = useState(false);
+  const [branchPrefetchError, setBranchPrefetchError] = useState<string | null>(null);
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const [salesUploads, setSalesUploads] = useState<DbPVSalesUpload[]>([]);
   const [analysisReports, setAnalysisReports] = useState<Record<string, AnalysisReportPayload>>({});
@@ -203,6 +222,40 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       return filterRecentPVEvents([event, ...filtered]);
     });
   };
+
+  const handleSetupInfoChange = useCallback((info: SessionInfo) => {
+    if (!info || (!info.companyId && !info.filial)) {
+      setSetupDraftInfo(null);
+      if (userEmail && typeof window !== 'undefined') {
+        window.localStorage.removeItem(buildSetupDraftKey(userEmail));
+      }
+      return;
+    }
+    setSetupDraftInfo(info);
+    if (userEmail && typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(buildSetupDraftKey(userEmail), JSON.stringify(info));
+      } catch (error) {
+        console.error('Erro ao salvar rascunho da configuração PV:', error);
+      }
+    }
+  }, [userEmail]);
+
+  const handleSystemProductsUpload = useCallback(async (file: File) => {
+    const parsed = await parseSystemProductsXLSX(file);
+    setSystemProducts(parsed);
+    setReportsReady(false);
+    setReportsSyncStatus('loading');
+    setPendingReportPersist(prev => ({ ...prev, system: true }));
+  }, []);
+
+  const handleDCBBaseUpload = useCallback(async (file: File) => {
+    const parsed = await parseDCBProductsXLSX(file);
+    setDcbBaseProducts(parsed);
+    setReportsReady(false);
+    setReportsSyncStatus('loading');
+    setPendingReportPersist(prev => ({ ...prev, dcb: true }));
+  }, []);
 
   const buildInventoryMaps = useCallback((records: { barcode: string; cost: number; stock?: number; reducedCode?: string }[]) => {
     const costMap: Record<string, number> = {};
@@ -250,17 +303,101 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   }, []);
 
   useEffect(() => {
-    if (!userEmail) return;
+    if (currentView !== AppView.SETUP) return;
+    if (!setupDraftInfo?.companyId || !setupDraftInfo?.filial) {
+      setIsBranchPrefetching(false);
+      setBranchPrefetchReady(false);
+      setBranchPrefetchError(null);
+      return;
+    }
 
-    const handleBeforeUnload = () => {
-      clearLocalPVSession(userEmail);
+    let cancelled = false;
+    const companyId = setupDraftInfo.companyId;
+    const branch = setupDraftInfo.filial;
+
+    const preloadBranchAssets = async () => {
+      setIsBranchPrefetching(true);
+      setBranchPrefetchReady(false);
+      setBranchPrefetchError(null);
+      setSalesUploads([]);
+      setSalesRecords([]);
+      setSalesPeriod('');
+      setConfirmedPVSales({});
+      setFinalizedREDSByPeriod({});
+      setLocalLastUpload(null);
+      setInventoryReport(null);
+      setInventoryCostByBarcode({});
+      setInventoryStockByBarcode({});
+
+      try {
+        const [inventoryRes, activeSalesRes, uploadsRes] = await Promise.allSettled([
+          fetchPVInventoryReport(companyId, branch),
+          fetchActiveSalesReport(companyId, branch),
+          fetchPVSalesUploads(companyId, branch)
+        ]);
+
+        if (cancelled) return;
+
+        const inventory = inventoryRes.status === 'fulfilled' ? inventoryRes.value : null;
+        const activeSales = activeSalesRes.status === 'fulfilled' ? activeSalesRes.value : null;
+        const uploads = uploadsRes.status === 'fulfilled' ? uploadsRes.value : [];
+
+        if (inventory) {
+          setInventoryReport(inventory);
+          buildInventoryMaps(inventory.records || []);
+        }
+
+        if (activeSales) {
+          if (activeSales.sales_records && activeSales.sales_records.length > 0) {
+            setSalesRecords(activeSales.sales_records);
+          }
+          setSalesPeriod(activeSales.sales_period || '');
+          const { confirmed, finalized } = extractConfirmedSalesPayload(activeSales.confirmed_sales || null);
+          setConfirmedPVSales(confirmed);
+          setFinalizedREDSByPeriod(finalized);
+
+          if (activeSales.sales_period || activeSales.uploaded_at) {
+            setLocalLastUpload({
+              period_label: activeSales.sales_period,
+              file_name: activeSales.file_name || 'Relatório Ativo',
+              uploaded_at: activeSales.uploaded_at || new Date().toISOString(),
+              user_email: activeSales.user_email || '',
+              company_id: activeSales.company_id,
+              branch: activeSales.branch,
+              period_start: null,
+              period_end: null
+            });
+          }
+        }
+
+        setSalesUploads(Array.isArray(uploads) ? uploads : []);
+        setBranchPrefetchReady(true);
+        const allFailed =
+          inventoryRes.status === 'rejected' &&
+          activeSalesRes.status === 'rejected' &&
+          uploadsRes.status === 'rejected';
+        if (allFailed) {
+          setBranchPrefetchError('Não foi possível carregar os dados da filial.');
+        } else {
+          setBranchPrefetchError(null);
+        }
+      } catch (error) {
+        console.error('Erro ao pré-carregar dados da filial:', error);
+        if (!cancelled) {
+          setBranchPrefetchReady(true);
+          setBranchPrefetchError('Não foi possível carregar os dados da filial.');
+        }
+      } finally {
+        if (!cancelled) setIsBranchPrefetching(false);
+      }
     };
 
-    window.addEventListener('beforeunload', handleBeforeUnload);
+    preloadBranchAssets();
+
     return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
+      cancelled = true;
     };
-  }, [userEmail]);
+  }, [currentView, setupDraftInfo?.companyId, setupDraftInfo?.filial, buildInventoryMaps]);
 
   useEffect(() => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) {
@@ -332,41 +469,67 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
     const syncReports = async () => {
       try {
+        setReportsSyncStatus('loading');
+        setReportsReady(false);
         // 1. Tentar carregar localmente primeiro para velocidade
         const storedReports = await loadLocalPVReports(userEmail);
         if (cancelled) return;
 
-        let reportsToUse = storedReports;
-
         // 2. Se não houver local, ou para garantir sincronia, buscar do Supabase
         console.log('🔄 [PV Sync] Buscando relatórios do Supabase para:', userEmail);
-        const dbReports = await fetchPVReports(userEmail);
+        const reportLookupCompanyId = setupDraftInfo?.companyId || sessionInfo?.companyId || null;
+        const reportLookupBranch = setupDraftInfo?.filial || sessionInfo?.filial || null;
+        const dbReports = await fetchPVReports(userEmail, {
+          companyId: reportLookupCompanyId,
+          branch: reportLookupBranch
+        });
         if (cancelled) return;
 
-        if (dbReports.length > 0) {
-          const systemReport = dbReports.find(r => r.report_type === 'system');
-          const dcbReport = dbReports.find(r => r.report_type === 'dcb');
+        const systemReport = dbReports.find(r => r.report_type === 'system');
+        const dcbReport = dbReports.find(r => r.report_type === 'dcb');
 
-          // Lógica de merge: usar o do banco se for mais completo ou se não houver local
-          const finalSystem = systemReport?.products || storedReports?.systemProducts || [];
-          const finalDcb = dcbReport?.products || storedReports?.dcbProducts || [];
+        const localSystem = storedReports?.systemProducts || [];
+        const localDcb = storedReports?.dcbProducts || [];
+        const finalSystem = Array.isArray(systemReport?.products) && systemReport.products.length > 0
+          ? systemReport.products
+          : localSystem;
+        const finalDcb = Array.isArray(dcbReport?.products) && dcbReport.products.length > 0
+          ? dcbReport.products
+          : localDcb;
 
-          if (finalSystem.length) setSystemProducts(finalSystem);
-          if (finalDcb.length) setDcbBaseProducts(finalDcb);
+        const dbSystemSyncedAt = systemReport?.updated_at || systemReport?.created_at || null;
+        const dbDcbSyncedAt = dcbReport?.updated_at || dcbReport?.created_at || null;
+        if (dbSystemSyncedAt || dbDcbSyncedAt) {
+          setReportSyncedAt(prev => ({
+            system: dbSystemSyncedAt || prev.system,
+            dcb: dbDcbSyncedAt || prev.dcb
+          }));
+        }
 
+        if (finalSystem.length) setSystemProducts(finalSystem);
+        if (finalDcb.length) setDcbBaseProducts(finalDcb);
+        setPendingReportPersist({ system: false, dcb: false });
+
+        if (dbReports.length > 0 || finalSystem.length > 0 || finalDcb.length > 0) {
           console.log(`✅ [PV Sync] Carregados do DB: ${finalSystem.length} sistem, ${finalDcb.length} dcb`);
+          saveLocalPVReports(userEmail, {
+            systemProducts: finalSystem,
+            dcbProducts: finalDcb
+          });
+        }
 
-          // Salvar localmente o que veio do banco para consistência
-          if (dbReports.length > 0) {
-            saveLocalPVReports(userEmail, {
-              systemProducts: finalSystem,
-              dcbProducts: finalDcb
-            });
-          }
-        } else if (storedReports) {
-          // Se só houver local, carregar o local
-          if (storedReports.systemProducts?.length) setSystemProducts(storedReports.systemProducts);
-          if (storedReports.dcbProducts?.length) setDcbBaseProducts(storedReports.dcbProducts);
+        const hasDbSystem = dbReports.some(r => r.report_type === 'system' && Array.isArray(r.products) && r.products.length > 0);
+        const hasDbDcb = dbReports.some(r => r.report_type === 'dcb' && Array.isArray(r.products) && r.products.length > 0);
+        const hasEffectiveSystem = finalSystem.length > 0;
+        const hasEffectiveDcb = finalDcb.length > 0;
+        const ready = (hasDbSystem && hasDbDcb) || (hasEffectiveSystem && hasEffectiveDcb);
+        setReportsReady(ready);
+        setReportsSyncStatus(ready ? 'ready' : 'missing');
+      } catch (error) {
+        console.error('Erro ao sincronizar relatórios PV:', error);
+        if (!cancelled) {
+          setReportsReady(false);
+          setReportsSyncStatus('error');
         }
       } finally {
         if (!cancelled) setIsInitialSyncDone(true);
@@ -378,7 +541,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     return () => {
       cancelled = true;
     };
-  }, [userEmail]);
+  }, [userEmail, setupDraftInfo?.companyId, setupDraftInfo?.filial, sessionInfo?.companyId, sessionInfo?.filial]);
 
   const applySessionFromData = useCallback((session: DbPVSession) => {
     const data = session.session_data || {};
@@ -393,6 +556,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     // Restore base products so user doesn't need to re-upload
     if (data.system_products?.length) setSystemProducts(data.system_products);
     if (data.dcb_products?.length) setDcbBaseProducts(data.dcb_products);
+    setPendingReportPersist({ system: false, dcb: false });
 
     // Restore Session Context (Company, Branch, etc.)
     if (session.company_id && session.branch) {
@@ -427,6 +591,20 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
 
     let isMounted = true;
     setIsLoadingSession(true);
+
+    if (typeof window !== 'undefined') {
+      try {
+        const rawDraft = window.localStorage.getItem(buildSetupDraftKey(userEmail));
+        if (rawDraft) {
+          const parsedDraft = JSON.parse(rawDraft) as SessionInfo;
+          if (parsedDraft && (parsedDraft.companyId || parsedDraft.filial || parsedDraft.pharmacist || parsedDraft.manager)) {
+            setSetupDraftInfo(parsedDraft);
+          }
+        }
+      } catch (error) {
+        console.error('Erro ao carregar rascunho da configuração PV:', error);
+      }
+    }
 
     const localSession = loadLocalPVSession(userEmail);
     if (localSession) {
@@ -521,46 +699,100 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
   useEffect(() => {
     if (!userEmail || !isInitialSyncDone) return;
 
+    // Salvar localmente sempre que houver mudança para restauração rápida
+    if (systemProducts.length > 0 || dcbBaseProducts.length > 0) {
+      saveLocalPVReports(userEmail, {
+        systemProducts,
+        dcbProducts: dcbBaseProducts
+      }).catch(error => console.error('Erro ao salvar relatórios PV locais:', error));
+    }
+
+    // Evita escrita pesada no Supabase quando os dados vieram do próprio banco
+    if (!pendingReportPersist.system && !pendingReportPersist.dcb) return;
+
     if (systemProducts.length === 0 && dcbBaseProducts.length === 0) {
       clearLocalPVReports(userEmail).catch(() => { });
       deletePVReports(userEmail).catch(() => { });
+      setReportsReady(false);
+      setReportsSyncStatus('missing');
+      setReportSyncedAt({ system: null, dcb: null });
+      setPendingReportPersist({ system: false, dcb: false });
       return;
     }
 
-    // Salvar localmente
-    saveLocalPVReports(userEmail, {
-      systemProducts,
-      dcbProducts: dcbBaseProducts
-    }).catch(error => console.error('Erro ao salvar relatórios PV locais:', error));
-
-    // Sincronizar com Supabase
     const persistToDb = async () => {
       try {
-        if (systemProducts.length > 0) {
-          await upsertPVReport({
+        const reportCompanyId = sessionInfo?.companyId || setupDraftInfo?.companyId || null;
+        const reportBranch = sessionInfo?.filial || setupDraftInfo?.filial || null;
+        let savedSystem = !pendingReportPersist.system;
+        let savedDcb = !pendingReportPersist.dcb;
+
+        if (pendingReportPersist.system && systemProducts.length > 0) {
+          const saved = await upsertPVReport({
             user_email: userEmail,
-            company_id: sessionInfo?.companyId,
-            branch: sessionInfo?.filial,
+            company_id: reportCompanyId || undefined,
+            branch: reportBranch || undefined,
             report_type: 'system',
             products: systemProducts
           });
+          savedSystem = !!saved;
+          if (saved?.updated_at || saved?.created_at) {
+            setReportSyncedAt(prev => ({
+              ...prev,
+              system: saved.updated_at || saved.created_at || prev.system
+            }));
+          }
         }
-        if (dcbBaseProducts.length > 0) {
-          await upsertPVReport({
+
+        if (pendingReportPersist.dcb && dcbBaseProducts.length > 0) {
+          const saved = await upsertPVReport({
             user_email: userEmail,
-            company_id: sessionInfo?.companyId,
-            branch: sessionInfo?.filial,
+            company_id: reportCompanyId || undefined,
+            branch: reportBranch || undefined,
             report_type: 'dcb',
             products: dcbBaseProducts
           });
+          savedDcb = !!saved;
+          if (saved?.updated_at || saved?.created_at) {
+            setReportSyncedAt(prev => ({
+              ...prev,
+              dcb: saved.updated_at || saved.created_at || prev.dcb
+            }));
+          }
+        }
+
+        setPendingReportPersist({
+          system: pendingReportPersist.system && !savedSystem,
+          dcb: pendingReportPersist.dcb && !savedDcb
+        });
+
+        if (savedSystem && savedDcb && systemProducts.length > 0 && dcbBaseProducts.length > 0) {
+          setReportsReady(true);
+          setReportsSyncStatus('ready');
+        } else {
+          setReportsReady(false);
+          setReportsSyncStatus('missing');
         }
       } catch (error) {
         console.error('Erro ao persistir relatórios no Supabase:', error);
+        setReportsReady(false);
+        setReportsSyncStatus('error');
       }
     };
 
     persistToDb();
-  }, [systemProducts, dcbBaseProducts, userEmail, sessionInfo?.companyId, sessionInfo?.filial]);
+  }, [
+    systemProducts,
+    dcbBaseProducts,
+    userEmail,
+    sessionInfo?.companyId,
+    sessionInfo?.filial,
+    setupDraftInfo?.companyId,
+    setupDraftInfo?.filial,
+    pendingReportPersist.system,
+    pendingReportPersist.dcb,
+    isInitialSyncDone
+  ]);
 
   const handleRefresh = async () => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
@@ -2237,6 +2469,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       await clearLocalPVReports(userEmail).catch(() => { });
       await deletePVReports(userEmail).catch(() => { });
       await deletePVSession(userEmail);
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem(buildSetupDraftKey(userEmail));
+      }
     }
 
     setHasCompletedSetup(false);
@@ -2260,6 +2495,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     setLocalLastUpload(null);
     setLastDashboardReport(null);
     setPvRecordEvents([]);
+    setReportSyncedAt({ system: null, dcb: null });
     setPdfPreview(null);
   };
 
@@ -2399,6 +2635,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       : expiryAlert.status === 'due'
         ? `${expiryAlert.current.toLocaleString('pt-BR')} vence(m) ${expiryAlert.periodLabel}`
         : `Sem vencimentos ${expiryAlert.periodLabel}`;
+  const headerInfo = sessionInfo || setupDraftInfo;
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden text-slate-900">
@@ -2498,17 +2735,17 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           <div className="flex items-center gap-6 flex-wrap">
             <div className="flex items-center gap-2 text-blue-600">
               <Building size={16} />
-              <span className="text-[10px] font-black uppercase tracking-widest">{sessionInfo?.company || 'DROGARIA CIDADE'}</span>
+              <span className="text-[10px] font-black uppercase tracking-widest">{headerInfo?.company || 'DROGARIA CIDADE'}</span>
             </div>
             <div className="w-px h-4 bg-slate-200"></div>
             <div className="flex items-center gap-2 text-slate-600 flex-wrap">
               <User size={16} className="text-blue-500" />
               <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Farmacêutico</span>
-              <span className="text-[10px] font-bold uppercase text-slate-700">{sessionInfo?.pharmacist || 'Convidado'}</span>
+              <span className="text-[10px] font-bold uppercase text-slate-700">{headerInfo?.pharmacist || 'Convidado'}</span>
               <span className="text-[9px] font-black uppercase tracking-widest text-slate-400 ml-2">Gestor</span>
-              <span className="text-[10px] font-bold uppercase text-slate-700">{sessionInfo?.manager || '-'}</span>
+              <span className="text-[10px] font-bold uppercase text-slate-700">{headerInfo?.manager || '-'}</span>
               <span className="text-[10px] text-white font-black bg-gradient-to-r from-blue-600 to-indigo-500 px-2.5 py-1 rounded-full shadow-lg shadow-blue-500/30 ring-1 ring-blue-300/60 whitespace-nowrap">
-                Filial: {sessionInfo?.filial || '-'}
+                Filial: {headerInfo?.filial || '-'}
               </span>
             </div>
           </div>
@@ -2551,6 +2788,31 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
           {currentView === AppView.SETUP && (
             <SetupView
               onComplete={(info) => {
+                if (userEmail) {
+                  const snapshot: DbPVSession = {
+                    id: pvSessionId || undefined,
+                    user_email: userEmail,
+                    company_id: info.companyId || null,
+                    branch: info.filial || '',
+                    area: info.area || '',
+                    pharmacist: info.pharmacist || '',
+                    manager: info.manager || '',
+                    session_data: {
+                      confirmed_pv_sales: confirmedPVSales,
+                      finalized_reds_by_period: finalizedREDSByPeriod,
+                      sales_period: salesPeriod,
+                      currentView: 'registration'
+                    },
+                    updated_at: new Date().toISOString()
+                  };
+                  saveLocalPVSession(userEmail, snapshot);
+                  upsertPVSession(snapshot).then(saved => {
+                    if (saved?.id) setPvSessionId(saved.id);
+                  }).catch(err => console.error('Erro ao salvar snapshot inicial da sessão PV:', err));
+                  if (typeof window !== 'undefined') {
+                    window.localStorage.removeItem(buildSetupDraftKey(userEmail));
+                  }
+                }
                 setSessionInfo(info);
                 // Only clear PV records as we are starting a fresh registration session
                 setPvRecords([]);
@@ -2583,13 +2845,24 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                 setHasCompletedSetup(true);
                 setCurrentView(AppView.REGISTRATION);
               }}
-              onSystemProductsUpload={async (f) => setSystemProducts(await parseSystemProductsXLSX(f))}
-              onDCBBaseUpload={async (f) => setDcbBaseProducts(await parseDCBProductsXLSX(f))}
+              onSystemProductsUpload={handleSystemProductsUpload}
+              onDCBBaseUpload={handleDCBBaseUpload}
               productsLoaded={masterProducts.length > 0}
               systemLoaded={systemProducts.length > 0}
               dcbLoaded={dcbBaseProducts.length > 0}
+              reportsReady={reportsReady}
+              reportsStatus={reportsSyncStatus}
+              isBranchPrefetching={isBranchPrefetching}
+              branchPrefetchReady={branchPrefetchReady}
+              branchPrefetchError={branchPrefetchError}
+              onInfoChange={handleSetupInfoChange}
+              initialInfo={setupDraftInfo}
+              userBranch={userBranch}
               companies={companies as any}
               uploadHistory={salesUploads}
+              inventoryReport={inventoryReport}
+              systemReportSyncedAt={reportSyncedAt.system}
+              dcbReportSyncedAt={reportSyncedAt.dcb}
             />
           )}
           {currentView === AppView.REGISTRATION && (

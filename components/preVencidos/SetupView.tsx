@@ -1,8 +1,8 @@
 
 import { User, Shield, FileText, Check, FlaskConical, FileCode, ArrowRight, Settings, Info, Building2, MapPin, Sparkles } from 'lucide-react';
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { SessionInfo } from '../../preVencidos/types';
-import { DbPVSalesUpload } from '../../supabaseService';
+import { DbPVInventoryReport, DbPVSalesUpload } from '../../supabaseService';
 
 interface SetupViewProps {
   onComplete: (info: SessionInfo) => void;
@@ -11,12 +11,23 @@ interface SetupViewProps {
   productsLoaded: boolean;
   systemLoaded: boolean;
   dcbLoaded: boolean;
+  reportsReady: boolean;
+  reportsStatus?: 'idle' | 'loading' | 'ready' | 'missing' | 'error';
+  isBranchPrefetching?: boolean;
+  branchPrefetchReady?: boolean;
+  branchPrefetchError?: string | null;
+  onInfoChange?: (info: SessionInfo) => void;
+  initialInfo?: SessionInfo | null;
+  userBranch?: string | null;
   companies: {
     id: string;
     name: string;
     areas?: { name: string; branches: string[] }[];
   }[];
   uploadHistory?: DbPVSalesUpload[];
+  inventoryReport?: DbPVInventoryReport | null;
+  systemReportSyncedAt?: string | null;
+  dcbReportSyncedAt?: string | null;
 }
 
 const SetupView: React.FC<SetupViewProps> = ({
@@ -26,8 +37,19 @@ const SetupView: React.FC<SetupViewProps> = ({
   productsLoaded,
   systemLoaded,
   dcbLoaded,
+  reportsReady,
+  reportsStatus = 'idle',
+  isBranchPrefetching = false,
+  branchPrefetchReady = false,
+  branchPrefetchError,
+  onInfoChange,
+  initialInfo,
+  userBranch,
   companies,
-  uploadHistory
+  uploadHistory,
+  inventoryReport,
+  systemReportSyncedAt,
+  dcbReportSyncedAt
 }) => {
   const [info, setInfo] = useState<SessionInfo>({
     company: '',
@@ -37,6 +59,25 @@ const SetupView: React.FC<SetupViewProps> = ({
     manager: '',
     companyId: undefined
   });
+
+  useEffect(() => {
+    if (!initialInfo) return;
+    setInfo({
+      company: initialInfo.company || '',
+      filial: initialInfo.filial || '',
+      area: initialInfo.area || '',
+      pharmacist: initialInfo.pharmacist || '',
+      manager: initialInfo.manager || '',
+      companyId: initialInfo.companyId
+    });
+  }, [
+    initialInfo?.companyId,
+    initialInfo?.company,
+    initialInfo?.filial,
+    initialInfo?.area,
+    initialInfo?.pharmacist,
+    initialInfo?.manager
+  ]);
 
   const selectedCompany = companies.find(company => company.id === info.companyId);
   const branchOptions = useMemo(() => {
@@ -50,28 +91,40 @@ const SetupView: React.FC<SetupViewProps> = ({
     });
   }, [selectedCompany]);
 
+  const emitInfoChange = (nextInfo: SessionInfo) => {
+    if (onInfoChange) onInfoChange(nextInfo);
+  };
+
   const handleCompanyChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     const selected = companies.find(company => company.id === event.target.value);
-    setInfo(prev => ({
-      ...prev,
+    const nextInfo = {
+      ...info,
       companyId: event.target.value as string,
       company: selected?.name || '',
       filial: '',
       area: ''
-    }));
+    };
+    setInfo(nextInfo);
+    emitInfoChange(nextInfo);
   };
 
   const handleBranchChange = (event: React.ChangeEvent<HTMLSelectElement | HTMLInputElement>) => {
     const branchValue = event.target.value;
     const found = branchOptions.find(option => option.branchName === branchValue);
-    setInfo(prev => ({
-      ...prev,
+    const nextInfo = {
+      ...info,
       filial: branchValue,
-      area: found?.areaName || prev.area
-    }));
+      area: found?.areaName || info.area
+    };
+    setInfo(nextInfo);
+    emitInfoChange(nextInfo);
+    if (userBranch && branchValue && branchValue !== userBranch) {
+      alert(`Atenção: você está entrando na filial ${branchValue}, diferente da filial cadastrada (${userBranch}).`);
+    }
   };
 
   const isFormValid = !!info.companyId && info.filial && info.pharmacist && info.manager && systemLoaded && dcbLoaded;
+  const canStart = isFormValid && reportsReady && !isBranchPrefetching && !branchPrefetchError;
 
   const RequirementItem = ({ label, met }: { label: string, met: boolean }) => (
     <div className={`flex items-center gap-2 text-xs font-bold transition-all duration-300 ${met ? 'text-emerald-600' : 'text-slate-400'}`}>
@@ -81,6 +134,13 @@ const SetupView: React.FC<SetupViewProps> = ({
       {label}
     </div>
   );
+
+  const formatSupabaseDate = (value?: string | null) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('pt-BR');
+  };
 
   return (
     <div className="max-w-5xl mx-auto space-y-6 pb-12">
@@ -111,6 +171,7 @@ const SetupView: React.FC<SetupViewProps> = ({
             <RequirementItem label="Nomes dos Responsáveis" met={!!(info.pharmacist && info.manager)} />
             <RequirementItem label="Cadastro Carregado" met={systemLoaded} />
             <RequirementItem label="Relatório DCB Carregado" met={dcbLoaded} />
+            <RequirementItem label="Relatórios no Supabase" met={reportsReady} />
             <RequirementItem label="Produtos Identificados" met={productsLoaded} />
           </div>
         </div>
@@ -178,7 +239,11 @@ const SetupView: React.FC<SetupViewProps> = ({
               <input
                 type="text"
                 value={info.pharmacist}
-                onChange={(e) => setInfo(prev => ({ ...prev, pharmacist: e.target.value }))}
+                onChange={(e) => {
+                  const nextInfo = { ...info, pharmacist: e.target.value };
+                  setInfo(nextInfo);
+                  emitInfoChange(nextInfo);
+                }}
                 placeholder="Nome do Farmacêutico Responsável"
                 className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-prevencidos-400 focus:bg-white transition-all input-glow text-slate-700 font-medium"
               />
@@ -191,7 +256,11 @@ const SetupView: React.FC<SetupViewProps> = ({
               <input
                 type="text"
                 value={info.manager}
-                onChange={(e) => setInfo(prev => ({ ...prev, manager: e.target.value }))}
+                onChange={(e) => {
+                  const nextInfo = { ...info, manager: e.target.value };
+                  setInfo(nextInfo);
+                  emitInfoChange(nextInfo);
+                }}
                 placeholder="Nome do Gestor"
                 className="w-full p-4 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:border-prevencidos-400 focus:bg-white transition-all input-glow text-slate-700 font-medium"
               />
@@ -212,6 +281,11 @@ const SetupView: React.FC<SetupViewProps> = ({
             {systemLoaded ? <span className="flex items-center gap-2"><Check size={16} /> Carregado com Sucesso</span> : 'Selecionar Cadastro'}
             <input type="file" className="hidden" accept=".xml,.xlsx,.xls" onChange={(e) => e.target.files?.[0] && onSystemProductsUpload(e.target.files[0])} />
           </label>
+          {systemReportSyncedAt && (
+            <p className="mt-2 text-[11px] font-semibold text-emerald-700">
+              Salvo no Supabase: {formatSupabaseDate(systemReportSyncedAt)}
+            </p>
+          )}
         </div>
 
         <div className={`bg-white p-8 rounded-3xl border-2 border-dashed transition-all duration-300 flex flex-col items-center text-center group hover:shadow-md ${dcbLoaded ? 'border-blue-400 bg-blue-50/20' : 'border-slate-200 hover:border-blue-300'}`}>
@@ -224,11 +298,26 @@ const SetupView: React.FC<SetupViewProps> = ({
             {dcbLoaded ? <span className="flex items-center gap-2"><Check size={16} /> Carregado com Sucesso</span> : 'Selecionar DCB'}
             <input type="file" className="hidden" accept=".xlsx,.xls" onChange={(e) => e.target.files?.[0] && onDCBBaseUpload(e.target.files[0])} />
           </label>
+          {dcbReportSyncedAt && (
+            <p className="mt-2 text-[11px] font-semibold text-blue-700">
+              Salvo no Supabase: {formatSupabaseDate(dcbReportSyncedAt)}
+            </p>
+          )}
         </div>
       </div>
 
       {/* Status banner */}
-      {!systemLoaded || !dcbLoaded ? (
+      {reportsStatus === 'loading' ? (
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-5 rounded-2xl border border-blue-200 flex items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
+            <Info size={20} className="text-blue-600" />
+          </div>
+          <div>
+            <p className="text-sm font-bold text-blue-800">Carregando relatórios</p>
+            <p className="text-xs text-blue-600 mt-0.5">Aguardando sincronização do Cadastro e DCB no Supabase.</p>
+          </div>
+        </div>
+      ) : !systemLoaded || !dcbLoaded ? (
         <div className="bg-gradient-to-r from-amber-50 to-orange-50 p-5 rounded-2xl border border-amber-200 flex items-center gap-4">
           <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
             <Info size={20} className="text-amber-600" />
@@ -236,6 +325,36 @@ const SetupView: React.FC<SetupViewProps> = ({
           <div>
             <p className="text-sm font-bold text-amber-800">Requisito Pendente</p>
             <p className="text-xs text-amber-600 mt-0.5">Carregue ambos os arquivos (Cadastro + DCB) para liberar o botão de início.</p>
+          </div>
+        </div>
+      ) : !reportsReady ? (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 p-5 rounded-2xl border border-amber-200 flex items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
+            <Info size={20} className="text-amber-600" />
+          </div>
+          <div>
+            <p className="text-sm font-bold text-amber-800">Sincronização pendente</p>
+            <p className="text-xs text-amber-600 mt-0.5">Os relatórios ainda não foram reconhecidos no Supabase.</p>
+          </div>
+        </div>
+      ) : isBranchPrefetching ? (
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-5 rounded-2xl border border-blue-200 flex items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
+            <Info size={20} className="text-blue-600" />
+          </div>
+          <div>
+            <p className="text-sm font-bold text-blue-800">Carregando dados da filial</p>
+            <p className="text-xs text-blue-600 mt-0.5">Estoque e vendas estão sendo sincronizados.</p>
+          </div>
+        </div>
+      ) : branchPrefetchError ? (
+        <div className="bg-gradient-to-r from-red-50 to-rose-50 p-5 rounded-2xl border border-red-200 flex items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-red-100 flex items-center justify-center flex-shrink-0">
+            <Info size={20} className="text-red-600" />
+          </div>
+          <div>
+            <p className="text-sm font-bold text-red-800">Erro ao carregar filial</p>
+            <p className="text-xs text-red-600 mt-0.5">{branchPrefetchError}</p>
           </div>
         </div>
       ) : (
@@ -250,19 +369,19 @@ const SetupView: React.FC<SetupViewProps> = ({
       {/* Botão de início */}
       <div className="flex justify-center pt-2">
         <button
-          disabled={!isFormValid}
+          disabled={!canStart}
           onClick={() => onComplete(info)}
-          className={`px-16 py-5 rounded-2xl font-bold text-xl shadow-xl transition-all duration-300 relative overflow-hidden group ${isFormValid
+          className={`px-16 py-5 rounded-2xl font-bold text-xl shadow-xl transition-all duration-300 relative overflow-hidden group ${canStart
             ? 'bg-gradient-to-r from-prevencidos-500 via-prevencidos-600 to-prevencidos-700 text-white hover:shadow-2xl hover:shadow-prevencidos-300/50 hover:-translate-y-1 active:scale-95'
             : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
             }`}
         >
-          {isFormValid && (
+          {canStart && (
             <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 transform -skew-x-12 -translate-x-full group-hover:translate-x-full transition-transform duration-700"></div>
           )}
           <span className="relative z-10 flex items-center gap-3">
-            INICIAR LANÇAMENTOS
-            <ArrowRight size={22} className={`transition-transform duration-300 ${isFormValid ? 'group-hover:translate-x-1' : ''}`} />
+            {isBranchPrefetching ? 'CARREGANDO DADOS...' : 'INICIAR LANÇAMENTOS'}
+            <ArrowRight size={22} className={`transition-transform duration-300 ${canStart ? 'group-hover:translate-x-1' : ''}`} />
           </span>
         </button>
       </div>
@@ -301,6 +420,45 @@ const SetupView: React.FC<SetupViewProps> = ({
                     </td>
                   </tr>
                 ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {inventoryReport && (
+        <div className="mt-8 pt-6 border-t border-slate-100">
+          <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-5 flex items-center gap-2">
+            <FileCode size={16} className="text-amber-500" />
+            Histórico de Upload de Estoque (Filial)
+          </h3>
+          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+            <table className="w-full text-sm text-left">
+              <thead className="bg-gradient-to-r from-slate-50 to-slate-100 text-slate-500 font-bold uppercase text-xs">
+                <tr>
+                  <th className="px-6 py-4">Data Upload</th>
+                  <th className="px-6 py-4">Arquivo</th>
+                  <th className="px-6 py-4">Itens</th>
+                  <th className="px-6 py-4">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                <tr className="hover:bg-amber-50/30 transition-colors duration-150">
+                  <td className="px-6 py-4 text-slate-600">
+                    {inventoryReport.uploaded_at ? new Date(inventoryReport.uploaded_at).toLocaleString('pt-BR') : '-'}
+                  </td>
+                  <td className="px-6 py-4 text-slate-500 text-xs font-mono">
+                    {inventoryReport.file_name || '-'}
+                  </td>
+                  <td className="px-6 py-4 font-medium text-slate-800">
+                    {(inventoryReport.records || []).length.toLocaleString('pt-BR')}
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-700 text-[10px] font-black uppercase tracking-wider px-3 py-1">
+                      Carregado
+                    </span>
+                  </td>
+                </tr>
               </tbody>
             </table>
           </div>

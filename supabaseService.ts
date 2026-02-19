@@ -1711,21 +1711,104 @@ export async function upsertPVInventoryReport(report: DbPVInventoryReport): Prom
   }
 }
 
-export async function fetchPVReports(userEmail: string, reportType?: 'system' | 'dcb'): Promise<DbPVReport[]> {
+export async function fetchPVReports(
+  userEmail: string,
+  options?: {
+    reportType?: 'system' | 'dcb';
+    companyId?: string | null;
+    branch?: string | null;
+  }
+): Promise<DbPVReport[]> {
   try {
-    let query = supabase
-      .from('pv_reports')
-      .select('*')
-      .eq('user_email', userEmail);
+    const reportType = options?.reportType;
+    const companyId = options?.companyId || null;
+    const branch = options?.branch || null;
+    const queryColumns = 'id,user_email,company_id,branch,report_type,products,created_at,updated_at';
 
-    if (reportType) {
-      query = query.eq('report_type', reportType);
+    const compareByFreshness = (a: DbPVReport, b: DbPVReport) => {
+      const aTime = new Date(a.updated_at || a.created_at || 0).getTime();
+      const bTime = new Date(b.updated_at || b.created_at || 0).getTime();
+      return bTime - aTime;
+    };
+
+    const pickLatestForType = (
+      type: 'system' | 'dcb',
+      primary: DbPVReport[],
+      secondary: DbPVReport[]
+    ): DbPVReport | undefined => {
+      const primaryTyped = primary
+        .filter(item => item.report_type === type)
+        .sort(compareByFreshness);
+      const secondaryTyped = secondary
+        .filter(item => item.report_type === type)
+        .sort(compareByFreshness);
+
+      const primaryWithProducts = primaryTyped.find(item => Array.isArray(item.products) && item.products.length > 0);
+      if (primaryWithProducts) return primaryWithProducts;
+
+      const secondaryWithProducts = secondaryTyped.find(item => Array.isArray(item.products) && item.products.length > 0);
+      if (secondaryWithProducts) return secondaryWithProducts;
+
+      return primaryTyped[0] || secondaryTyped[0];
+    };
+
+    let branchData: DbPVReport[] = [];
+    let userData: DbPVReport[] = [];
+
+    if (companyId && branch) {
+      let branchQuery = supabase
+        .from('pv_reports')
+        .select(queryColumns)
+        .eq('company_id', companyId)
+        .eq('branch', branch)
+        .order('updated_at', { ascending: false, nullsFirst: false });
+
+      if (reportType) {
+        branchQuery = branchQuery.eq('report_type', reportType);
+      }
+
+      const { data, error } = await branchQuery;
+      if (error) {
+        console.error('Error fetching PV reports (branch scope):', error);
+      } else {
+        branchData = data || [];
+      }
     }
 
-    const { data, error } = await query;
+    const needsUserFallback = !companyId || !branch || (
+      reportType
+        ? branchData.filter(item => item.report_type === reportType).length === 0
+        : ['system', 'dcb'].some(type => !branchData.some(item => item.report_type === type))
+    );
 
-    if (error) throw error;
-    return data || [];
+    if (needsUserFallback) {
+      let userQuery = supabase
+        .from('pv_reports')
+        .select(queryColumns)
+        .eq('user_email', userEmail)
+        .order('updated_at', { ascending: false, nullsFirst: false });
+
+      if (reportType) {
+        userQuery = userQuery.eq('report_type', reportType);
+      }
+
+      const { data, error } = await userQuery;
+      if (error) {
+        console.error('Error fetching PV reports (user scope):', error);
+      } else {
+        userData = data || [];
+      }
+    }
+
+    if (reportType) {
+      const chosen = pickLatestForType(reportType, branchData, userData);
+      return chosen ? [chosen] : [];
+    }
+
+    const system = pickLatestForType('system', branchData, userData);
+    const dcb = pickLatestForType('dcb', branchData, userData);
+
+    return [system, dcb].filter((item): item is DbPVReport => Boolean(item));
   } catch (error) {
     console.error('Error fetching PV reports:', error);
     return [];
@@ -1758,26 +1841,32 @@ export async function upsertPVReport(report: DbPVReport): Promise<DbPVReport | n
       if (existingError) throw existingError;
 
       if (existing && existing.length > 0) {
-        const { data, error } = await supabase
+        const { error } = await supabase
           .from('pv_reports')
           .update(payload)
           .eq('user_email', report.user_email)
-          .eq('report_type', report.report_type)
-          .select()
-          .single();
+          .eq('report_type', report.report_type);
 
         if (error) throw error;
-        return data;
+        return {
+          ...report,
+          id: existing[0].id,
+          updated_at: payload.updated_at
+        };
       }
 
       const { data, error } = await supabase
         .from('pv_reports')
         .insert([payload])
-        .select()
+        .select('id, report_type, updated_at')
         .single();
 
       if (error) throw error;
-      return data;
+      return {
+        ...report,
+        id: data?.id,
+        updated_at: data?.updated_at || payload.updated_at
+      };
     } catch (error: any) {
       const message = typeof error?.message === 'string' ? error.message : '';
       const code = error?.code;
