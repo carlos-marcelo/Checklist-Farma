@@ -66,6 +66,30 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
   };
 
   const results = useMemo(() => {
+    const normalizeReducedCode = (value?: string) => {
+      if (!value) return '';
+      const digits = String(value).replace(/\D/g, '');
+      if (!digits) return '';
+      return digits.replace(/^0+/, '') || digits;
+    };
+
+    const getLabByReducedCode = (code?: string, fallback?: string) => {
+      if (!code) return fallback || 'N/A';
+      const direct = labByReduced[code];
+      if (direct) return direct;
+
+      const normalized = normalizeReducedCode(code);
+      if (!normalized) return fallback || 'N/A';
+
+      const normalizedDirect = labByReduced[normalized];
+      if (normalizedDirect) return normalizedDirect;
+
+      const matchedKey = Object.keys(labByReduced).find(key => normalizeReducedCode(key) === normalized);
+      if (matchedKey) return labByReduced[matchedKey];
+
+      return fallback || 'N/A';
+    };
+
     const normalizedPeriod = (currentSalesPeriod || '').trim();
     const periodFinalizedList = finalizedREDSByPeriod[normalizedPeriod]
       || finalizedREDSByPeriod[currentSalesPeriod]
@@ -118,7 +142,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         entryDate: new Date().toISOString(),
         dcb: saleMatch?.dcb || 'N/A',
         barcode: undefined,
-        lab: labByReduced?.[code] || saleMatch?.lab
+        lab: getLabByReducedCode(code, saleMatch?.lab)
       };
     });
 
@@ -142,7 +166,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         costTotal: s.costTotal || 0,
         inventoryCostUnit: resolvedCostUnit,
         inventoryCostTotal: resolvedCostUnit * s.quantity,
-        lab: s.lab || 'N/A',
+        lab: getLabByReducedCode(s.reducedCode, s.lab),
         id: `${normalizedPeriod || currentSalesPeriod}-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
         };
       });
@@ -166,7 +190,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         costTotal: s.costTotal || 0,
         inventoryCostUnit: resolvedCostUnit,
         inventoryCostTotal: resolvedCostUnit * s.quantity,
-        lab: s.lab || 'N/A',
+        lab: getLabByReducedCode(s.reducedCode, s.lab),
         id: `${normalizedPeriod || currentSalesPeriod}-sim-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
         };
       });
@@ -183,7 +207,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
       const similarInventoryCostTotal = similarSales.reduce((acc, s) => acc + resolveCostUnit(s.reducedCode, s.costUnit, false) * s.quantity, 0);
       const pvInventoryStock = getInventoryStock(pv.reducedCode);
 
-      const pvLab = pv.lab || labByReduced[pv.reducedCode] || 'N/A';
+      const pvLab = getLabByReducedCode(pv.reducedCode, pv.lab);
       const firstDirectLab = directSalesDetails[0]?.lab || '';
       const firstSimilarLab = similarSalesDetails[0]?.lab || '';
 
@@ -211,7 +235,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     });
     // Hide "Sem Movimento" items from the analysis list.
     return enriched.filter(item => item.status !== 'lost');
-  }, [pvRecords, salesRecords, finalizedREDSByPeriod, currentSalesPeriod, barcodeByReduced, inventoryCostByBarcode, inventoryStockByBarcode]);
+  }, [pvRecords, salesRecords, finalizedREDSByPeriod, currentSalesPeriod, barcodeByReduced, inventoryCostByBarcode, inventoryStockByBarcode, labByReduced]);
 
   const reportPayload = useMemo(() => {
     const normalizedPeriod = (currentSalesPeriod || '').trim();
@@ -231,11 +255,43 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     });
   }, [pvRecords, salesRecords, currentSalesPeriod, finalizedREDSByPeriod, sessionInfo, lastUpload]);
 
+  const reportPayloadForPrint = useMemo(() => {
+    const finalizedSet = new Set(reportPayload.finalized_codes || []);
+    let items = reportPayload.items;
+
+    if (activeFilter === 'finalized') {
+      items = items.filter(item => finalizedSet.has(item.reducedCode));
+    } else if (activeFilter === 'pending') {
+      items = items.filter(item => !finalizedSet.has(item.reducedCode) && item.status === 'sold');
+    } else if (activeFilter === 'similar') {
+      items = items.filter(item => !finalizedSet.has(item.reducedCode) && item.status === 'replaced');
+    }
+
+    return {
+      ...reportPayload,
+      summary: {
+        total_items: items.length,
+        total_direct: items.filter(item => item.status === 'sold').length,
+        total_similar: items.filter(item => item.status === 'replaced').length
+      },
+      items
+    };
+  }, [reportPayload, activeFilter]);
+
   const handlePrint = () => {
-    if (!reportPayload.items.length) {
+    if (!reportPayloadForPrint.items.length) {
       alert('Nenhum item para imprimir nesta análise.');
       return;
     }
+    const filterLabel =
+      activeFilter === 'all'
+        ? 'todos'
+        : activeFilter === 'pending'
+          ? 'falta_lancar'
+          : activeFilter === 'finalized'
+            ? 'finalizados'
+            : 'similar_vendido';
+
     if (sessionInfo?.companyId && sessionInfo?.filial) {
       insertAppEventLog({
         company_id: sessionInfo.companyId,
@@ -250,7 +306,11 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         status: 'success',
         success: true,
         source: 'web',
-        event_meta: { period_label: currentSalesPeriod, total_items: reportPayload.items.length }
+        event_meta: {
+          period_label: currentSalesPeriod,
+          total_items: reportPayloadForPrint.items.length,
+          print_filter: filterLabel
+        }
       }).catch(() => { });
     }
     const printWindow = window.open('', '_blank', 'width=1200,height=800');
@@ -259,7 +319,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
       return;
     }
     printWindow.document.open();
-    printWindow.document.write(buildAnalysisReportHtml(reportPayload));
+    printWindow.document.write(buildAnalysisReportHtml(reportPayloadForPrint));
     printWindow.document.close();
   };
 
