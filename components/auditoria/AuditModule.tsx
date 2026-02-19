@@ -1640,6 +1640,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             groupLabel: string | null;
             deptLabel: string | null;
             catItems: string[];
+            catIds: Set<string>;
+            skus: number;
+            units: number;
             startedAt?: string;
         }>();
 
@@ -1650,9 +1653,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 groupLabel: `${group.id} - ${group.name}`,
                 deptLabel: buildDeptLabel(dept),
                 catItems: [],
+                catIds: new Set<string>(),
+                skus: 0,
+                units: 0,
                 startedAt
             };
-            entry.catItems.push(buildCatLabel(cat));
+            const catKey = normalizeScopeId(cat.id);
+            if (!entry.catIds.has(catKey)) {
+                entry.catIds.add(catKey);
+                entry.catItems.push(buildCatLabel(cat));
+                entry.skus += cat.itemsCount;
+                entry.units += cat.totalQuantity;
+            }
             if (!entry.startedAt || new Date(startedAt).getTime() < new Date(entry.startedAt).getTime()) {
                 entry.startedAt = startedAt;
             }
@@ -1666,11 +1678,34 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         });
 
         return Array.from(bucket.values()).map(entry => ({
-            ...entry,
+            key: entry.key,
+            groupLabel: entry.groupLabel,
+            deptLabel: entry.deptLabel,
+            catItems: entry.catItems,
+            skus: entry.skus,
+            units: entry.units,
             startedAtLabel: entry.startedAt
                 ? new Date(entry.startedAt).toLocaleString('pt-BR', { hour12: false })
                 : ''
         }));
+    }, [data]);
+
+    const partialTotals = useMemo(() => {
+        if (!data?.partialStarts || data.partialStarts.length === 0) return { skus: 0, units: 0 };
+        const seenCats = new Set<string>();
+        let skus = 0;
+        let units = 0;
+        data.partialStarts.forEach(scope => {
+            const expanded = getScopeCategories(scope.groupId, scope.deptId, scope.catId);
+            expanded.forEach(({ cat }) => {
+                const catKey = normalizeScopeId(cat.id);
+                if (seenCats.has(catKey)) return;
+                seenCats.add(catKey);
+                skus += cat.itemsCount;
+                units += cat.totalQuantity;
+            });
+        });
+        return { skus, units };
     }, [data]);
 
     const completedInfoList = useMemo(() => {
@@ -1937,7 +1972,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     }
 
     return (
-        <div className="min-h-screen bg-[#f1f5f9] pb-32 font-sans rounded-3xl overflow-hidden shadow-inner">
+        <div className="min-h-screen bg-[#f1f5f9] pb-32 font-sans rounded-3xl overflow-x-hidden overflow-y-visible shadow-inner">
             <header className="bg-slate-900 text-white sticky top-0 z-[1002] px-8 py-3 shadow-xl flex justify-between items-center border-b border-white/5">
                 <div className="flex items-center gap-6">
                     <div className="flex items-center gap-3">
@@ -2026,9 +2061,29 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                         </span>
                                                     )) : <span className="text-xs font-semibold">N/D</span>}
                                                 </div>
+                                                <span className="text-[9px] font-black uppercase tracking-widest text-blue-700/80">Abertos</span>
+                                                <div className="flex flex-wrap items-center gap-3">
+                                                    <span className="text-xs font-black text-blue-700 tabular-nums whitespace-nowrap">
+                                                        {info.skus.toLocaleString('pt-BR')} SKUs
+                                                    </span>
+                                                    <span className="text-xs font-bold text-blue-400">•</span>
+                                                    <span className="text-xs font-black text-blue-700 tabular-nums whitespace-nowrap">
+                                                        {info.units.toLocaleString('pt-BR')} Produtos
+                                                    </span>
+                                                </div>
                                             </div>
                                         </div>
                                     ))}
+                                    <div className="border border-blue-100 bg-blue-50/60 rounded-xl px-4 py-3 flex flex-wrap items-center gap-3">
+                                        <span className="text-[9px] font-black uppercase tracking-widest text-blue-700/80">Total Aberto</span>
+                                        <span className="text-xs font-black text-blue-700 tabular-nums whitespace-nowrap">
+                                            {partialTotals.skus.toLocaleString('pt-BR')} SKUs
+                                        </span>
+                                        <span className="text-xs font-bold text-blue-400">•</span>
+                                        <span className="text-xs font-black text-blue-700 tabular-nums whitespace-nowrap">
+                                            {partialTotals.units.toLocaleString('pt-BR')} Produtos
+                                        </span>
+                                    </div>
                                 </div>
                             ) : (
                                 <div className="mt-3 text-xs font-semibold text-blue-700/70">Nenhuma contagem parcial ativa.</div>
@@ -2106,30 +2161,30 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                     <div className="flex flex-col items-center border-l border-slate-100 px-2 min-w-0">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Unidades Totais</span>
-                        <div className="flex flex-wrap items-center justify-center gap-1 mt-1 text-center leading-tight">
-                            <span className="text-[clamp(0.95rem,1.4vw,1.25rem)] font-black text-indigo-700 tabular-nums leading-tight">{Math.round(branchMetrics.doneUnits).toLocaleString()}</span>
-                            <span className="text-slate-200 text-[clamp(0.7rem,1vw,0.9rem)] leading-none">/</span>
-                            <span className="text-[clamp(0.85rem,1.2vw,1.1rem)] font-black text-slate-300 tabular-nums leading-tight">{Math.round(branchMetrics.units).toLocaleString()}</span>
+                        <div className="flex flex-nowrap items-center justify-center gap-2 mt-1 text-center leading-none whitespace-nowrap">
+                            <span className="text-[clamp(0.9rem,1.25vw,1.2rem)] font-black text-indigo-700 tabular-nums leading-none whitespace-nowrap">{Math.round(branchMetrics.doneUnits).toLocaleString()}</span>
+                            <span className="text-slate-200 text-[clamp(0.7rem,1vw,0.9rem)] leading-none whitespace-nowrap">/</span>
+                            <span className="text-[clamp(0.8rem,1.1vw,1.05rem)] font-black text-slate-300 tabular-nums leading-none whitespace-nowrap">{Math.round(branchMetrics.units).toLocaleString()}</span>
                         </div>
                         <span className="text-[8px] font-bold text-indigo-300 uppercase mt-1 tracking-tighter">CONFERIDAS / TOTAIS</span>
                     </div>
 
                     <div className="flex flex-col items-center border-l border-slate-100 px-2 min-w-0">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Valor em Custo</span>
-                        <div className="flex flex-wrap items-center justify-center gap-1 mt-1 text-center leading-tight">
-                            <span className="text-[clamp(0.95rem,1.4vw,1.25rem)] font-black text-emerald-700 tabular-nums leading-tight">R$ {branchMetrics.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                            <span className="text-slate-200 text-[clamp(0.7rem,1vw,0.9rem)] leading-none">/</span>
-                            <span className="text-[clamp(0.85rem,1.2vw,1.1rem)] font-black text-slate-300 tabular-nums leading-tight">{branchMetrics.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        <div className="flex flex-nowrap items-center justify-center gap-2 mt-1 text-center leading-none whitespace-nowrap">
+                            <span className="text-[clamp(0.88rem,1.2vw,1.15rem)] font-black text-emerald-700 tabular-nums leading-none whitespace-nowrap">R$ {branchMetrics.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                            <span className="text-slate-200 text-[clamp(0.7rem,1vw,0.9rem)] leading-none whitespace-nowrap">/</span>
+                            <span className="text-[clamp(0.8rem,1.05vw,1.05rem)] font-black text-slate-300 tabular-nums leading-none whitespace-nowrap">{branchMetrics.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
                         </div>
                         <span className="text-[8px] font-bold text-emerald-300 uppercase mt-1 tracking-tighter">CONFERIDO / TOTAL</span>
                     </div>
 
                     <div className="flex flex-col items-center border-l border-slate-100 px-2 min-w-0">
                         <span className="text-[9px] font-black text-slate-400 uppercase tracking-widest italic text-center">Mix Auditado</span>
-                        <div className="flex flex-wrap items-center justify-center gap-1 mt-1 text-center leading-tight">
-                            <span className="text-[clamp(0.95rem,1.4vw,1.25rem)] font-black text-emerald-600 tabular-nums leading-tight">{branchMetrics.doneSkus.toLocaleString()}</span>
-                            <span className="text-slate-200 text-[clamp(0.7rem,1vw,0.9rem)] leading-none">/</span>
-                            <span className="text-[clamp(0.85rem,1.2vw,1.1rem)] font-black text-slate-300 tabular-nums leading-tight">{branchMetrics.pendingSkus.toLocaleString()}</span>
+                        <div className="flex flex-nowrap items-center justify-center gap-2 mt-1 text-center leading-none whitespace-nowrap">
+                            <span className="text-[clamp(0.9rem,1.25vw,1.2rem)] font-black text-emerald-600 tabular-nums leading-none whitespace-nowrap">{branchMetrics.doneSkus.toLocaleString()}</span>
+                            <span className="text-slate-200 text-[clamp(0.7rem,1vw,0.9rem)] leading-none whitespace-nowrap">/</span>
+                            <span className="text-[clamp(0.8rem,1.1vw,1.05rem)] font-black text-slate-300 tabular-nums leading-none whitespace-nowrap">{branchMetrics.pendingSkus.toLocaleString()}</span>
                         </div>
                         <span className="text-[8px] font-bold text-emerald-500 uppercase mt-1 tracking-tighter">CONFERIDOS / PENDENTES</span>
                     </div>

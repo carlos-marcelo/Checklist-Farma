@@ -1,5 +1,5 @@
 import React from 'react';
-import { Menu, X, RotateCcw, FileCheck } from 'lucide-react';
+import { RotateCcw, FileCheck } from 'lucide-react';
 import { User, AppConfig, ChecklistDefinition } from '../../types';
 import { Logo } from './Logo';
 
@@ -34,6 +34,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
     const getTitle = () => {
         if (currentView === 'report' || currentView === 'view_history') return 'Relatório Consolidado';
+        if (currentView === 'dashboard') return 'Dashboard (BI em construção)';
         if (currentView === 'summary') return 'Visão Geral da Avaliação';
         if (currentView === 'settings') return 'Configurações do Sistema';
         if (currentView === 'access') return 'Níveis de Acesso';
@@ -48,23 +49,10 @@ export const Header: React.FC<HeaderProps> = ({
 
     return (
         <>
-            {/* Mobile Header - Glassmorphism */}
-            <header className={`lg:hidden h-20 flex items-center px-6 justify-between no-print z-50 sticky top-0 bg-white/70 backdrop-blur-xl border-b border-white/20 shadow-lg`}>
-                <div className="scale-90 origin-left">
-                    <Logo config={displayConfig} companies={companies} selectedCompanyId={currentUser.company_id} />
-                </div>
-                <button
-                    onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                    className={`${currentTheme.bgGradient || 'bg-blue-600'} text-white p-3 rounded-2xl shadow-lg transition-all duration-300 hover:scale-110 active:scale-95 ripple`}
-                >
-                    {isSidebarOpen ? <X size={24} /> : <Menu size={24} />}
-                </button>
-            </header>
-
-            {/* Desktop Header - Premium Glassmorphism */}
-            <header className="hidden lg:flex items-center justify-between h-24 bg-white/60 backdrop-blur-2xl border-b border-gray-100/50 px-10 shadow-[0_4px_20px_rgba(0,0,0,0.02)] no-print sticky top-0 z-40 animate-fade-in transition-all duration-500">
+            {/* Header - Premium Glassmorphism */}
+            <header className="flex items-center justify-between h-20 lg:h-24 bg-white/60 backdrop-blur-2xl border-b border-gray-100/50 px-4 lg:px-10 shadow-[0_4px_20px_rgba(0,0,0,0.02)] no-print sticky top-0 z-40 animate-fade-in transition-all duration-500">
                 <div className="flex flex-col">
-                    <h1 className="text-3xl font-black bg-gradient-to-r from-gray-800 to-gray-500 bg-clip-text text-transparent truncate tracking-tighter animate-slide-in-right">
+                    <h1 className="text-2xl lg:text-3xl font-black bg-gradient-to-r from-gray-800 to-gray-500 bg-clip-text text-transparent truncate tracking-tighter animate-slide-in-right">
                         {title}
                     </h1>
                     <div className="flex items-center gap-2 mt-1 animate-fade-in" style={{ animationDelay: '0.2s' }}>

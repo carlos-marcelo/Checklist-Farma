@@ -13,7 +13,7 @@ import PVRegistration from './PVRegistration';
 import AnalysisView from './AnalysisView';
 import SetupView from './SetupView';
 import { NAV_ITEMS } from '../../preVencidos/constants';
-import { Package, AlertTriangle, LogOut, Trophy, TrendingUp, MinusCircle, CheckCircle, Calendar, Info, Trash2, X, Clock, Building, User } from 'lucide-react';
+import { Package, AlertTriangle, LogOut, Trophy, TrendingUp, MinusCircle, CheckCircle, Calendar, Info, Trash2, X, Clock, Building, User, UserPlus, PencilLine, Trash } from 'lucide-react';
 import SalesHistoryModal from './SalesHistoryModal';
 import {
   DbCompany,
@@ -232,6 +232,22 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     setInventoryStockByBarcode(stockMap);
   }, []);
 
+  const mapDbRecordsToPV = useCallback((records: any[]) => {
+    return (records || []).map(rec => ({
+      id: String(rec.id || `db-${rec.reduced_code}-${Date.now()}`),
+      reducedCode: rec.reduced_code,
+      name: rec.product_name,
+      quantity: rec.quantity,
+      originBranch: rec.origin_branch || '',
+      sectorResponsible: rec.sector_responsible || '',
+      expiryDate: rec.expiry_date,
+      entryDate: rec.entry_date,
+      dcb: rec.dcb,
+      userEmail: rec.user_email,
+      userName: ''
+    }));
+  }, []);
+
   useEffect(() => {
     if (!userEmail) return;
 
@@ -265,11 +281,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
       setPvRecordEvents([]);
       return;
     }
-    const now = new Date();
-    const since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
     let cancelled = false;
     (async () => {
-      const events = await fetchPVBranchRecordEvents(sessionInfo.companyId, sessionInfo.filial, since);
+      const events = await fetchPVBranchRecordEvents(sessionInfo.companyId, sessionInfo.filial);
       if (!cancelled) setPvRecordEvents(filterRecentPVEvents(events));
     })();
     return () => { cancelled = true; };
@@ -450,30 +464,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
         const records = await fetchPVBranchRecords(sessionInfo.companyId, sessionInfo.filial!);
         if (isMounted) {
           if (records && records.length > 0) {
-            setPvRecords(prev => {
-              const existingIds = new Set(prev.map(r => r.id));
-              const newRecords = records
-                .filter(rec => !existingIds.has(rec.id || ''))
-                .map(rec => ({
-                  id: String(rec.id || `db-${rec.reduced_code}-${Date.now()}`),
-                  reducedCode: rec.reduced_code,
-                  name: rec.product_name,
-                  quantity: rec.quantity,
-                  originBranch: rec.origin_branch || '',
-                  sectorResponsible: rec.sector_responsible || '',
-                  expiryDate: rec.expiry_date,
-                  entryDate: rec.entry_date,
-                  dcb: rec.dcb,
-                  userEmail: rec.user_email,
-                  userName: ''
-                }));
-              return [...prev, ...newRecords].filter((v, i, a) => a.findIndex(t => (t.id === v.id)) === i);
-            });
+            setPvRecords(mapDbRecordsToPV(records));
             setConnectionStatus('online');
           } else {
             // Maybe empty, let's just say online
             console.log('[PV AutoLoad] 0 records found via DB.');
             setConnectionStatus('online');
+            setPvRecords([]);
           }
         }
       } catch (err) {
@@ -492,7 +489,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     loadRecords();
 
     return () => { isMounted = false; };
-  }, [sessionInfo?.companyId, sessionInfo?.filial]); // Depend only on context changes
+  }, [sessionInfo?.companyId, sessionInfo?.filial, mapDbRecordsToPV]); // Depend only on context changes
 
   useEffect(() => {
     if (systemProducts.length > 0 || dcbBaseProducts.length > 0) {
@@ -573,33 +570,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     fetchPVBranchRecords(sessionInfo.companyId, sessionInfo.filial)
       .then(dbRecords => {
         if (dbRecords && dbRecords.length > 0) {
-          setPvRecords(prev => {
-            const existingIds = new Set(prev.map(r => r.id));
-            const newRecords = dbRecords
-              .filter(rec => !existingIds.has(rec.id || ''))
-              .map(rec => ({
-                id: String(rec.id || `db-${rec.reduced_code}-${Date.now()}`),
-                reducedCode: rec.reduced_code,
-                name: rec.product_name,
-                quantity: rec.quantity,
-                originBranch: rec.origin_branch || '',
-                sectorResponsible: rec.sector_responsible || '',
-                expiryDate: rec.expiry_date,
-                entryDate: rec.entry_date,
-                dcb: rec.dcb,
-                userEmail: rec.user_email,
-                userName: ''
-              }));
-            // Replace entirely on refresh to ensure sync, or merge? 
-            // Better to merge carefully or just set if we trust DB is source of truth.
-            // For persistence debugging, let's prioritize DB records + current session additions that might not be there yet?
-            // Actually, if we refresh, we want to see what is in DB.
-            return [...prev, ...newRecords].filter((v, i, a) => a.findIndex(t => (t.id === v.id)) === i);
-          });
+          setPvRecords(mapDbRecordsToPV(dbRecords));
           alert('Lista atualizada com sucesso!');
         } else {
           console.log('🔍 [PV DEBUG] Refresh retornou 0 registros.');
           alert('Nenhum registro encontrado no banco de dados para esta filial.');
+          setPvRecords([]);
         }
       })
       .catch(err => {
@@ -2163,6 +2139,115 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
     };
   }, [pvRecordEvents]);
 
+  const parseExpiryPeriod = (value: string | undefined) => {
+    if (!value) return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    const match = raw.match(/(\d{1,2})\s*[\/\-]\s*(\d{2,4})/);
+    if (!match) return null;
+    const month = Number(match[1]);
+    let year = Number(match[2]);
+    if (Number.isNaN(month) || Number.isNaN(year)) return null;
+    if (year < 100) year += 2000;
+    if (month < 1 || month > 12) return null;
+    return { month, year };
+  };
+
+  const expiryAlert = useMemo(() => {
+    const now = new Date();
+    const currentMonth = now.getMonth() + 1;
+    const currentYear = now.getFullYear();
+    let expired = 0;
+    let current = 0;
+    let future = 0;
+    let unknown = 0;
+
+    pvRecords.forEach(rec => {
+      const parsed = parseExpiryPeriod(rec.expiryDate);
+      const qty = Number(rec.quantity || 0);
+      if (!parsed) {
+        unknown += qty;
+        return;
+      }
+      if (parsed.year < currentYear || (parsed.year === currentYear && parsed.month < currentMonth)) {
+        expired += qty;
+      } else if (parsed.year === currentYear && parsed.month === currentMonth) {
+        current += qty;
+      } else {
+        future += qty;
+      }
+    });
+
+    const status = expired > 0 ? 'expired' : current > 0 ? 'due' : 'ok';
+    const periodLabel = `${String(currentMonth).padStart(2, '0')}/${String(currentYear).slice(-2)}`;
+
+    return { expired, current, future, unknown, status, periodLabel };
+  }, [pvRecords]);
+
+  const lastEventByType = useMemo(() => {
+    const pickLatest = (type: string) => {
+      const events = pvRecordEvents
+        .filter(e => e.event_type === type)
+        .map(e => ({
+          ...e,
+          ts: e.created_at ? new Date(e.created_at as string).getTime() : NaN
+        }))
+        .filter(e => !Number.isNaN(e.ts))
+        .sort((a, b) => b.ts - a.ts);
+      return events[0] || null;
+    };
+    return {
+      created: pickLatest('CREATED'),
+      updated: pickLatest('UPDATED'),
+      deleted: pickLatest('DELETED')
+    };
+  }, [pvRecordEvents]);
+
+  const formatEventLabel = (event: DbPVBranchRecordEvent | null) => {
+    if (!event?.created_at) return 'Sem registro';
+    const date = new Date(event.created_at as string);
+    if (Number.isNaN(date.getTime())) return 'Sem registro';
+    return date.toLocaleString('pt-BR', { hour12: false });
+  };
+
+  const expiryTooltip = useMemo(() => {
+    const { expired, current, periodLabel } = expiryAlert;
+    if (expired > 0) {
+      return `Vermelho: ${expired.toLocaleString('pt-BR')} produto(s) com vencimento anterior a ${periodLabel}.`;
+    }
+    if (current > 0) {
+      return `Amarelo: ${current.toLocaleString('pt-BR')} produto(s) vencendo em ${periodLabel}.`;
+    }
+    return `Verde: sem produtos vencendo em ${periodLabel}.`;
+  }, [expiryAlert]);
+
+  const lastCreatedLabel = formatEventLabel(lastEventByType.created);
+  const lastUpdatedLabel = formatEventLabel(lastEventByType.updated);
+  const lastDeletedLabel = formatEventLabel(lastEventByType.deleted);
+
+  const lastCreatedTooltip = lastEventByType.created
+    ? `Último cadastro: ${lastCreatedLabel} • Usuário: ${lastEventByType.created.user_email || 'N/D'}`
+    : 'Sem registros de cadastro';
+  const lastUpdatedTooltip = lastEventByType.updated
+    ? `Última edição: ${lastUpdatedLabel} • Usuário: ${lastEventByType.updated.user_email || 'N/D'}`
+    : 'Sem registros de edição';
+  const lastDeletedTooltip = lastEventByType.deleted
+    ? `Última exclusão: ${lastDeletedLabel} • Usuário: ${lastEventByType.deleted.user_email || 'N/D'}`
+    : 'Sem registros de exclusão';
+
+  const alertStyle =
+    expiryAlert.status === 'expired'
+      ? 'bg-red-100 text-red-700 border-red-200 animate-pulse shadow-[0_0_12px_rgba(239,68,68,0.25)]'
+      : expiryAlert.status === 'due'
+        ? 'bg-amber-100 text-amber-700 border-amber-200'
+        : 'bg-emerald-100 text-emerald-700 border-emerald-200';
+  const alertLabel =
+    expiryAlert.status === 'expired'
+      ? `${expiryAlert.expired.toLocaleString('pt-BR')} vencido(s)`
+      : expiryAlert.status === 'due'
+        ? `${expiryAlert.current.toLocaleString('pt-BR')} vence(m) ${expiryAlert.periodLabel}`
+        : `Sem vencimentos ${expiryAlert.periodLabel}`;
+
   return (
     <div className="flex flex-col h-full w-full overflow-hidden text-slate-900">
       {/* NOVO HEADER DARK SUPERIOR (SUBSTITUI SIDEBAR) */}
@@ -2271,16 +2356,36 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
             </div>
           </div>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3 flex-wrap justify-end">
             <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-full border border-slate-100" title={`Status: ${connectionStatus}`}>
               <div className={`w-2 h-2 rounded-full ${connectionStatus === 'online' ? 'bg-emerald-500 animate-pulse-slow shadow-[0_0_8px_rgba(16,185,129,0.3)]' : connectionStatus === 'syncing' ? 'bg-amber-500 animate-pulse' : 'bg-red-500'}`}></div>
               <span className={`text-[9px] font-black ${connectionStatus === 'online' ? 'text-emerald-700' : 'text-amber-700'}`}>
                 {connectionStatus === 'online' ? 'SISTEMA ONLINE' : 'SINCRONIZANDO'}
               </span>
             </div>
-            <div className="bg-amber-100/50 text-amber-700 px-3 py-1 rounded-full border border-amber-200/50 flex items-center gap-2">
+
+            <div className={`px-3 py-1 rounded-full border flex items-center gap-2 ${alertStyle}`} title={expiryTooltip}>
               <AlertTriangle size={12} />
-              <span className="text-[9px] font-black uppercase tracking-tight">Alerta de Prevencíveis</span>
+              <span className="text-[9px] font-black uppercase tracking-tight">Perecíveis</span>
+              <span className="text-[9px] font-black">{alertLabel}</span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-slate-100 bg-white text-slate-600" title={lastCreatedTooltip}>
+                <UserPlus size={12} className="text-emerald-500" />
+                <span className="text-[8px] font-black uppercase tracking-tight">Cadastro</span>
+                <span className="text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastCreatedLabel}</span>
+              </div>
+              <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-slate-100 bg-white text-slate-600" title={lastUpdatedTooltip}>
+                <PencilLine size={12} className="text-amber-500" />
+                <span className="text-[8px] font-black uppercase tracking-tight">Edição</span>
+                <span className="text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastUpdatedLabel}</span>
+              </div>
+              <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-slate-100 bg-white text-slate-600" title={lastDeletedTooltip}>
+                <Trash size={12} className="text-red-500" />
+                <span className="text-[8px] font-black uppercase tracking-tight">Exclusão</span>
+                <span className="text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastDeletedLabel}</span>
+              </div>
             </div>
           </div>
         </header>
@@ -2364,6 +2469,25 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({ userEmail, user
                   } catch (e) {
                     console.error('Erro ao salvar registro de filial:', e);
                     alert("Erro ao salvar no banco de dados. Verifique a conexão.");
+                  }
+                }
+
+                if (sessionInfo?.companyId && sessionInfo?.filial) {
+                  const localEvent: DbPVBranchRecordEvent = {
+                    company_id: sessionInfo.companyId,
+                    branch: sessionInfo.filial,
+                    record_id: rec.id,
+                    reduced_code: rec.reducedCode,
+                    event_type: 'CREATED',
+                    previous_quantity: null,
+                    new_quantity: rec.quantity,
+                    user_email: userEmail || null,
+                    created_at: new Date().toISOString()
+                  };
+                  upsertLocalPVEvent(localEvent);
+                  const savedEvent = await insertPVBranchRecordEvent(localEvent);
+                  if (savedEvent) {
+                    upsertLocalPVEvent(savedEvent);
                   }
                 }
 

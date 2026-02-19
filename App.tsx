@@ -10,7 +10,7 @@ import { StockConference } from './components/StockConference';
 import { supabase } from './supabaseClient';
 import * as SupabaseService from './supabaseService';
 import { updateCompany, saveConfig, fetchTickets, createTicket, updateTicketStatus, createCompany, DbTicket } from './supabaseService';
-import { Sidebar } from './components/Layout/Sidebar';
+import { Topbar } from './components/Layout/Topbar';
 import { Header } from './components/Layout/Header';
 import { Logo, MFLogo, LogoPrint } from './components/Layout/Logo';
 
@@ -1102,7 +1102,7 @@ const App: React.FC = () => {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [showErrors, setShowErrors] = useState(false);
 
-    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit'>(() => {
+    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit'>(() => {
         const saved = localStorage.getItem('APP_CURRENT_VIEW');
         return (saved as any) || 'checklist';
     });
@@ -1315,13 +1315,21 @@ const App: React.FC = () => {
         setIsReloadingReports(true);
         try {
             console.log('🔁 Recarregando relatórios...');
+            const previousReportIds = new Set(reportHistory.map(r => r.id));
+            const previousStockIds = new Set(stockConferenceHistory.map(r => r.id));
             const dbReports = await SupabaseService.fetchReportsSummary(0, 50);
             const formattedReports = dbReports.map(mapDbReportToHistoryItem);
             setReportHistory(formattedReports);
             const dbStockReportsSummary = await SupabaseService.fetchStockConferenceReportsSummaryAll();
             handleStockReportsLoaded(dbStockReportsSummary as SupabaseService.DbStockConferenceReport[]);
             console.log('✅ Relatórios recarregados:', formattedReports.length, 'conferências:', dbStockReportsSummary.length);
-            alert(`Atualizado! ${formattedReports.length} avaliação(ões) e ${dbStockReportsSummary.length} conferência(s) carregada(s).`);
+            const newReports = formattedReports.filter(r => !previousReportIds.has(r.id)).length;
+            const newStockReports = (dbStockReportsSummary || []).filter(r => r.id && !previousStockIds.has(r.id)).length;
+            if (newReports + newStockReports === 0) {
+                alert(`Atualização concluída. Nenhuma nova avaliação ou conferência. Totais: ${formattedReports.length} avaliação(ões) e ${dbStockReportsSummary.length} conferência(s).`);
+            } else {
+                alert(`Atualização concluída! ${formattedReports.length} avaliação(ões) carregada(s) (${newReports} nova(s)) e ${dbStockReportsSummary.length} conferência(s) carregada(s) (${newStockReports} nova(s)).`);
+            }
         } catch (error) {
             console.error('❌ Erro ao recarregar:', error);
             alert('Erro ao recarregar relatórios.');
@@ -3147,26 +3155,26 @@ const App: React.FC = () => {
 
     return (
         <div className="min-h-screen bg-gray-50 flex font-sans text-gray-800">
-            <Sidebar
-                isSidebarOpen={isSidebarOpen}
-                setIsSidebarOpen={setIsSidebarOpen}
-                currentUser={currentUser}
-                currentTheme={currentTheme}
-                displayConfig={displayConfig}
-                companies={companies}
-                handleViewChange={handleViewChange}
-                currentView={currentView}
-                activeChecklistId={activeChecklistId}
-                setActiveChecklistId={setActiveChecklistId}
-                checklists={checklists}
-                isChecklistComplete={isChecklistComplete}
-                ignoredChecklists={ignoredChecklists}
-                canControlChecklists={canControlChecklists}
-                handleLogout={handleLogout}
-            />
-
-            {/* Main Content */}
             <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-gray-50/50 relative">
+                <Topbar
+                    isSidebarOpen={isSidebarOpen}
+                    setIsSidebarOpen={setIsSidebarOpen}
+                    currentUser={currentUser}
+                    currentTheme={currentTheme}
+                    displayConfig={displayConfig}
+                    companies={companies}
+                    handleViewChange={handleViewChange}
+                    currentView={currentView}
+                    activeChecklistId={activeChecklistId}
+                    setActiveChecklistId={setActiveChecklistId}
+                    checklists={checklists}
+                    isChecklistComplete={isChecklistComplete}
+                    ignoredChecklists={ignoredChecklists}
+                    canControlChecklists={canControlChecklists}
+                    handleLogout={handleLogout}
+                />
+
+                {/* Main Content */}
                 {/* Background Mesh Gradient */}
                 <div className="absolute inset-0 z-0 pointer-events-none opacity-40 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-gray-200 via-transparent to-transparent"></div>
 
@@ -5453,6 +5461,37 @@ const App: React.FC = () => {
                         </div>
                     )}
 
+                    {/* --- DASHBOARD VIEW (BI EM CONSTRUÇÃO) --- */}
+                    {currentView === 'dashboard' && (
+                        <div className="max-w-6xl mx-auto space-y-8 animate-fade-in pb-24">
+                            <div className="bg-white/80 backdrop-blur-xl border border-white/50 rounded-[32px] shadow-card p-10">
+                                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                                    <div>
+                                        <h2 className="text-3xl font-black text-gray-900 tracking-tight leading-tight">BI em construção</h2>
+                                        <p className="text-gray-500 font-bold text-base mt-2">
+                                            Área preparada para widgets móveis (cards). Você poderá arrastar, redimensionar e montar painéis por loja.
+                                        </p>
+                                    </div>
+                                    <div className="bg-blue-50 text-blue-600 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest">
+                                        Em breve
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                                {Array.from({ length: 6 }).map((_, idx) => (
+                                    <div
+                                        key={`bi-placeholder-${idx}`}
+                                        className="bg-white/60 border border-dashed border-gray-200 rounded-[28px] h-44 flex flex-col items-center justify-center text-gray-400 font-bold text-sm uppercase tracking-widest"
+                                    >
+                                        Widget {idx + 1}
+                                        <span className="text-[10px] font-black text-gray-300 mt-2">Arraste aqui</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
 
                     {/* --- REPORT / HISTORY VIEW (READ ONLY) --- */}
                     {(currentView === 'report' || currentView === 'view_history') && (
@@ -5623,18 +5662,36 @@ const App: React.FC = () => {
                                                                 </div>
 
                                                                 {/* Images in Section with Premium Layout */}
-                                                                {(getDataSource(cl.id).imgs[sec.id] || []).length > 0 && (
-                                                                    <div className="mt-8 grid grid-cols-2 gap-4">
-                                                                        {(getDataSource(cl.id).imgs[sec.id] || []).slice(0, 4).map((img, idx) => (
-                                                                            <div key={idx} className="relative aspect-video rounded-[24px] overflow-hidden border-2 border-white shadow-lg group/img">
-                                                                                <img src={img} alt={`Evidência ${idx + 1}`} className="w-full h-full object-cover group-hover/img:scale-110 transition-transform duration-700" />
-                                                                                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover/img:opacity-100 transition-opacity p-4 flex flex-end items-end">
-                                                                                    <span className="text-white font-black text-[10px] tracking-widest uppercase">Evidência #{idx + 1}</span>
-                                                                                </div>
+                                                                {(() => {
+                                                                    const sectionImages = getDataSource(cl.id).imgs[sec.id] || [];
+                                                                    if (sectionImages.length === 0) return null;
+
+                                                                    return (
+                                                                        <div className="mt-8">
+                                                                            <div className="flex items-center justify-between mb-3">
+                                                                                <span className="text-[10px] font-black text-gray-400 uppercase tracking-[0.3em]">Anexos / Evidências</span>
+                                                                                <span className="text-[10px] font-bold text-gray-400">Clique para abrir em tamanho original</span>
                                                                             </div>
-                                                                        ))}
-                                                                    </div>
-                                                                )}
+                                                                            <div className="grid grid-cols-2 gap-4">
+                                                                                {sectionImages.map((img, idx) => (
+                                                                                    <a
+                                                                                        key={idx}
+                                                                                        href={img}
+                                                                                        target="_blank"
+                                                                                        rel="noopener noreferrer"
+                                                                                        title={`Abrir evidência ${idx + 1} em tamanho original`}
+                                                                                        className="report-image-container relative aspect-video rounded-[24px] overflow-hidden border-2 border-white shadow-lg group/img block"
+                                                                                    >
+                                                                                        <img src={img} alt={`Evidência ${idx + 1}`} className="w-full h-full object-cover group-hover/img:scale-110 transition-transform duration-700" />
+                                                                                        <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent opacity-0 group-hover/img:opacity-100 transition-opacity p-4 flex flex-end items-end no-print">
+                                                                                            <span className="text-white font-black text-[10px] tracking-widest uppercase">Evidência #{idx + 1}</span>
+                                                                                        </div>
+                                                                                    </a>
+                                                                                ))}
+                                                                            </div>
+                                                                        </div>
+                                                                    );
+                                                                })()}
                                                             </div>
                                                         )
                                                     })}
@@ -5692,6 +5749,26 @@ const App: React.FC = () => {
                     {/* --- HISTORY LIST VIEW --- */}
                     {currentView === 'history' && (
                         <div className="max-w-6xl mx-auto space-y-10 animate-fade-in pb-24">
+                            <div className="flex justify-end">
+                                <button
+                                    onClick={handleReloadReports}
+                                    disabled={isReloadingReports}
+                                    className={`relative group flex items-center justify-center gap-3 px-8 py-4 rounded-2xl font-black text-sm transition-all active:scale-95 shadow-lg overflow-hidden ${isReloadingReports
+                                        ? 'bg-gray-100 text-gray-400 cursor-wait'
+                                        : 'bg-white hover:bg-gray-50 text-gray-800 border-2 border-gray-100'
+                                        }`}
+                                >
+                                    {isReloadingReports ? (
+                                        <Loader2 size={20} className="animate-spin" />
+                                    ) : (
+                                        <RefreshCw size={20} className="group-hover:rotate-180 transition-transform duration-700" />
+                                    )}
+                                    <span className="relative z-10">{isReloadingReports ? 'SINCRONIZANDO...' : 'ATUALIZAR DADOS'}</span>
+                                    {!isReloadingReports && (
+                                        <div className="absolute inset-0 bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                    )}
+                                </button>
+                            </div>
                             {/* Main History Header Card */}
                             <div className="bg-white/80 backdrop-blur-xl border border-white/50 rounded-[40px] shadow-card overflow-hidden relative">
                                 <div className={`h-1.5 w-full bg-gradient-to-r ${currentTheme.bgGradient}`} />
@@ -5702,27 +5779,11 @@ const App: React.FC = () => {
                                                 <History size={36} strokeWidth={2.5} />
                                             </div>
                                             <div>
-                                                <h2 className="text-3xl font-black text-gray-900 tracking-tight leading-tight">Histórico de Auditorias</h2>
+                                                <h2 className="text-3xl font-black text-gray-900 tracking-tight leading-tight">Histórico de Checklists</h2>
                                                 <p className="text-gray-500 font-bold text-lg">Gerenciamento centralizado de relatórios e desempenho</p>
                                             </div>
                                         </div>
 
-                                        <button
-                                            onClick={handleReloadReports}
-                                            disabled={isReloadingReports}
-                                            className={`relative group flex items-center justify-center gap-3 px-8 py-4 rounded-2xl font-black text-sm transition-all active:scale-95 shadow-lg overflow-hidden ${isReloadingReports
-                                                ? 'bg-gray-100 text-gray-400 cursor-wait'
-                                                : 'bg-white hover:bg-gray-50 text-gray-800 border-2 border-gray-100'
-                                                }`}
-                                        >
-                                            {isReloadingReports ? (
-                                                <Loader2 size={20} className="animate-spin" />
-                                            ) : (
-                                                <RefreshCw size={20} className="group-hover:rotate-180 transition-transform duration-700" />
-                                            )}
-                                            <span className="relative z-10">{isReloadingReports ? 'SINCRONIZANDO...' : 'ATUALIZAR DADOS'}</span>
-                                            {!isReloadingReports && <div className="absolute inset-0 bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />}
-                                        </button>
                                     </div>
 
                                     {/* Advanced Filters Bar */}

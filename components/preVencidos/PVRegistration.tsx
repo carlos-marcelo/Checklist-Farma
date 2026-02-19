@@ -484,9 +484,9 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       </div>
 
       {/* SEÇÃO PRINCIPAL: SCANNER E RESUMO POR VALIDADE */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        {/* SCANNER (OCUPA 3/4) */}
-        <div className="lg:col-span-3">
+      <div className="grid grid-cols-1 gap-6">
+        {/* SCANNER */}
+        <div>
           <div className="bg-white p-6 md:p-10 rounded-3xl shadow-md border border-slate-100 min-h-[300px] flex flex-col justify-center transition-all relative overflow-hidden group">
             <div className="absolute top-0 left-0 w-2 h-full bg-blue-600 opacity-0 group-hover:opacity-100 transition-opacity"></div>
 
@@ -630,15 +630,15 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
           </div>
         </div>
 
-        {/* RESUMO POR VALIDADE (COLUNA LATERAL OCUPA 1/4) */}
-        <div className="lg:col-span-1">
-          <div className="bg-white p-5 rounded-3xl shadow-md border border-slate-100 h-full flex flex-col min-h-[400px]">
-            <div className="flex items-center gap-2 mb-6">
+        {/* RESUMO POR VALIDADE (FULL WIDTH HORIZONTAL) */}
+        <div>
+          <div className="bg-white p-5 rounded-3xl shadow-md border border-slate-100">
+            <div className="flex items-center gap-2 mb-4">
               <Calendar size={18} className="text-blue-500" />
               <h3 className="font-black text-slate-800 text-xs uppercase tracking-widest">Resumo / Validade</h3>
             </div>
 
-            <div className="space-y-3 flex-1 overflow-y-auto custom-scrollbar pr-1">
+            <div className="flex flex-wrap gap-3 overflow-x-auto custom-scrollbar pb-2">
               {(() => {
                 const grouped = pvRecords.reduce((acc, rec) => {
                   const key = rec.expiryDate;
@@ -657,7 +657,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                 });
 
                 return sortedDates.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-12 text-slate-300 gap-3 border-2 border-dashed border-slate-50 rounded-2xl">
+                  <div className="flex flex-col items-center justify-center py-12 text-slate-300 gap-3 border-2 border-dashed border-slate-50 rounded-2xl w-full">
                     <Calendar size={32} className="opacity-20" />
                     <p className="text-[10px] font-black uppercase tracking-tighter italic">Vazio</p>
                   </div>
@@ -671,7 +671,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                       <button
                         key={date}
                         onClick={() => setFilterMonth(isActive ? '' : date)}
-                        className={`w-full p-3 rounded-2xl border-2 transition-all flex flex-col gap-2 relative overflow-hidden group/item
+                        className={`w-[240px] p-3 rounded-2xl border-2 transition-all flex flex-col gap-2 relative overflow-hidden group/item flex-none
                           ${isActive
                             ? 'border-blue-500 bg-blue-50 shadow-inner ring-1 ring-blue-100'
                             : `${status.bg} border-transparent hover:border-slate-200`
@@ -682,7 +682,9 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                           <span className="text-[10px] font-black text-slate-700">{formatCurrency(data.costTotal)}</span>
                         </div>
                         <div className="flex items-center justify-between gap-2 relative z-10 text-[8px] font-black uppercase tracking-widest">
-                          <span className={`${isActive ? 'text-blue-500' : 'text-slate-400'}`}>{data.items} unidades</span>
+                          <span className={`${isActive ? 'text-blue-500' : 'text-slate-400'}`}>
+                            {data.items} unidades · {data.skus.size} skus
+                          </span>
                           <span className={`px-1.5 py-0.5 rounded text-white ${status.label === 'VENCIDO' ? 'bg-red-500' :
                               status.label === 'CRÍTICO' ? 'bg-rose-500' : 'bg-blue-500'
                             }`}>
@@ -697,7 +699,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
               })()}
             </div>
 
-            <div className="mt-6 pt-4 border-t border-slate-50">
+            <div className="mt-4 pt-4 border-t border-slate-50">
               <div className="bg-slate-50 p-3 rounded-xl">
                 <p className="text-[9px] font-black text-slate-400 uppercase mb-1">Total da Sessão</p>
                 <p className="text-sm font-black text-slate-800">{formatCurrency(totalCostPredicted)}</p>
