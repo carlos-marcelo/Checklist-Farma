@@ -183,6 +183,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   const [isBranchPrefetching, setIsBranchPrefetching] = useState(false);
   const [branchPrefetchReady, setBranchPrefetchReady] = useState(false);
   const [branchPrefetchError, setBranchPrefetchError] = useState<string | null>(null);
+  const [isLoadingBranchSalesState, setIsLoadingBranchSalesState] = useState(false);
+  const [isLoadingSalesUploads, setIsLoadingSalesUploads] = useState(false);
+  const [isLoadingAnalysisReports, setIsLoadingAnalysisReports] = useState(false);
+  const [isLoadingInventoryReport, setIsLoadingInventoryReport] = useState(false);
+  const [hasInitialHydrationCompleted, setHasInitialHydrationCompleted] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const [salesUploads, setSalesUploads] = useState<DbPVSalesUpload[]>([]);
   const [analysisReports, setAnalysisReports] = useState<Record<string, AnalysisReportPayload>>({});
@@ -301,6 +306,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       userName: ''
     }));
   }, []);
+
+  useEffect(() => {
+    setHasInitialHydrationCompleted(false);
+  }, [userEmail]);
 
   useEffect(() => {
     if (currentView !== AppView.SETUP) return;
@@ -819,18 +828,32 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   // Load persistent branch records and history when company/branch is selected
   useEffect(() => {
-    if (sessionInfo?.companyId && sessionInfo?.filial) {
-      // 1. Fetch Sales History (Dashboard Persistence)
-      console.log('🔍 [PV DEBUG] Buscando histórico de vendas...');
-      fetchPVSalesHistory(sessionInfo.companyId, sessionInfo.filial)
-        .then(history => {
-          if (history) setHistoryRecords(history);
-        })
-        .catch(err => console.error('Erro carregando histórico de vendas:', err));
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) {
+      setIsLoadingBranchSalesState(false);
+      return;
+    }
 
-      // 2. Fetch Active Sales Report (Persistence)
-      fetchActiveSalesReport(sessionInfo.companyId, sessionInfo.filial)
-        .then(report => {
+    let cancelled = false;
+    setIsLoadingBranchSalesState(true);
+
+    const loadBranchSalesData = async () => {
+      try {
+        console.log('🔍 [PV DEBUG] Buscando histórico de vendas...');
+        const [historyRes, activeSalesRes] = await Promise.allSettled([
+          fetchPVSalesHistory(sessionInfo.companyId!, sessionInfo.filial!),
+          fetchActiveSalesReport(sessionInfo.companyId!, sessionInfo.filial!)
+        ]);
+
+        if (cancelled) return;
+
+        if (historyRes.status === 'fulfilled' && historyRes.value) {
+          setHistoryRecords(historyRes.value);
+        } else if (historyRes.status === 'rejected') {
+          console.error('Erro carregando histórico de vendas:', historyRes.reason);
+        }
+
+        if (activeSalesRes.status === 'fulfilled') {
+          const report = activeSalesRes.value;
           if (!report) return;
 
           if (report.sales_records && report.sales_records.length > 0) {
@@ -843,7 +866,6 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           setConfirmedPVSales(confirmed);
           setFinalizedREDSByPeriod(finalized);
 
-          // Restore upload metadata for display
           if (report.sales_period || report.uploaded_at) {
             setLocalLastUpload({
               period_label: report.sales_period,
@@ -856,18 +878,30 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
               period_end: null
             });
           }
-        })
-        .catch(err => console.error('Erro carregando relatório de vendas ativo:', err));
-    }
+        } else {
+          console.error('Erro carregando relatório de vendas ativo:', activeSalesRes.reason);
+        }
+      } finally {
+        if (!cancelled) setIsLoadingBranchSalesState(false);
+      }
+    };
+
+    loadBranchSalesData();
+
+    return () => {
+      cancelled = true;
+    };
   }, [sessionInfo?.companyId, sessionInfo?.filial]);
 
   useEffect(() => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) {
       setSalesUploads([]);
+      setIsLoadingSalesUploads(false);
       return;
     }
 
     let cancelled = false;
+    setIsLoadingSalesUploads(true);
     fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial)
       .then(reports => {
         if (cancelled) return;
@@ -879,6 +913,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       })
       .finally(() => {
         if (cancelled) return;
+        setIsLoadingSalesUploads(false);
       });
 
     return () => {
@@ -889,10 +924,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   useEffect(() => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) {
       setAnalysisReports({});
+      setIsLoadingAnalysisReports(false);
       return;
     }
 
     let cancelled = false;
+    setIsLoadingAnalysisReports(true);
     fetchPVSalesAnalysisReports(sessionInfo.companyId, sessionInfo.filial)
       .then(reports => {
         if (cancelled) return;
@@ -908,6 +945,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       .catch(err => {
         if (cancelled) return;
         console.error('Erro carregando relatórios de análise de vendas:', err);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsLoadingAnalysisReports(false);
       });
 
     return () => {
@@ -920,10 +961,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       setInventoryReport(null);
       setInventoryCostByBarcode({});
       setInventoryStockByBarcode({});
+      setIsLoadingInventoryReport(false);
       return;
     }
 
     let cancelled = false;
+    setIsLoadingInventoryReport(true);
     fetchPVInventoryReport(sessionInfo.companyId, sessionInfo.filial)
       .then(report => {
         if (cancelled) return;
@@ -939,6 +982,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       .catch(err => {
         if (cancelled) return;
         console.error('Erro carregando relatório de estoque da filial:', err);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setIsLoadingInventoryReport(false);
       });
 
     return () => {
@@ -2636,6 +2683,50 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         ? `${expiryAlert.current.toLocaleString('pt-BR')} vence(m) ${expiryAlert.periodLabel}`
         : `Sem vencimentos ${expiryAlert.periodLabel}`;
   const headerInfo = sessionInfo || setupDraftInfo;
+  const hasBranchContext = !!(sessionInfo?.companyId && sessionInfo?.filial);
+  const shouldWaitSetupPrefetch = currentView === AppView.SETUP && !!(setupDraftInfo?.companyId && setupDraftInfo?.filial);
+  const initialHydrationReady = useMemo(() => {
+    if (!userEmail) return true;
+    if (isLoadingSession) return false;
+    if (!isInitialSyncDone || reportsSyncStatus === 'loading') return false;
+    if (shouldWaitSetupPrefetch && isBranchPrefetching) return false;
+    if (!hasBranchContext) return true;
+    return !isLoadingBranchSalesState
+      && !isLoadingSalesUploads
+      && !isLoadingAnalysisReports
+      && !isLoadingInventoryReport;
+  }, [
+    userEmail,
+    isLoadingSession,
+    isInitialSyncDone,
+    reportsSyncStatus,
+    shouldWaitSetupPrefetch,
+    isBranchPrefetching,
+    hasBranchContext,
+    isLoadingBranchSalesState,
+    isLoadingSalesUploads,
+    isLoadingAnalysisReports,
+    isLoadingInventoryReport
+  ]);
+
+  useEffect(() => {
+    if (hasInitialHydrationCompleted) return;
+    if (initialHydrationReady) {
+      setHasInitialHydrationCompleted(true);
+    }
+  }, [hasInitialHydrationCompleted, initialHydrationReady]);
+
+  if (!hasInitialHydrationCompleted) {
+    return (
+      <div className="h-full w-full bg-slate-50 flex items-center justify-center">
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm px-8 py-6 flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin"></div>
+          <p className="text-sm font-black text-slate-700 uppercase tracking-wider">Sincronizando Pré-Vencidos</p>
+          <p className="text-xs text-slate-500 font-semibold">Aguardando carregamento completo dos dados do Supabase...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden text-slate-900">
