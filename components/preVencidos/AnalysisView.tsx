@@ -1,5 +1,5 @@
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { PVRecord, SalesRecord, PVSaleClassification, SalesUploadRecord, SessionInfo } from '../../preVencidos/types';
 import { buildAnalysisReportHtml, buildAnalysisReportPayload } from '../../preVencidos/analysisReport';
 import { FileSearch, Users, ShoppingCart, TrendingUp, AlertCircle, CheckCircle, FlaskConical, Repeat, Search, Package, Trophy, CheckSquare, XCircle, Save, MinusCircle, HelpCircle, Lock, Printer } from 'lucide-react';
@@ -60,6 +60,37 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [expanded, setExpanded] = useState<{ id: string, type: 'sku' | 'similar' } | null>(null);
   const [activeFilter, setActiveFilter] = useState<'all' | 'pending' | 'finalized' | 'similar'>('all');
+  const analysisSearchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const handleFindShortcut = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        analysisSearchInputRef.current?.focus();
+        analysisSearchInputRef.current?.select();
+      }
+    };
+
+    window.addEventListener('keydown', handleFindShortcut);
+    return () => window.removeEventListener('keydown', handleFindShortcut);
+  }, []);
+
+  const salesUploadCutoff = useMemo(() => {
+    if (!lastUpload?.uploaded_at) return null;
+    const date = new Date(lastUpload.uploaded_at);
+    if (Number.isNaN(date.getTime())) return null;
+    return date;
+  }, [lastUpload?.uploaded_at]);
+
+  const eligiblePVRecords = useMemo(() => {
+    if (!salesUploadCutoff) return pvRecords;
+    return pvRecords.filter(record => {
+      if (!record.entryDate) return true;
+      const entryDate = new Date(record.entryDate);
+      if (Number.isNaN(entryDate.getTime())) return true;
+      return entryDate.getTime() <= salesUploadCutoff.getTime();
+    });
+  }, [pvRecords, salesUploadCutoff]);
 
   const handleFilterClick = (filter: 'pending' | 'finalized' | 'similar') => {
     setActiveFilter(prev => (prev === filter ? 'all' : filter));
@@ -127,7 +158,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
       return Number(value || 0);
     };
 
-    const existingCodes = new Set(pvRecords.map(pv => pv.reducedCode));
+    const existingCodes = new Set(eligiblePVRecords.map(pv => pv.reducedCode));
     const missingFinalized = periodFinalizedList.filter(code => !existingCodes.has(code));
     const placeholderRecords: PVRecord[] = missingFinalized.map(code => {
       const saleMatch = salesRecords.find(s => s.reducedCode === code);
@@ -146,7 +177,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
       };
     });
 
-    const baseRecords = [...pvRecords, ...placeholderRecords];
+    const baseRecords = [...eligiblePVRecords, ...placeholderRecords];
 
     const enriched = baseRecords.map(pv => {
       const isFinalized = periodFinalizedList.includes(pv.reducedCode);
@@ -235,13 +266,13 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     });
     // Hide "Sem Movimento" items from the analysis list.
     return enriched.filter(item => item.status !== 'lost');
-  }, [pvRecords, salesRecords, finalizedREDSByPeriod, currentSalesPeriod, barcodeByReduced, inventoryCostByBarcode, inventoryStockByBarcode, labByReduced]);
+  }, [eligiblePVRecords, salesRecords, finalizedREDSByPeriod, currentSalesPeriod, barcodeByReduced, inventoryCostByBarcode, inventoryStockByBarcode, labByReduced]);
 
   const reportPayload = useMemo(() => {
     const normalizedPeriod = (currentSalesPeriod || '').trim();
     const finalizedCodes = finalizedREDSByPeriod[normalizedPeriod] || finalizedREDSByPeriod[currentSalesPeriod] || [];
     return buildAnalysisReportPayload({
-      pvRecords,
+      pvRecords: eligiblePVRecords,
       salesRecords,
       periodLabel: normalizedPeriod || 'Período não identificado',
       finalizedCodes,
@@ -253,7 +284,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         uploaded_at: lastUpload?.uploaded_at || null
       }
     });
-  }, [pvRecords, salesRecords, currentSalesPeriod, finalizedREDSByPeriod, sessionInfo, lastUpload]);
+  }, [eligiblePVRecords, salesRecords, currentSalesPeriod, finalizedREDSByPeriod, sessionInfo, lastUpload]);
 
   const reportPayloadForPrint = useMemo(() => {
     const finalizedSet = new Set(reportPayload.finalized_codes || []);
@@ -454,6 +485,7 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
             <div className="relative w-full sm:w-64 min-w-[200px]">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
               <input
+                ref={analysisSearchInputRef}
                 type="text" placeholder="Buscar item..."
                 className="w-full pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-blue-500 outline-none"
                 value={searchTerm}

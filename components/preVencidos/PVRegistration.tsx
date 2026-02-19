@@ -53,6 +53,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   const originInputRef = useRef<HTMLSelectElement>(null);
   const sectorInputRef = useRef<HTMLInputElement>(null);
   const expiryInputRef = useRef<HTMLInputElement>(null);
+  const historySearchInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (scanningProduct) {
@@ -97,6 +98,19 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [scanningProduct]);
+
+  useEffect(() => {
+    const handleFindShortcut = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        historySearchInputRef.current?.focus();
+        historySearchInputRef.current?.select();
+      }
+    };
+
+    window.addEventListener('keydown', handleFindShortcut);
+    return () => window.removeEventListener('keydown', handleFindShortcut);
+  }, []);
 
   const handleScan = (code: string) => {
     const foundByBarcode = masterProducts.find(p => p.barcode === code);
@@ -295,16 +309,16 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       return;
     }
 
-    const doc = new jsPDF();
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     doc.setFontSize(16);
-    doc.text('Relatório de Pré-Vencidos', 14, 20);
+    doc.text('Relatório de Pré-Vencidos', 10, 20);
     doc.setFontSize(10);
-    doc.text(`Filial: ${sessionInfo?.filial || 'N/A'} - Gerado em: ${new Date().toLocaleString()}`, 14, 28);
+    doc.text(`Filial: ${sessionInfo?.filial || 'N/A'} - Gerado em: ${new Date().toLocaleString()}`, 10, 28);
 
     // Legend in PDF
     doc.setFontSize(8);
     doc.setTextColor(200, 0, 0);
-    doc.text('Legenda: Vermelho = Vencido, Vinho = < 30 dias', 14, 35);
+    doc.text('Legenda: Vermelho = Vencido, Vinho = < 30 dias', 10, 35);
     doc.setTextColor(0, 0, 0);
 
     const tableColumn = ['Reduzido', 'Descrição', 'Origem', 'Resp. Setor', 'Qtd', 'Custo Unit.', 'Custo Total', 'Vencimento', 'Status', 'Dias', 'Resp.', 'Cadastro'];
@@ -334,7 +348,38 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       head: [tableColumn],
       body: tableRows,
       theme: 'grid',
-      styles: { fontSize: 8 },
+      tableWidth: 190,
+      margin: { left: 10, right: 10 },
+      headStyles: {
+        fillColor: [20, 184, 166],
+        textColor: [255, 255, 255],
+        fontStyle: 'bold',
+        halign: 'left',
+        overflow: 'ellipsize'
+      },
+      styles: {
+        fontSize: 6.3,
+        cellPadding: 1.1,
+        overflow: 'ellipsize',
+        lineColor: [226, 232, 240],
+        lineWidth: 0.1,
+        valign: 'middle',
+        textColor: [51, 65, 85]
+      },
+      columnStyles: {
+        0: { cellWidth: 13 }, // Reduzido
+        1: { cellWidth: 27 }, // Descrição
+        2: { cellWidth: 14 }, // Origem
+        3: { cellWidth: 16 }, // Resp. Setor
+        4: { cellWidth: 8, halign: 'center' }, // Qtd
+        5: { cellWidth: 15, halign: 'right' }, // Custo Unit.
+        6: { cellWidth: 15, halign: 'right' }, // Custo Total
+        7: { cellWidth: 12, halign: 'center' }, // Vencimento
+        8: { cellWidth: 11, halign: 'center' }, // Status
+        9: { cellWidth: 10, halign: 'center' }, // Dias
+        10: { cellWidth: 27 }, // Resp.
+        11: { cellWidth: 22 } // Cadastro
+      },
       didParseCell: (data: any) => {
         if (data.section === 'body' && data.column.index === 8) {
           const statusLabel = data.cell.raw;
@@ -386,12 +431,11 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   };
 
   const filteredRecords = pvRecords.filter(rec => {
-    const search = filterText.toLowerCase();
-    const matchText = rec.name.toLowerCase().includes(search)
-      || rec.reducedCode.includes(search)
-      || rec.dcb.toLowerCase().includes(search)
-      || (rec.originBranch || '').toLowerCase().includes(search)
-      || (rec.sectorResponsible || '').toLowerCase().includes(search);
+    const search = filterText.trim().toLowerCase();
+    const matchText = !search
+      ? true
+      : rec.name.toLowerCase().includes(search)
+      || rec.reducedCode.toLowerCase().includes(search);
     const matchMonth = filterMonth ? rec.expiryDate.includes(filterMonth) : true;
 
     let matchStatus = true;
@@ -515,7 +559,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
             {!scanningProduct ? (
               <div className="space-y-4">
                 <div className="text-center mb-6">
-                  <h3 className="text-lg font-black text-slate-800 uppercase tracking-widest">Entrada de Mercadoria</h3>
+                  <h3 className="text-lg font-black text-slate-800 uppercase tracking-widest">Cadastro de Pré-Vencido</h3>
                   <p className="text-xs text-slate-400 font-medium">Bipe os produtos ou digite o código reduzido para iniciar</p>
                 </div>
                 <ScannerInput onScan={handleScan} />
@@ -755,6 +799,18 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                 TOTAL: {filteredRecords.length}
               </span>
             </div>
+          </div>
+
+          <div className="relative max-w-xl">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              ref={historySearchInputRef}
+              type="text"
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+              placeholder="Buscar por código reduzido ou descrição..."
+              className="w-full pl-10 pr-3 py-2 rounded-xl border border-slate-200 bg-white text-sm text-slate-700 placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none"
+            />
           </div>
 
           <div className="flex flex-col md:flex-row gap-4 pt-4 border-t border-slate-100 justify-end">
