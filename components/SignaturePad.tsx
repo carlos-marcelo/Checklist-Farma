@@ -2,7 +2,7 @@ import React, { useRef, useEffect, useState } from 'react';
 
 interface SignaturePadProps {
   onEnd: (dataUrl: string) => void;
-  label: string;
+  label?: string;
 }
 
 const SignaturePad: React.FC<SignaturePadProps> = ({ onEnd, label }) => {
@@ -84,7 +84,9 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onEnd, label }) => {
 
   return (
     <div className="mb-6 break-inside-avoid">
-      <label className="block text-sm font-bold text-gray-700 mb-2 uppercase tracking-wide">{label}</label>
+      {label ? (
+        <label className="block text-sm font-bold text-gray-700 mb-2 uppercase tracking-wide">{label}</label>
+      ) : null}
       <div className="relative group">
         <div className="absolute inset-0 bg-gray-200 rounded-xl transform translate-y-1 translate-x-1 group-hover:translate-y-2 group-hover:translate-x-2 transition-transform duration-300"></div>
         <div className="border-2 border-gray-200 rounded-xl bg-white relative shadow-inner overflow-hidden">

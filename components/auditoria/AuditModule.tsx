@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import {
     AuditData,
     ViewState,
@@ -1217,6 +1218,29 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             return next;
         });
     };
+
+    const closeTermModal = useCallback(() => {
+        setTermModal(null);
+        setTermForm(null);
+    }, []);
+
+    useEffect(() => {
+        if (!termModal || typeof window === 'undefined' || typeof document === 'undefined') return;
+        const previousOverflow = document.body.style.overflow;
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                closeTermModal();
+            }
+        };
+
+        document.body.style.overflow = 'hidden';
+        window.addEventListener('keydown', handleKeyDown);
+        return () => {
+            window.removeEventListener('keydown', handleKeyDown);
+            document.body.style.overflow = previousOverflow;
+        };
+    }, [termModal, closeTermModal]);
 
     const buildTermScopeInfo = (scope: TermScope) => {
         if (!data) return null;
@@ -2925,15 +2949,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 </button>
             )}
 
-            {termModal && termForm && termScopeInfo && (
-                <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-[2005] flex items-center justify-center p-4">
+            {termModal && termForm && termScopeInfo && typeof document !== 'undefined' && createPortal(
+                <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[2147483000] flex items-center justify-center p-4">
                     <div className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
                         <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
                             <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest flex items-center gap-2">
                                 <FileSignature className="w-4 h-4 text-indigo-500" />
                                 Termo de Auditoria - {termModal.type === 'custom' ? 'Personalizado' : termModal.type === 'group' ? 'Grupo' : termModal.type === 'department' ? 'Departamento' : 'Categoria'}
                             </h3>
-                            <button onClick={() => { setTermModal(null); setTermForm(null); }} className="text-slate-400 hover:text-red-500 transition-colors">
+                            <button onClick={closeTermModal} className="text-slate-400 hover:text-red-500 transition-colors">
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
@@ -2991,46 +3015,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                     />
                                 </div>
-                                <div className="md:col-span-2 space-y-1">
-                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Gestor 1</label>
-                                    <input
-                                        type="text"
-                                        value={termForm.managerName2}
-                                        onChange={(e) => updateTermForm(prev => ({ ...prev, managerName2: e.target.value }))}
-                                        readOnly={!isMaster}
-                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
-                                    />
-                                </div>
-                                <div className="md:col-span-2 space-y-1">
-                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">CPF Gestor 1</label>
-                                    <input
-                                        type="text"
-                                        value={termForm.managerCpf2}
-                                        onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf2: e.target.value }))}
-                                        readOnly={!isMaster}
-                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
-                                    />
-                                </div>
-                                <div className="md:col-span-2 space-y-1">
-                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Gestor 2</label>
-                                    <input
-                                        type="text"
-                                        value={termForm.managerName}
-                                        onChange={(e) => updateTermForm(prev => ({ ...prev, managerName: e.target.value }))}
-                                        readOnly={!isMaster}
-                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
-                                    />
-                                </div>
-                                <div className="md:col-span-2 space-y-1">
-                                    <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">CPF Gestor 2</label>
-                                    <input
-                                        type="text"
-                                        value={termForm.managerCpf}
-                                        onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf: e.target.value }))}
-                                        readOnly={!isMaster}
-                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
-                                    />
-                                </div>
                             </div>
 
                             <div className="space-y-3">
@@ -3040,6 +3024,25 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 </div>
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
+                                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Gestor 1</p>
+                                        <div className="grid grid-cols-1 gap-2 mb-2">
+                                            <input
+                                                type="text"
+                                                value={termForm.managerName2}
+                                                onChange={(e) => updateTermForm(prev => ({ ...prev, managerName2: e.target.value }))}
+                                                placeholder="Nome do Gestor 1"
+                                                readOnly={!isMaster}
+                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                            />
+                                            <input
+                                                type="text"
+                                                value={termForm.managerCpf2}
+                                                onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf2: e.target.value }))}
+                                                placeholder="CPF Gestor 1"
+                                                readOnly={!isMaster}
+                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                            />
+                                        </div>
                                         {termForm.managerSignature2 ? (
                                             <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
                                                 <img src={termForm.managerSignature2} alt="Assinatura Gestor" className="max-h-full" />
@@ -3055,12 +3058,31 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 )}
                                             </div>
                                         ) : isMaster ? (
-                                            <SignaturePad label="Gestor 1" onEnd={(dataUrl) => updateTermForm(prev => ({ ...prev, managerSignature2: dataUrl }))} />
+                                            <SignaturePad onEnd={(dataUrl) => updateTermForm(prev => ({ ...prev, managerSignature2: dataUrl }))} />
                                         ) : (
                                             <div className="border border-slate-100 rounded-xl bg-slate-50 h-40 flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase tracking-widest italic">Assinatura Pendente</div>
                                         )}
                                     </div>
                                     <div>
+                                        <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Gestor 2</p>
+                                        <div className="grid grid-cols-1 gap-2 mb-2">
+                                            <input
+                                                type="text"
+                                                value={termForm.managerName}
+                                                onChange={(e) => updateTermForm(prev => ({ ...prev, managerName: e.target.value }))}
+                                                placeholder="Nome do Gestor 2"
+                                                readOnly={!isMaster}
+                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                            />
+                                            <input
+                                                type="text"
+                                                value={termForm.managerCpf}
+                                                onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf: e.target.value }))}
+                                                placeholder="CPF Gestor 2"
+                                                readOnly={!isMaster}
+                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                            />
+                                        </div>
                                         {termForm.managerSignature ? (
                                             <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
                                                 <img src={termForm.managerSignature} alt="Assinatura Gestor" className="max-h-full" />
@@ -3076,7 +3098,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 )}
                                             </div>
                                         ) : isMaster ? (
-                                            <SignaturePad label="Gestor 2" onEnd={(dataUrl) => updateTermForm(prev => ({ ...prev, managerSignature: dataUrl }))} />
+                                            <SignaturePad onEnd={(dataUrl) => updateTermForm(prev => ({ ...prev, managerSignature: dataUrl }))} />
                                         ) : (
                                             <div className="border border-slate-100 rounded-xl bg-slate-50 h-40 flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase tracking-widest italic">Assinatura Pendente</div>
                                         )}
@@ -3178,7 +3200,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             </button>
                         </div>
                     </div>
-                </div>
+                </div>,
+                document.body
             )}
 
             <style>{`
