@@ -13,8 +13,10 @@ import {
 import {
     fetchLatestAudit,
     upsertAuditSession,
-    insertAppEventLog
+    insertAppEventLog,
+    fetchGlobalBaseFiles
 } from '../../supabaseService';
+import type { DbGlobalBaseFile } from '../../supabaseService';
 import ProgressBar from './ProgressBar';
 import Breadcrumbs from './Breadcrumbs';
 import SignaturePad from '../SignaturePad';
@@ -37,6 +39,17 @@ import {
 
 const GROUP_UPLOAD_IDS = ['2000', '3000', '4000', '8000', '10000', '66', '67'] as const;
 type GroupUploadId = typeof GROUP_UPLOAD_IDS[number];
+const GROUP_GLOBAL_BASE_KEYS: Record<GroupUploadId, string> = {
+    '2000': 'audit_cadastro_2000',
+    '3000': 'audit_cadastro_3000',
+    '4000': 'audit_cadastro_4000',
+    '8000': 'audit_cadastro_8000',
+    '10000': 'audit_cadastro_10000',
+    '66': 'audit_cadastro_66',
+    '67': 'audit_cadastro_67'
+};
+const AUDIT_DEPT_IDS_GLOBAL_KEY = 'audit_ids_departamento';
+const AUDIT_CAT_IDS_GLOBAL_KEY = 'audit_ids_categoria';
 const ALLOWED_IDS = GROUP_UPLOAD_IDS.map(id => Number(id));
 const FILIAIS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18];
 const STORAGE_KEY = 'audit_flow_v72_master';
@@ -60,6 +73,44 @@ const createInitialGroupFiles = (): Record<GroupUploadId, File | null> => ({
     "66": null,
     "67": null
 });
+
+const createInitialGroupMeta = (): Record<GroupUploadId, DbGlobalBaseFile | null> => ({
+    "2000": null,
+    "3000": null,
+    "4000": null,
+    "8000": null,
+    "10000": null,
+    "66": null,
+    "67": null
+});
+
+const decodeGlobalFileToBrowserFile = (file: DbGlobalBaseFile): File | null => {
+    const raw = String(file?.file_data_base64 || '').trim();
+    if (!raw) return null;
+
+    let mimeType = file?.mime_type || 'application/octet-stream';
+    let base64 = raw;
+    const dataUrlMatch = raw.match(/^data:([^;]+);base64,(.*)$/);
+    if (dataUrlMatch) {
+        mimeType = dataUrlMatch[1] || mimeType;
+        base64 = dataUrlMatch[2] || '';
+    }
+    if (!base64) return null;
+
+    try {
+        const binary = window.atob(base64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        const originalName = file.file_name || `${file.module_key || 'base'}.xlsx`;
+        const fileName = originalName.startsWith('[GLOBAL] ') ? originalName : `[GLOBAL] ${originalName}`;
+        return new File([bytes], fileName, { type: mimeType });
+    } catch (error) {
+        console.error('Erro ao decodificar arquivo global da auditoria:', error);
+        return null;
+    }
+};
 
 const TRIER_API_BASE =
     ((import.meta as any).env?.VITE_TRIER_INTEGRATION_URL as string) || "http://localhost:8000";
@@ -444,16 +495,102 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [fileStock, setFileStock] = useState<File | null>(null);
     const [fileDeptIds, setFileDeptIds] = useState<File | null>(null);
     const [fileCatIds, setFileCatIds] = useState<File | null>(null);
-    const selectedGroupFiles = useMemo(
-        () => GROUP_UPLOAD_IDS
-            .map(groupId => ({ groupId, file: groupFiles[groupId] }))
-            .filter((entry): entry is { groupId: GroupUploadId; file: File } => !!entry.file),
+    const [globalGroupFiles, setGlobalGroupFiles] = useState<Record<GroupUploadId, File | null>>(createInitialGroupFiles);
+    const [globalGroupMeta, setGlobalGroupMeta] = useState<Record<GroupUploadId, DbGlobalBaseFile | null>>(createInitialGroupMeta);
+    const [globalDeptIdsFile, setGlobalDeptIdsFile] = useState<File | null>(null);
+    const [globalCatIdsFile, setGlobalCatIdsFile] = useState<File | null>(null);
+    const [globalDeptIdsMeta, setGlobalDeptIdsMeta] = useState<DbGlobalBaseFile | null>(null);
+    const [globalCatIdsMeta, setGlobalCatIdsMeta] = useState<DbGlobalBaseFile | null>(null);
+    const [isLoadingGlobalBases, setIsLoadingGlobalBases] = useState(false);
+
+    const localGroupFilesCount = useMemo(
+        () => GROUP_UPLOAD_IDS.reduce((count, groupId) => count + (groupFiles[groupId] ? 1 : 0), 0),
         [groupFiles]
     );
 
+    const effectiveGroupFiles = useMemo(
+        () =>
+            GROUP_UPLOAD_IDS
+                .map(groupId => ({ groupId, file: groupFiles[groupId] || globalGroupFiles[groupId] }))
+                .filter((entry): entry is { groupId: GroupUploadId; file: File } => !!entry.file),
+        [groupFiles, globalGroupFiles]
+    );
+
+    const effectiveDeptIdsFile = fileDeptIds || globalDeptIdsFile;
+    const effectiveCatIdsFile = fileCatIds || globalCatIdsFile;
     const setGroupFile = (groupId: GroupUploadId, file: File | null) => {
         setGroupFiles(prev => ({ ...prev, [groupId]: file }));
     };
+
+    const formatGlobalTimestamp = useCallback((value?: string | null) => {
+        if (!value) return '';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '';
+        return date.toLocaleString('pt-BR');
+    }, []);
+
+    useEffect(() => {
+        const companyId = selectedCompany?.id;
+        if (!companyId) {
+            setGlobalGroupFiles(createInitialGroupFiles());
+            setGlobalGroupMeta(createInitialGroupMeta());
+            setGlobalDeptIdsFile(null);
+            setGlobalCatIdsFile(null);
+            setGlobalDeptIdsMeta(null);
+            setGlobalCatIdsMeta(null);
+            setIsLoadingGlobalBases(false);
+            return;
+        }
+
+        let cancelled = false;
+        const loadGlobalAuditBases = async () => {
+            setIsLoadingGlobalBases(true);
+            try {
+                const files = await fetchGlobalBaseFiles(companyId);
+                if (cancelled) return;
+
+                const byKey = new Map(files.map(file => [file.module_key, file]));
+                const nextGroupFiles = createInitialGroupFiles();
+                const nextGroupMeta = createInitialGroupMeta();
+
+                GROUP_UPLOAD_IDS.forEach(groupId => {
+                    const moduleKey = GROUP_GLOBAL_BASE_KEYS[groupId];
+                    const globalFile = byKey.get(moduleKey) || null;
+                    nextGroupMeta[groupId] = globalFile;
+                    if (globalFile) {
+                        nextGroupFiles[groupId] = decodeGlobalFileToBrowserFile(globalFile);
+                    }
+                });
+
+                const deptMeta = byKey.get(AUDIT_DEPT_IDS_GLOBAL_KEY) || null;
+                const catMeta = byKey.get(AUDIT_CAT_IDS_GLOBAL_KEY) || null;
+
+                setGlobalGroupFiles(nextGroupFiles);
+                setGlobalGroupMeta(nextGroupMeta);
+                setGlobalDeptIdsMeta(deptMeta);
+                setGlobalCatIdsMeta(catMeta);
+                setGlobalDeptIdsFile(deptMeta ? decodeGlobalFileToBrowserFile(deptMeta) : null);
+                setGlobalCatIdsFile(catMeta ? decodeGlobalFileToBrowserFile(catMeta) : null);
+            } catch (error) {
+                console.error('Erro ao carregar bases globais da auditoria:', error);
+                if (!cancelled) {
+                    setGlobalGroupFiles(createInitialGroupFiles());
+                    setGlobalGroupMeta(createInitialGroupMeta());
+                    setGlobalDeptIdsMeta(null);
+                    setGlobalCatIdsMeta(null);
+                    setGlobalDeptIdsFile(null);
+                    setGlobalCatIdsFile(null);
+                }
+            } finally {
+                if (!cancelled) setIsLoadingGlobalBases(false);
+            }
+        };
+
+        loadGlobalAuditBases();
+        return () => {
+            cancelled = true;
+        };
+    }, [selectedCompany?.id]);
 
     useEffect(() => {
         const saved = localStorage.getItem(STORAGE_KEY);
@@ -635,13 +772,23 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         return {
             mode: 'initial-structure-import',
             importedAt: nowIso,
-            groups: selectedGroupFiles.map(({ groupId, file }) => ({
+            groups: effectiveGroupFiles.map(({ groupId, file }) => ({
                 groupId,
-                file: toUploadedFileMeta(file)
+                source: groupFiles[groupId] ? 'local_upload' : 'global_base',
+                file: toUploadedFileMeta(file),
+                syncedAt: globalGroupMeta[groupId]?.updated_at || globalGroupMeta[groupId]?.uploaded_at || null
             })),
             stock: toUploadedFileMeta(fileStock),
-            deptIds: toUploadedFileMeta(fileDeptIds),
-            catIds: toUploadedFileMeta(fileCatIds)
+            deptIds: effectiveDeptIdsFile ? {
+                ...toUploadedFileMeta(effectiveDeptIdsFile),
+                source: fileDeptIds ? 'local_upload' : (globalDeptIdsMeta ? 'global_base' : 'none'),
+                syncedAt: globalDeptIdsMeta?.updated_at || globalDeptIdsMeta?.uploaded_at || null
+            } : null,
+            catIds: effectiveCatIdsFile ? {
+                ...toUploadedFileMeta(effectiveCatIdsFile),
+                source: fileCatIds ? 'local_upload' : (globalCatIdsMeta ? 'global_base' : 'none'),
+                syncedAt: globalCatIdsMeta?.updated_at || globalCatIdsMeta?.uploaded_at || null
+            } : null
         };
     };
 
@@ -651,7 +798,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             return;
         }
 
-        const hasStructureFiles = selectedGroupFiles.length > 0;
+        const hasStructureFiles = effectiveGroupFiles.length > 0;
+        const hasLocalStructureFiles = localGroupFilesCount > 0;
         const hasOpenStructure = !!(data && data.groups && data.groups.length > 0);
         const shouldMergeStockOnly = hasOpenStructure;
 
@@ -660,7 +808,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             return;
         }
 
-        if (shouldMergeStockOnly && hasStructureFiles) {
+        if (shouldMergeStockOnly && hasLocalStructureFiles) {
             alert("A auditoria já foi iniciada. Após o início, somente o arquivo de SALDOS pode ser alterado.");
             return;
         }
@@ -760,7 +908,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 return;
             }
 
-            const rowsGroupsByFile = await Promise.all(selectedGroupFiles.map(entry => readExcel(entry.file)));
+            const rowsGroupsByFile = await Promise.all(effectiveGroupFiles.map(entry => readExcel(entry.file)));
             const rowsStock = await readExcel(fileStock);
 
             const mapIdsAndBarcodes = (rows: any[][]) => {
@@ -785,8 +933,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             };
 
             const emptyIdsMap = { nameToId: {} as Record<string, string>, barcodeToId: {} as Record<string, string> };
-            const deptIdMaps = fileDeptIds ? mapIdsAndBarcodes(await readExcel(fileDeptIds)) : emptyIdsMap;
-            const catIdMaps = fileCatIds ? mapIdsAndBarcodes(await readExcel(fileCatIds)) : emptyIdsMap;
+            const deptIdMaps = effectiveDeptIdsFile ? mapIdsAndBarcodes(await readExcel(effectiveDeptIdsFile)) : emptyIdsMap;
+            const catIdMaps = effectiveCatIdsFile ? mapIdsAndBarcodes(await readExcel(effectiveCatIdsFile)) : emptyIdsMap;
 
             type ProductScope = { groupId: string; groupName: string; deptId: string; deptName: string; catId: string; catName: string };
             const productsByBarcode: Record<string, ProductScope[]> = {};
@@ -808,7 +956,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 }
             };
 
-            const groupFileRows = selectedGroupFiles.map((entry, idx) => ({
+            const groupFileRows = effectiveGroupFiles.map((entry, idx) => ({
                 groupId: entry.groupId,
                 rows: rowsGroupsByFile[idx] || []
             }));
@@ -2428,10 +2576,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                             {GROUP_UPLOAD_IDS.map((groupId) => {
                                 const selectedFile = groupFiles[groupId];
+                                const globalFile = globalGroupFiles[groupId];
+                                const globalMeta = globalGroupMeta[groupId];
+                                const effectiveFile = selectedFile || globalFile;
                                 return (
                                     <label
                                         key={`group-upload-${groupId}`}
-                                        className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${(!isMaster || structureLocked) ? 'opacity-30 cursor-not-allowed' : ''} ${selectedFile ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}
+                                        className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${(!isMaster || structureLocked) ? 'opacity-30 cursor-not-allowed' : ''} ${effectiveFile ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}
                                     >
                                         <input
                                             type="file"
@@ -2439,11 +2590,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             disabled={!isMaster || structureLocked}
                                             onChange={e => setGroupFile(groupId, e.target.files?.[0] || null)}
                                         />
-                                        <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${selectedFile ? 'text-emerald-500' : 'text-slate-300'}`} />
-                                        <p className="text-[8px] font-black uppercase truncate">{selectedFile ? selectedFile.name : `Cadastro ${groupId}`}</p>
+                                        <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${effectiveFile ? 'text-emerald-500' : 'text-slate-300'}`} />
+                                        <p className="text-[8px] font-black uppercase truncate">{selectedFile ? selectedFile.name : effectiveFile ? effectiveFile.name : `Cadastro ${groupId}`}</p>
                                         <p className="text-[8px] font-bold text-slate-500 mt-1">
-                                            {selectedFile ? `Grupo ${groupId} carregado` : `Grupo ${groupId}`}
+                                            {selectedFile
+                                                ? `Grupo ${groupId} (upload local)`
+                                                : globalFile
+                                                    ? 'Já carregado em Cadastros Base Globais'
+                                                    : `Grupo ${groupId}`}
                                         </p>
+                                        {!selectedFile && globalMeta && (
+                                            <p className="text-[8px] font-bold text-emerald-700 mt-1">
+                                                {formatGlobalTimestamp(globalMeta.updated_at || globalMeta.uploaded_at)}
+                                            </p>
+                                        )}
                                     </label>
                                 );
                             })}
@@ -2454,16 +2614,40 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 <p className="text-[8px] font-black uppercase truncate">{fileStock ? fileStock.name : 'Saldos'}</p>
                             </label>
 
-                            <label className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${(!isMaster || structureLocked) ? 'opacity-30 cursor-not-allowed' : ''} ${fileDeptIds ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
+                            <label className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${(!isMaster || structureLocked) ? 'opacity-30 cursor-not-allowed' : ''} ${effectiveDeptIdsFile ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
                                 <input type="file" className="hidden" disabled={!isMaster || structureLocked} onChange={e => setFileDeptIds(e.target.files?.[0] || null)} />
-                                <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${fileDeptIds ? 'text-emerald-500' : 'text-slate-300'}`} />
-                                <p className="text-[8px] font-black uppercase truncate">{fileDeptIds ? fileDeptIds.name : 'IDs Depto (opcional)'}</p>
+                                <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${effectiveDeptIdsFile ? 'text-emerald-500' : 'text-slate-300'}`} />
+                                <p className="text-[8px] font-black uppercase truncate">{fileDeptIds ? fileDeptIds.name : effectiveDeptIdsFile ? effectiveDeptIdsFile.name : 'IDs Depto (opcional)'}</p>
+                                <p className="text-[8px] font-bold text-slate-500 mt-1">
+                                    {fileDeptIds
+                                        ? 'Upload local'
+                                        : globalDeptIdsFile
+                                            ? 'Já carregado em Cadastros Base Globais'
+                                            : 'Opcional'}
+                                </p>
+                                {!fileDeptIds && globalDeptIdsMeta && (
+                                    <p className="text-[8px] font-bold text-emerald-700 mt-1">
+                                        {formatGlobalTimestamp(globalDeptIdsMeta.updated_at || globalDeptIdsMeta.uploaded_at)}
+                                    </p>
+                                )}
                             </label>
 
-                            <label className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${(!isMaster || structureLocked) ? 'opacity-30 cursor-not-allowed' : ''} ${fileCatIds ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
+                            <label className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${(!isMaster || structureLocked) ? 'opacity-30 cursor-not-allowed' : ''} ${effectiveCatIdsFile ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
                                 <input type="file" className="hidden" disabled={!isMaster || structureLocked} onChange={e => setFileCatIds(e.target.files?.[0] || null)} />
-                                <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${fileCatIds ? 'text-emerald-500' : 'text-slate-300'}`} />
-                                <p className="text-[8px] font-black uppercase truncate">{fileCatIds ? fileCatIds.name : 'IDs Cat (opcional)'}</p>
+                                <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${effectiveCatIdsFile ? 'text-emerald-500' : 'text-slate-300'}`} />
+                                <p className="text-[8px] font-black uppercase truncate">{fileCatIds ? fileCatIds.name : effectiveCatIdsFile ? effectiveCatIdsFile.name : 'IDs Cat (opcional)'}</p>
+                                <p className="text-[8px] font-bold text-slate-500 mt-1">
+                                    {fileCatIds
+                                        ? 'Upload local'
+                                        : globalCatIdsFile
+                                            ? 'Já carregado em Cadastros Base Globais'
+                                            : 'Opcional'}
+                                </p>
+                                {!fileCatIds && globalCatIdsMeta && (
+                                    <p className="text-[8px] font-bold text-emerald-700 mt-1">
+                                        {formatGlobalTimestamp(globalCatIdsMeta.updated_at || globalCatIdsMeta.uploaded_at)}
+                                    </p>
+                                )}
                             </label>
                         </div>
                         {structureLocked && (
@@ -2472,7 +2656,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             </p>
                         )}
                         <p className="text-[10px] font-bold text-slate-500">
-                            Cadastros por grupo carregados em caixas fixas (2000, 3000, 4000, 8000, 10000, 66 e 67). Carregados: <span className="text-slate-700">{selectedGroupFiles.length}/{GROUP_UPLOAD_IDS.length}</span>.
+                            Cadastros por grupo carregados em caixas fixas (2000, 3000, 4000, 8000, 10000, 66 e 67). Carregados: <span className="text-slate-700">{effectiveGroupFiles.length}/{GROUP_UPLOAD_IDS.length}</span>.
+                            {isLoadingGlobalBases ? ' Verificando bases globais...' : ''}
                         </p>
                         <p className="text-[10px] font-bold text-slate-500">
                             Classificação: cruza <span className="text-slate-700">Estoque B</span> com <span className="text-slate-700">Cadastro K</span> (fallback por código reduzido), e lê <span className="text-slate-700">Departamento S</span> + <span className="text-slate-700">Categoria W</span>.

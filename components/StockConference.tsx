@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Upload,
   FileText,
@@ -152,6 +152,40 @@ type StockSummaryPayload = {
   started_at?: string;
   endedAt?: string;
   ended_at?: string;
+};
+
+const GLOBAL_CADASTRO_MODULE_KEY = 'shared_cadastro_produtos';
+
+const decodeGlobalFileToBrowserFile = (file: SupabaseService.DbGlobalBaseFile): File | null => {
+  const raw = String(file?.file_data_base64 || '').trim();
+  if (!raw) return null;
+
+  let mimeType = file?.mime_type || 'application/octet-stream';
+  let base64 = raw;
+  const dataUrlMatch = raw.match(/^data:([^;]+);base64,(.*)$/);
+  if (dataUrlMatch) {
+    mimeType = dataUrlMatch[1] || mimeType;
+    base64 = dataUrlMatch[2] || '';
+  }
+  if (!base64) return null;
+
+  try {
+    const binary = window.atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    const originalName = file.file_name || `${file.module_key || 'base'}.xlsx`;
+    const fileName = originalName.startsWith('[GLOBAL] ')
+      ? originalName
+      : `[GLOBAL] ${originalName}`;
+
+    return new File([bytes], fileName, { type: mimeType });
+  } catch (error) {
+    console.error('Erro ao decodificar arquivo global de conferência:', error);
+    return null;
+  }
 };
 
 interface CompanyAreaMatch {
@@ -416,6 +450,9 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   // UI State
   const [productFile, setProductFile] = useState<File | null>(null);
   const [stockFile, setStockFile] = useState<File | null>(null);
+  const [globalProductFile, setGlobalProductFile] = useState<File | null>(null);
+  const [globalProductMeta, setGlobalProductMeta] = useState<SupabaseService.DbGlobalBaseFile | null>(null);
+  const [isLoadingGlobalProduct, setIsLoadingGlobalProduct] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -790,8 +827,9 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   };
 
   const handleFileUpload = async () => {
-    if (!productFile || !stockFile) {
-      setErrorMsg("Por favor, selecione ambos os arquivos.");
+    const productSourceFile = effectiveProductFile;
+    if (!productSourceFile || !stockFile) {
+      setErrorMsg("Selecione o arquivo de estoque e utilize um cadastro de produtos (upload local ou base global).");
       return;
     }
 
@@ -810,13 +848,13 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     setTimeout(async () => {
       try {
         // --- 1. PRODUCT FILE ---
-        const pData = await processFile(productFile);
+        const pData = await processFile(productSourceFile);
         if (!pData || pData.length === 0) throw new Error("Arquivo de Produtos vazio ou inválido.");
 
         const pMap = new Map<string, Product>();
         const bMap = new Map<string, string>();
 
-        const isProdExcel = productFile.name.match(/\.(xls|xlsx)$/i);
+        const isProdExcel = productSourceFile.name.match(/\.(xls|xlsx)$/i);
 
         pData.forEach(row => {
           let reduced = '', barcode = '', desc = '';
@@ -937,7 +975,8 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
             success: true,
             source: 'web',
             event_meta: {
-              product_file: productFile?.name || null,
+              product_file: productSourceFile?.name || null,
+              product_source: productFile ? 'local_upload' : 'global_base',
               stock_file: stockFile?.name || null
             }
           }).catch(() => { });
@@ -1309,6 +1348,55 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     return options;
   }, [companies, selectedCompanyId]);
 
+  const effectiveProductFile = productFile || globalProductFile;
+
+  const formatGlobalTimestamp = useCallback((value?: string | null) => {
+    if (!value) return '';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString('pt-BR');
+  }, []);
+
+  useEffect(() => {
+    if (!selectedCompanyId) {
+      setGlobalProductMeta(null);
+      setGlobalProductFile(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadGlobalCadastro = async () => {
+      setIsLoadingGlobalProduct(true);
+      try {
+        const files = await SupabaseService.fetchGlobalBaseFiles(selectedCompanyId);
+        if (cancelled) return;
+        const globalCadastro = files.find(file => file.module_key === GLOBAL_CADASTRO_MODULE_KEY) || null;
+        setGlobalProductMeta(globalCadastro);
+        if (globalCadastro) {
+          const decoded = decodeGlobalFileToBrowserFile(globalCadastro);
+          setGlobalProductFile(decoded);
+        } else {
+          setGlobalProductFile(null);
+        }
+      } catch (error) {
+        console.error('Erro ao carregar base global da conferência:', error);
+        if (!cancelled) {
+          setGlobalProductMeta(null);
+          setGlobalProductFile(null);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingGlobalProduct(false);
+        }
+      }
+    };
+
+    loadGlobalCadastro();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCompanyId]);
+
   const handleBranchValueChange = (value: string) => {
     setBranch(value);
     const match = branchOptions.find(opt => opt.branch === value);
@@ -1337,6 +1425,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
                 onChange={(e) => {
                   const companyId = e.target.value;
                   setSelectedCompanyId(companyId);
+                  setProductFile(null);
                   setBranch('');
                   setSelectedAreaName('');
                 }}
@@ -1408,14 +1497,28 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full mb-8">
-        <div className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center transition-colors ${productFile ? 'border-green-500 bg-green-50' : 'border-gray-300 hover:border-blue-400'}`}>
-          <FileSpreadsheet className={`w-10 h-10 mb-3 ${productFile ? 'text-green-500' : 'text-gray-400'}`} />
+        <div className={`border-2 border-dashed rounded-xl p-6 flex flex-col items-center justify-center transition-colors ${effectiveProductFile ? 'border-green-500 bg-green-50' : 'border-gray-300 hover:border-blue-400'}`}>
+          <FileSpreadsheet className={`w-10 h-10 mb-3 ${effectiveProductFile ? 'text-green-500' : 'text-gray-400'}`} />
           <h3 className="font-semibold text-gray-700 mb-1 text-sm">Arquivo de Produtos</h3>
           <p className="text-[10px] text-gray-500 text-center mb-3">Base (Excel: C=Red, K=Barra, D=Desc)</p>
           <label className="cursor-pointer bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 px-3 py-2 rounded-lg text-xs font-bold transition">
-            {productFile ? productFile.name : 'Selecionar Arquivo'}
+            {productFile ? productFile.name : effectiveProductFile ? effectiveProductFile.name : 'Selecionar Arquivo'}
             <input type="file" accept=".csv,.txt,.html,.htm,.xls,.xlsx" className="hidden" onChange={(e) => setProductFile(e.target.files?.[0] || null)} />
           </label>
+          {isLoadingGlobalProduct && !productFile && (
+            <p className="mt-2 text-[10px] text-blue-600 font-semibold">Verificando base global...</p>
+          )}
+          {!productFile && globalProductMeta && (
+            <p className="mt-2 text-[10px] text-emerald-700 font-semibold text-center">
+              Já carregado em Cadastros Base Globais
+              {formatGlobalTimestamp(globalProductMeta.updated_at || globalProductMeta.uploaded_at) ? ` • ${formatGlobalTimestamp(globalProductMeta.updated_at || globalProductMeta.uploaded_at)}` : ''}
+            </p>
+          )}
+          {productFile && globalProductMeta && (
+            <p className="mt-2 text-[10px] text-amber-700 font-semibold text-center">
+              Base global também disponível. Este upload local será usado apenas nesta conferência.
+            </p>
+          )}
         </div>
 
         <div className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center transition-colors ${stockFile ? 'border-green-500 bg-green-50' : 'border-gray-300 hover:border-blue-400'}`}>

@@ -35,6 +35,22 @@ const sanitizeStockBranch = (branch?: string) => branch?.trim() || 'Filial não 
 const sanitizeStockArea = (area?: string) => area?.trim() || 'Área não informada';
 const BRANCH_REVALIDATION_DAYS = 60;
 const BRANCH_CONFIRM_EVENT_TYPE = 'branch_check_confirmed';
+const MISSING_BRANCH_TOKENS = new Set([
+    '',
+    '-',
+    'sem filial',
+    'sem_filial',
+    'filial não informada',
+    'null',
+    'undefined',
+    'n/a',
+    'na'
+]);
+
+const isMissingBranchValue = (branch?: string | null) => {
+    const normalized = String(branch ?? '').trim().toLowerCase();
+    return MISSING_BRANCH_TOKENS.has(normalized);
+};
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
     app_view_enter: 'Entrada no app',
@@ -1820,7 +1836,7 @@ const App: React.FC = () => {
 
             const currentBranch = (currentUser.filial || '').trim();
 
-            if (!currentBranch) {
+            if (isMissingBranchValue(currentBranch)) {
                 if (cancelled) return;
                 setBranchSelectionMode('required');
                 setBranchSelectionValue('');
@@ -1899,7 +1915,7 @@ const App: React.FC = () => {
         setIsSavingBranchSelection(true);
         try {
             const currentBranch = (currentUser.filial || '').trim();
-            if (!currentBranch) {
+            if (isMissingBranchValue(currentBranch)) {
                 setBranchSelectionMode('required');
                 setBranchSelectionMessage('Selecione sua filial para continuar.');
                 return;
@@ -3849,7 +3865,10 @@ const App: React.FC = () => {
     const filteredEventLogs = useMemo(() => {
         let filtered = [...appEventLogs];
         if (logsBranchFilter !== 'all') {
-            filtered = filtered.filter(l => (l.branch || '-') === logsBranchFilter);
+            filtered = filtered.filter(l => {
+                const branchLabel = (l.branch && String(l.branch).trim()) ? l.branch : 'Sem Filial';
+                return branchLabel === logsBranchFilter;
+            });
         }
         if (logsAreaFilter !== 'all') {
             filtered = filtered.filter(l => (l.area || '-') === logsAreaFilter);
@@ -3907,7 +3926,7 @@ const App: React.FC = () => {
     const logsBranches = useMemo(() => {
         const map = new Map<string, { branch: string; count: number; lastAt: number; users: Set<string> }>();
         filteredEventLogs.forEach(l => {
-            const key = l.branch || 'Sem Filial';
+            const key = (l.branch && String(l.branch).trim()) ? l.branch : 'Sem Filial';
             const ts = l.created_at ? new Date(l.created_at).getTime() : 0;
             const current = map.get(key) || { branch: key, count: 0, lastAt: 0, users: new Set<string>() };
             current.count += 1;
@@ -3915,7 +3934,10 @@ const App: React.FC = () => {
             if (l.user_email) current.users.add(l.user_email);
             map.set(key, current);
         });
-        return Array.from(map.values()).sort((a, b) => b.lastAt - a.lastAt);
+        return Array.from(map.values()).sort((a, b) => {
+            if (b.count !== a.count) return b.count - a.count;
+            return b.lastAt - a.lastAt;
+        });
     }, [filteredEventLogs]);
 
     const logsUsers = useMemo(() => {
@@ -4068,8 +4090,14 @@ const App: React.FC = () => {
                 (a.branches || []).forEach((b: string) => set.add(b));
             });
         });
+        appEventLogs
+            .filter(l => !currentUser?.company_id || l.company_id === currentUser.company_id)
+            .forEach(l => {
+                const branchLabel = (l.branch && String(l.branch).trim()) ? l.branch : 'Sem Filial';
+                set.add(branchLabel);
+            });
         return Array.from(set).sort();
-    }, [scopedUsers, scopedCompanies]);
+    }, [scopedUsers, scopedCompanies, appEventLogs, currentUser?.company_id]);
 
     const logAreaOptions = useMemo(() => {
         const set = new Set<string>();
@@ -5418,48 +5446,60 @@ const App: React.FC = () => {
                                         </div>
                                     </div>
 
-                                    <div className="overflow-hidden rounded-[24px] border border-gray-100 shadow-sm bg-white">
-                                        <table className="w-full text-left text-sm">
+                                    <div className="overflow-x-auto overflow-y-hidden rounded-[24px] border border-gray-100 shadow-sm bg-white">
+                                        <table className="w-full min-w-[1220px] text-left text-sm">
                                             <thead className="bg-gray-50/80 border-b border-gray-100">
                                                 <tr>
-                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px]">Nome</th>
-                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px]">Contato</th>
-                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px]">Função</th>
-                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px]">Status</th>
-                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px] text-right">Ações</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px] whitespace-nowrap min-w-[220px]">Nome</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px] whitespace-nowrap min-w-[260px]">Contato</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px] whitespace-nowrap min-w-[120px]">Filial</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px] whitespace-nowrap min-w-[120px]">Área</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px] whitespace-nowrap min-w-[120px]">Função</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px] whitespace-nowrap min-w-[120px]">Status</th>
+                                                    <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-wider text-[10px] whitespace-nowrap text-right min-w-[130px]">Ações</th>
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-gray-50">
                                                 {filteredUsers.map((u, idx) => (
                                                     <tr key={idx} className="group hover:bg-blue-50/30 transition-colors duration-200">
-                                                        <td className="px-6 py-4">
-                                                            <div className="font-bold text-gray-900">{u.name}</div>
+                                                        <td className="px-6 py-4 whitespace-nowrap">
+                                                            <div className="font-bold text-gray-900 whitespace-nowrap">{u.name}</div>
                                                         </td>
-                                                        <td className="px-6 py-4">
+                                                        <td className="px-6 py-4 min-w-[260px]">
                                                             <div className="flex flex-col">
-                                                                <span className="text-gray-600 font-medium">{u.email}</span>
-                                                                <span className="text-gray-400 text-xs mt-0.5">{u.phone || '-'}</span>
+                                                                <span className="text-gray-600 font-medium whitespace-nowrap overflow-hidden text-ellipsis" title={u.email}>{u.email}</span>
+                                                                <span className="text-gray-400 text-xs mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis" title={u.phone || '-'}>{u.phone || '-'}</span>
                                                             </div>
                                                         </td>
-                                                        <td className="px-6 py-4">
+                                                        <td className="px-6 py-4 whitespace-nowrap">
+                                                            <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold border bg-blue-50/60 text-blue-700 border-blue-100 whitespace-nowrap">
+                                                                {u.filial || '-'}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-4 whitespace-nowrap">
+                                                            <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold border bg-indigo-50/60 text-indigo-700 border-indigo-100 whitespace-nowrap">
+                                                                {u.area || '-'}
+                                                            </span>
+                                                        </td>
+                                                        <td className="px-6 py-4 whitespace-nowrap">
                                                             <span className={`inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold border ${u.role === 'MASTER' ? 'bg-purple-50 text-purple-700 border-purple-100' :
                                                                 u.role === 'ADMINISTRATIVO' ? 'bg-blue-50 text-blue-700 border-blue-100' :
                                                                     'bg-gray-100 text-gray-600 border-gray-200'
-                                                                }`}>
+                                                                } whitespace-nowrap`}>
                                                                 {u.role === 'MASTER' ? 'Master' : u.role === 'ADMINISTRATIVO' ? 'Admin' : 'Usuário'}
                                                             </span>
                                                         </td>
-                                                        <td className="px-6 py-4">
+                                                        <td className="px-6 py-4 whitespace-nowrap">
                                                             {u.rejected ? (
-                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-red-100/50 text-red-700 border border-red-100">
+                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-red-100/50 text-red-700 border border-red-100 whitespace-nowrap">
                                                                     <div className="w-1.5 h-1.5 rounded-full bg-red-500"></div> Bloqueado
                                                                 </span>
                                                             ) : u.approved ? (
-                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-green-100/50 text-green-700 border border-green-100">
+                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-green-100/50 text-green-700 border border-green-100 whitespace-nowrap">
                                                                     <div className="w-1.5 h-1.5 rounded-full bg-green-500"></div> Ativo
                                                                 </span>
                                                             ) : (
-                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-yellow-100/50 text-yellow-700 border border-yellow-100 animate-pulse">
+                                                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-yellow-100/50 text-yellow-700 border border-yellow-100 animate-pulse whitespace-nowrap">
                                                                     <div className="w-1.5 h-1.5 rounded-full bg-yellow-500"></div> Pendente
                                                                 </span>
                                                             )}
@@ -5508,7 +5548,7 @@ const App: React.FC = () => {
                                                 ))}
                                                 {filteredUsers.length === 0 && (
                                                     <tr>
-                                                        <td colSpan={5} className="px-6 py-12 text-center">
+                                                        <td colSpan={7} className="px-6 py-12 text-center">
                                                             <div className="flex flex-col items-center justify-center text-gray-400 gap-3">
                                                                 <SearchX size={32} strokeWidth={1.5} className="text-gray-300" />
                                                                 <p className="font-medium">Nenhum usuário encontrado</p>
@@ -5638,18 +5678,28 @@ const App: React.FC = () => {
                                 <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm">
                                     <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Atividade por Filial</h3>
                                     <div className="space-y-3">
-                                        {logsBranches.slice(0, 6).map(branch => (
-                                            <div key={branch.branch} className="flex items-center justify-between rounded-2xl border border-gray-100 px-4 py-3 gap-3">
-                                                <div className="min-w-0">
-                                                    <p className="text-sm font-black text-gray-800 truncate">{branch.branch}</p>
-                                                    <p className="text-[10px] text-gray-400 font-bold truncate">{branch.users.size} usuário(s)</p>
-                                                </div>
-                                                <div className="text-right min-w-[96px]">
-                                                    <p className="text-sm font-black text-blue-600 whitespace-nowrap">{branch.count}</p>
-                                                    <p className="text-[9px] text-gray-400 font-bold whitespace-nowrap">{branch.lastAt ? new Date(branch.lastAt).toLocaleString('pt-BR', { hour12: false }) : '-'}</p>
-                                                </div>
-                                            </div>
-                                        ))}
+                                        {logsBranches.slice(0, 6).map(branch => {
+                                            const branchFilterValue = branch.branch;
+                                            const isActive = logsBranchFilter === branchFilterValue;
+                                            return (
+                                                <button
+                                                    key={branch.branch}
+                                                    type="button"
+                                                    onClick={() => setLogsBranchFilter(isActive ? 'all' : branchFilterValue)}
+                                                    className={`w-full flex items-center justify-between rounded-2xl border px-4 py-3 gap-3 text-left transition-all ${isActive ? 'border-blue-200 bg-blue-50' : 'border-gray-100 hover:bg-gray-50'}`}
+                                                    title="Clique para filtrar por filial"
+                                                >
+                                                    <div className="min-w-0">
+                                                        <p className="text-sm font-black text-gray-800 truncate">{branch.branch}</p>
+                                                        <p className="text-[10px] text-gray-400 font-bold truncate">{branch.users.size} usuário(s)</p>
+                                                    </div>
+                                                    <div className="text-right min-w-[96px]">
+                                                        <p className="text-sm font-black text-blue-600 whitespace-nowrap">{branch.count}</p>
+                                                        <p className="text-[9px] text-gray-400 font-bold whitespace-nowrap">{branch.lastAt ? new Date(branch.lastAt).toLocaleString('pt-BR', { hour12: false }) : '-'}</p>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
                                         {logsBranches.length === 0 && (
                                             <div className="text-sm text-gray-400 font-semibold">Sem eventos ainda.</div>
                                         )}
@@ -5659,18 +5709,28 @@ const App: React.FC = () => {
                                 <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm">
                                     <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Usuários mais ativos</h3>
                                     <div className="space-y-3">
-                                        {logsUsers.slice(0, 6).map(user => (
-                                            <div key={user.user} className="flex items-center justify-between rounded-2xl border border-gray-100 px-4 py-3 gap-3">
-                                                <div className="min-w-0">
-                                                    <p className="text-sm font-black text-gray-800 truncate">{user.user}</p>
-                                                    <p className="text-[10px] text-gray-400 font-bold truncate">{user.branch || '-'}</p>
-                                                </div>
-                                                <div className="text-right min-w-[96px]">
-                                                    <p className="text-sm font-black text-emerald-600 whitespace-nowrap">{user.count}</p>
-                                                    <p className="text-[9px] text-gray-400 font-bold whitespace-nowrap">{user.lastAt ? new Date(user.lastAt).toLocaleString('pt-BR', { hour12: false }) : '-'}</p>
-                                                </div>
-                                            </div>
-                                        ))}
+                                        {logsUsers.slice(0, 6).map(user => {
+                                            const userFilterValue = user.user === 'Sem usuário' ? '-' : user.user;
+                                            const isActive = logsUserFilter === userFilterValue;
+                                            return (
+                                                <button
+                                                    key={user.user}
+                                                    type="button"
+                                                    onClick={() => setLogsUserFilter(isActive ? 'all' : userFilterValue)}
+                                                    className={`w-full flex items-center justify-between rounded-2xl border px-4 py-3 gap-3 text-left transition-all ${isActive ? 'border-emerald-200 bg-emerald-50' : 'border-gray-100 hover:bg-gray-50'}`}
+                                                    title="Clique para filtrar por usuário"
+                                                >
+                                                    <div className="min-w-0">
+                                                        <p className="text-sm font-black text-gray-800 truncate">{user.user}</p>
+                                                        <p className="text-[10px] text-gray-400 font-bold truncate">{user.branch || '-'}</p>
+                                                    </div>
+                                                    <div className="text-right min-w-[96px]">
+                                                        <p className="text-sm font-black text-emerald-600 whitespace-nowrap">{user.count}</p>
+                                                        <p className="text-[9px] text-gray-400 font-bold whitespace-nowrap">{user.lastAt ? new Date(user.lastAt).toLocaleString('pt-BR', { hour12: false }) : '-'}</p>
+                                                    </div>
+                                                </button>
+                                            );
+                                        })}
                                         {logsUsers.length === 0 && (
                                             <div className="text-sm text-gray-400 font-semibold">Sem eventos ainda.</div>
                                         )}

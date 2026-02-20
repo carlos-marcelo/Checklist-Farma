@@ -599,9 +599,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
         if (finalSystem.length) setSystemProducts(finalSystem);
         if (finalDcb.length) setDcbBaseProducts(finalDcb);
+        // Se veio da base global, não replica para pv_reports (evita escrita pesada/timeout e mantém a fonte central).
         setPendingReportPersist({
-          system: loadedSystemFromGlobal,
-          dcb: loadedDcbFromGlobal
+          system: false,
+          dcb: false
         });
 
         if (dbReports.length > 0 || finalSystem.length > 0 || finalDcb.length > 0) {
