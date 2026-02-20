@@ -370,9 +370,10 @@ type EnhancedStockConferenceReport = SupabaseService.DbStockConferenceReport & {
 interface StockConferenceReportViewerProps {
     report: EnhancedStockConferenceReport;
     onClose: () => void;
+    currentUser?: User | null;
 }
 
-const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportViewerProps) => {
+const StockConferenceReportViewer = ({ report, onClose, currentUser }: StockConferenceReportViewerProps) => {
     const items = report.items || [];
     const parsedSummary = parseJsonValue<StockConferenceSummary>((report as any).summary) || report.summary || { total: items.length, matched: 0, divergent: 0, pending: 0, percent: 0 };
     const summary: StockConferenceSummary = parsedSummary;
@@ -430,71 +431,84 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
                 onClose();
             }
         };
+        const previousOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
         window.addEventListener('keydown', handleKey);
-        return () => window.removeEventListener('keydown', handleKey);
+        return () => {
+            window.removeEventListener('keydown', handleKey);
+            document.body.style.overflow = previousOverflow;
+        };
     }, [onClose]);
 
     const exportCSV = () => {
-        if (currentUser?.email) {
-            SupabaseService.insertAppEventLog({
-                company_id: currentUser.company_id || null,
-                branch: currentUser.filial || null,
-                area: currentUser.area || null,
-                user_email: currentUser.email,
-                user_name: currentUser.name,
-                app: 'conferencia',
-                event_type: 'stock_conference_export_csv',
-                entity_type: 'stock_report',
-                entity_id: report?.id || null,
-                status: 'success',
-                success: true,
-                source: 'web',
-                event_meta: { report_id: report?.id || null }
-            }).catch(() => { });
-        }
-        const headers = 'Codigo Reduzido;Descricao;Estoque Sistema;Contagem;Diferenca;Status\n';
-        const rows = sortedItems.map(item => {
-            const diff = (item.counted_qty ?? 0) - (item.system_qty ?? 0);
-            const statusKey = (item.status || 'pending') as 'divergent' | 'pending' | 'matched';
-            const statusLabel = statusLabelText[statusKey] || 'Pendente';
-            return `${item.reduced_code};"${item.description || ''}";${item.system_qty ?? 0};${item.counted_qty ?? 0};${diff};${statusLabel}`;
-        }).join('\n');
+        try {
+            if (currentUser?.email) {
+                SupabaseService.insertAppEventLog({
+                    company_id: currentUser.company_id || null,
+                    branch: currentUser.filial || null,
+                    area: currentUser.area || null,
+                    user_email: currentUser.email,
+                    user_name: currentUser.name,
+                    app: 'conferencia',
+                    event_type: 'stock_conference_export_csv',
+                    entity_type: 'stock_report',
+                    entity_id: report?.id || null,
+                    status: 'success',
+                    success: true,
+                    source: 'web',
+                    event_meta: { report_id: report?.id || null }
+                }).catch(() => { });
+            }
+            const headers = 'Codigo Reduzido;Descricao;Estoque Sistema;Contagem;Diferenca;Status\n';
+            const rows = sortedItems.map(item => {
+                const diff = (item.counted_qty ?? 0) - (item.system_qty ?? 0);
+                const statusKey = (item.status || 'pending') as 'divergent' | 'pending' | 'matched';
+                const statusLabel = statusLabelText[statusKey] || 'Pendente';
+                return `${item.reduced_code};"${item.description || ''}";${item.system_qty ?? 0};${item.counted_qty ?? 0};${diff};${statusLabel}`;
+            }).join('\n');
 
-        const blob = new Blob([headers + rows], { type: 'text/csv' });
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        const fileName = `conferencia_${(report.branch || 'sem_filial').replace(/\s+/g, '_')}_${createdAt.toISOString().slice(0, 10)}.csv`;
-        a.href = url;
-        a.download = fileName;
-        a.click();
-        window.URL.revokeObjectURL(url);
+            const blob = new Blob([headers + rows], { type: 'text/csv;charset=utf-8;' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const fileName = `conferencia_${(report.branch || 'sem_filial').replace(/\s+/g, '_')}_${createdAt.toISOString().slice(0, 10)}.csv`;
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        } catch (error) {
+            console.error('Erro ao exportar CSV da conferência:', error);
+            alert('Não foi possível baixar o CSV desta conferência.');
+        }
     };
 
     const exportPDF = () => {
-        if (currentUser?.email) {
-            SupabaseService.insertAppEventLog({
-                company_id: currentUser.company_id || null,
-                branch: currentUser.filial || null,
-                area: currentUser.area || null,
-                user_email: currentUser.email,
-                user_name: currentUser.name,
-                app: 'conferencia',
-                event_type: 'stock_conference_printed',
-                entity_type: 'stock_report',
-                entity_id: report?.id || null,
-                status: 'success',
-                success: true,
-                source: 'web',
-                event_meta: { report_id: report?.id || null }
-            }).catch(() => { });
-        }
-        const jsPDF = (window as any).jspdf?.jsPDF;
-        if (!jsPDF) {
-            alert('Biblioteca de PDF não carregada.');
-            return;
-        }
+        try {
+            if (currentUser?.email) {
+                SupabaseService.insertAppEventLog({
+                    company_id: currentUser.company_id || null,
+                    branch: currentUser.filial || null,
+                    area: currentUser.area || null,
+                    user_email: currentUser.email,
+                    user_name: currentUser.name,
+                    app: 'conferencia',
+                    event_type: 'stock_conference_printed',
+                    entity_type: 'stock_report',
+                    entity_id: report?.id || null,
+                    status: 'success',
+                    success: true,
+                    source: 'web',
+                    event_meta: { report_id: report?.id || null }
+                }).catch(() => { });
+            }
+            const jsPDF = (window as any).jspdf?.jsPDF;
+            if (!jsPDF) {
+                alert('Biblioteca de PDF não carregada.');
+                return;
+            }
 
-        const doc = new jsPDF();
+            const doc = new jsPDF();
         doc.setFontSize(18);
         doc.text('Relatório de Conferência de Estoque', 14, 20);
         doc.setFontSize(10);
@@ -593,8 +607,12 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
             }
         }
 
-        const fileName = `conferencia_${(report.branch || 'sem_filial').replace(/\s+/g, '_')}_${createdAt.toISOString().slice(0, 10)}.pdf`;
-        doc.save(fileName);
+            const fileName = `conferencia_${(report.branch || 'sem_filial').replace(/\s+/g, '_')}_${createdAt.toISOString().slice(0, 10)}.pdf`;
+            doc.save(fileName);
+        } catch (error) {
+            console.error('Erro ao exportar PDF da conferência:', error);
+            alert('Não foi possível baixar o PDF desta conferência.');
+        }
     };
 
     const statusStyles: Record<'divergent' | 'pending' | 'matched', { badge: string; border: string }> = {
@@ -603,10 +621,10 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
         matched: { badge: 'bg-green-50 text-green-600', border: 'border-green-100' },
     };
 
-    return (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center px-4 py-6">
+    return createPortal(
+        <div className="fixed inset-0 z-[2147483000] flex items-center justify-center px-4 py-6">
             <div className="fixed inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
-            <div className="relative z-10 w-full max-w-[calc(100vw-2rem)] lg:max-w-[calc(100vw-20rem-2rem)] max-h-[90vh] overflow-y-auto rounded-3xl bg-white border border-gray-100 shadow-2xl lg:ml-72">
+            <div className="relative z-10 w-full max-w-[min(1700px,96vw)] max-h-[92vh] overflow-y-auto rounded-3xl bg-white border border-gray-100 shadow-2xl">
                 <div className="relative border-b border-gray-100">
                     <div className="flex items-start justify-between gap-4 px-6 py-4">
                         <div>
@@ -756,7 +774,8 @@ const StockConferenceReportViewer = ({ report, onClose }: StockConferenceReportV
                     </div>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 };
 
@@ -7629,6 +7648,7 @@ const App: React.FC = () => {
                         <StockConferenceReportViewer
                             report={viewingStockConferenceReport}
                             onClose={handleCloseStockReport}
+                            currentUser={currentUser}
                         />
                     )}
 
