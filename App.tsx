@@ -4091,7 +4091,7 @@ const App: React.FC = () => {
     const handleStockAreaFilterChange = (value: string) => setStockAreaFilter(value);
 
     const getFilteredHistory = () => {
-        let filtered = reportHistory;
+        let filtered = [...reportHistory];
 
         // 1. Base User Filter (Permissions)
         if (canModerateHistory) {
@@ -4151,7 +4151,13 @@ const App: React.FC = () => {
             });
         }
 
-        return filtered;
+        return filtered.sort((a, b) => {
+            const aTs = new Date((a as any).createdAt || a.date || 0).getTime();
+            const bTs = new Date((b as any).createdAt || b.date || 0).getTime();
+            const safeA = Number.isFinite(aTs) ? aTs : 0;
+            const safeB = Number.isFinite(bTs) ? bTs : 0;
+            return safeB - safeA;
+        });
     };
 
     // --- RENDER ---
@@ -7285,7 +7291,7 @@ const App: React.FC = () => {
 
                     {/* --- HISTORY LIST VIEW --- */}
                     {currentView === 'history' && (
-                        <div className="max-w-6xl mx-auto space-y-10 animate-fade-in pb-24">
+                        <div className="max-w-6xl mx-auto flex flex-col gap-10 animate-fade-in pb-24">
                             <div className="flex justify-end">
                                 <button
                                     onClick={handleReloadReports}
@@ -7307,7 +7313,7 @@ const App: React.FC = () => {
                                 </button>
                             </div>
                             {/* Main History Header Card */}
-                            <div className="bg-white/80 backdrop-blur-xl border border-white/50 rounded-[40px] shadow-card overflow-hidden relative">
+                            <div className="order-2 bg-white/80 backdrop-blur-xl border border-white/50 rounded-[40px] shadow-card overflow-hidden relative">
                                 <div className={`h-1.5 w-full bg-gradient-to-r ${currentTheme.bgGradient}`} />
                                 <div className="p-8 md:p-12">
                                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-12">
@@ -7349,7 +7355,7 @@ const App: React.FC = () => {
                                                         onChange={(e) => setHistoryAreaFilter(e.target.value)}
                                                         className="w-full bg-white border border-gray-200 rounded-2xl pl-12 pr-10 py-4 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-bold text-gray-700 flex appearance-none cursor-pointer shadow-sm"
                                                     >
-                                                        <option value="">Todas as Áreas / Setores</option>
+                                                    <option value="all">Todas as Áreas / Setores</option>
                                                         {Array.from(new Set(reportHistory.map(r => r.area))).filter(Boolean).sort().map(area => (
                                                             <option key={area} value={area}>{area}</option>
                                                         ))}
@@ -7510,7 +7516,9 @@ const App: React.FC = () => {
                                 </div>
                             </div>
 
-                            <div className="bg-white rounded-2xl shadow-card border border-gray-100 p-8">
+                            <div className="order-1 bg-white/90 backdrop-blur-xl rounded-[40px] shadow-card border border-white/60 overflow-hidden">
+                                <div className={`h-1.5 w-full bg-gradient-to-r ${currentTheme.bgGradient}`} />
+                                <div className="p-8">
                                 <div className="flex items-center justify-between mb-6">
                                     <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">
                                         <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
@@ -7640,6 +7648,7 @@ const App: React.FC = () => {
                                         )}
                                     </div>
                                 )}
+                                </div>
                             </div>
                         </div>
                     )}
