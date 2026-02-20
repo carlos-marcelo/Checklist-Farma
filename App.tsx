@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package, ArrowRight, ShieldCheck, HelpCircle, Info, LayoutGrid, UserCircle, FileSearch, ChevronDown, Calendar, RefreshCw, UserCircle2, Plus, SearchX } from 'lucide-react';
+import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package, ArrowRight, ArrowLeft, ShieldCheck, HelpCircle, Info, LayoutGrid, UserCircle, FileSearch, ChevronDown, Calendar, RefreshCw, UserCircle2, Plus, SearchX } from 'lucide-react';
 import { CHECKLISTS as BASE_CHECKLISTS, THEMES, ACCESS_MODULES, ACCESS_LEVELS, INPUT_TYPE_LABELS, generateId } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem, ThemeColor, AppConfig, User, ReportHistoryItem, StockConferenceHistoryItem, CompanyArea, AccessLevelId, AccessModule, AccessLevelMeta, UserRole, StockConferenceSummary } from './types';
 import PreVencidosManager from './components/preVencidos/PreVencidosManager';
@@ -1532,6 +1532,20 @@ const App: React.FC = () => {
         localStorage.removeItem('APP_VIEWING_REPORT_ID');
         setCurrentView('history');
     };
+
+    useEffect(() => {
+        if (currentView !== 'view_history') return;
+        const handleEscToHistory = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                handleCloseReport();
+            }
+        };
+        window.addEventListener('keydown', handleEscToHistory);
+        return () => {
+            window.removeEventListener('keydown', handleEscToHistory);
+        };
+    }, [currentView]);
 
     const handleReloadReports = async () => {
         setIsReloadingReports(true);
@@ -7041,6 +7055,18 @@ const App: React.FC = () => {
                         <div className="max-w-5xl mx-auto bg-white/80 backdrop-blur-2xl p-10 md:p-16 shadow-2xl rounded-[48px] border border-white/60 animate-fade-in mb-24 relative overflow-hidden">
                             {/* Decorative Background Elements */}
                             <div className={`absolute top-0 right-0 w-96 h-96 bg-gradient-to-br ${currentTheme.bgGradient} opacity-5 rounded-full -mr-48 -mt-48 blur-3xl p-print-hidden`} />
+                            {currentView === 'view_history' && (
+                                <div className="absolute top-6 right-6 z-20 no-print">
+                                    <button
+                                        onClick={handleCloseReport}
+                                        className="inline-flex items-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-2 text-sm font-bold text-gray-700 shadow-sm transition hover:bg-gray-50 hover:text-blue-700"
+                                        title="Voltar para Histórico de Checklists (Esc)"
+                                    >
+                                        <ArrowLeft size={16} />
+                                        Voltar para Histórico
+                                    </button>
+                                </div>
+                            )}
 
                             <div className="relative z-10">
                                 <LogoPrint config={displayConfig} theme={currentTheme} />
@@ -7186,6 +7212,16 @@ const App: React.FC = () => {
                                                                         const val = getInputValue(item.id, cl.id);
                                                                         if (item.type === InputType.HEADER) return <h5 key={item.id} className="font-black text-gray-800 mt-8 mb-4 border-l-4 border-blue-500 pl-4 py-1 text-sm">{item.text}</h5>;
                                                                         if (item.type === InputType.INFO) return null;
+                                                                        if (item.type === InputType.TEXTAREA) {
+                                                                            return (
+                                                                                <div key={item.id} className="py-3 border-b border-gray-50/50 group-hover/section:border-blue-50 transition-colors">
+                                                                                    <span className="block text-sm font-bold text-gray-600 leading-relaxed mb-2">{item.text}</span>
+                                                                                    <div className="w-full rounded-xl border border-gray-100 bg-white px-4 py-3 text-sm font-semibold text-gray-800 whitespace-pre-wrap break-words leading-relaxed shadow-sm min-h-[56px]">
+                                                                                        {String(val || '-')}
+                                                                                    </div>
+                                                                                </div>
+                                                                            );
+                                                                        }
 
                                                                         return (
                                                                             <div key={item.id} className="flex justify-between items-start gap-6 py-3 border-b border-gray-50/50 group-hover/section:border-blue-50 transition-colors">
