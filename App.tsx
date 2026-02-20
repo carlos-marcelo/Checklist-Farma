@@ -7586,64 +7586,58 @@ const App: React.FC = () => {
                                                 Nenhuma conferência de estoque encontrada com os filtros aplicados.
                                             </div>
                                         ) : (
-                                            <div className="space-y-4">
-                                                {filteredStockConferenceHistory.map(item => {
-                                                    const createdDate = new Date(item.createdAt);
-                                                    return (
-                                                        <div key={item.id} className="border border-gray-100 rounded-2xl p-4 shadow-sm bg-white">
-                                                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-                                                                <div>
-                                                                    <p className="text-xs uppercase tracking-widest text-gray-400">Filial</p>
-                                                                    <p className="text-base font-bold text-gray-800">{item.branch}</p>
-                                                                    <p className="text-sm text-gray-600 mt-1">Área: {item.area}</p>
-                                                                    <p className="text-xs text-gray-500 mt-1">
-                                                                        {createdDate.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' })} às {createdDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                                                                    </p>
-                                                                </div>
-                                                                <div className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-[11px] font-bold">
-                                                                    {Math.round(item.percent)}% concluído
-                                                                </div>
-                                                            </div>
-                                                            <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3 text-center text-sm">
-                                                                <div className="bg-gray-50 rounded-xl py-3 border border-gray-100">
-                                                                    <p className="text-[10px] uppercase text-gray-400">Total</p>
-                                                                    <p className="text-lg font-bold text-gray-800">{item.total}</p>
-                                                                </div>
-                                                                <div className="bg-green-50 rounded-xl py-3 border border-green-100">
-                                                                    <p className="text-[10px] uppercase text-green-500">Corretos</p>
-                                                                    <p className="text-lg font-bold text-green-700">{item.matched}</p>
-                                                                </div>
-                                                                <div className="bg-red-50 rounded-xl py-3 border border-red-100">
-                                                                    <p className="text-[10px] uppercase text-red-500">Divergentes</p>
-                                                                    <p className="text-lg font-bold text-red-600">{item.divergent}</p>
-                                                                </div>
-                                                                <div className="bg-yellow-50 rounded-xl py-3 border border-yellow-100">
-                                                                    <p className="text-[10px] uppercase text-yellow-600">Pendente</p>
-                                                                    <p className="text-lg font-bold text-yellow-700">{item.pending}</p>
-                                                                </div>
-                                                            </div>
-                                                            <div className="mt-4 flex flex-wrap gap-2 text-[11px] text-gray-500">
-                                                                <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Responsável: {item.userName}</span>
-                                                                <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Farmacêutico: {item.pharmacist}</span>
-                                                                <span className="px-2 py-1 rounded-full bg-gray-100 border border-gray-200">Gestor: {item.manager}</span>
-                                                            </div>
-                                                            <div className="mt-4 flex justify-end">
-                                                                <button
-                                                                    onClick={() => handleViewStockConferenceReport(item.id)}
-                                                                    disabled={loadingStockReportId === item.id}
-                                                                    className="flex items-center gap-2 rounded-2xl px-4 py-2 bg-blue-600 text-white text-sm font-bold shadow-lg hover:bg-blue-700 transition disabled:opacity-50"
-                                                                >
-                                                                    {loadingStockReportId === item.id ? (
-                                                                        <Loader2 size={16} className="animate-spin" />
-                                                                    ) : (
-                                                                        <FileText size={16} />
-                                                                    )}
-                                                                    {loadingStockReportId === item.id ? 'Carregando...' : 'Ver Conferência'}
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                })}
+                                            <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white">
+                                                <div className="max-h-[780px] overflow-auto">
+                                                    <table className="w-full min-w-[980px] text-left">
+                                                        <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-100">
+                                                            <tr>
+                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Data/Hora</th>
+                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Filial</th>
+                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Área</th>
+                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400 text-center">Total</th>
+                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-green-600 text-center">Corretos</th>
+                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-red-500 text-center">Diverg.</th>
+                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Responsável</th>
+                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400 text-right">Ação</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-gray-100">
+                                                            {filteredStockConferenceHistory.map(item => {
+                                                                const createdDate = new Date(item.createdAt);
+                                                                return (
+                                                                    <tr key={item.id} className="hover:bg-blue-50/30 transition-colors">
+                                                                        <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
+                                                                            {createdDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })} {createdDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                                        </td>
+                                                                        <td className="px-4 py-3 text-sm font-bold text-gray-800 whitespace-nowrap">{item.branch}</td>
+                                                                        <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{item.area}</td>
+                                                                        <td className="px-4 py-3 text-sm font-bold text-gray-700 text-center">{item.total}</td>
+                                                                        <td className="px-4 py-3 text-sm font-bold text-green-700 text-center">{item.matched}</td>
+                                                                        <td className="px-4 py-3 text-sm font-bold text-red-600 text-center">{item.divergent}</td>
+                                                                        <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{item.userName}</td>
+                                                                        <td className="px-4 py-3 text-right">
+                                                                            <button
+                                                                                onClick={() => handleViewStockConferenceReport(item.id)}
+                                                                                disabled={loadingStockReportId === item.id}
+                                                                                className="inline-flex items-center gap-2 rounded-xl px-3 py-2 bg-blue-600 text-white text-xs font-bold shadow hover:bg-blue-700 transition disabled:opacity-50 whitespace-nowrap"
+                                                                            >
+                                                                                {loadingStockReportId === item.id ? (
+                                                                                    <Loader2 size={14} className="animate-spin" />
+                                                                                ) : (
+                                                                                    <FileText size={14} />
+                                                                                )}
+                                                                                {loadingStockReportId === item.id ? 'Carregando...' : 'Ver Conferência'}
+                                                                            </button>
+                                                                        </td>
+                                                                    </tr>
+                                                                );
+                                                            })}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                                <div className="px-4 py-2 border-t border-gray-100 text-[11px] text-gray-500 bg-gray-50">
+                                                    Exibindo até 15+ por rolagem interna.
+                                                </div>
                                             </div>
                                         )}
                                     </div>
