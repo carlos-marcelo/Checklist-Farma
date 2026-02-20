@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
     AuditData,
@@ -30,6 +30,7 @@ import {
     ArrowLeft,
     Boxes,
     Activity,
+    Search,
     RefreshCw,
     X
 } from 'lucide-react';
@@ -113,6 +114,13 @@ const parseSheetNumericCode = (value: unknown): number | null => {
     const values = extractSheetNumericCodes(value);
     return values.length ? values[0] : null;
 };
+
+const normalizeLookupText = (value: unknown) =>
+    String(value ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .trim();
 
 const parseHierarchyCell = (value: unknown, fallbackName: string) => {
     const raw = (value ?? '').toString().trim();
@@ -271,6 +279,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [termModal, setTermModal] = useState<TermScope | null>(null);
     const [termForm, setTermForm] = useState<TermForm | null>(null);
     const [termDrafts, setTermDrafts] = useState<Record<string, TermForm>>({});
+    const [auditLookup, setAuditLookup] = useState('');
+    const [auditLookupOpen, setAuditLookupOpen] = useState(false);
+    const auditLookupInputRef = useRef<HTMLInputElement | null>(null);
 
     const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
     const [selectedFilial, setSelectedFilial] = useState("");
@@ -903,7 +914,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         cat.itemsCount++;
                         cat.totalQuantity += stockQty;
                         cat.totalCost += (stockQty * stockCost);
-                        cat.products.push({ code: barcode, name: productName, quantity: stockQty, cost: stockCost });
+                        cat.products.push({
+                            code: barcode || reduced || '',
+                            reducedCode: reduced || undefined,
+                            name: productName,
+                            quantity: stockQty,
+                            cost: stockCost
+                        });
                     });
                 }
             });
@@ -1241,6 +1258,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             document.body.style.overflow = previousOverflow;
         };
     }, [termModal, closeTermModal]);
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const handleLookupShortcut = (event: KeyboardEvent) => {
+            if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'f') {
+                event.preventDefault();
+                auditLookupInputRef.current?.focus();
+                auditLookupInputRef.current?.select();
+                setAuditLookupOpen(true);
+            }
+        };
+        window.addEventListener('keydown', handleLookupShortcut);
+        return () => window.removeEventListener('keydown', handleLookupShortcut);
+    }, []);
 
     const buildTermScopeInfo = (scope: TermScope) => {
         if (!data) return null;
@@ -2033,6 +2064,64 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const selectedGroup = useMemo(() => data?.groups.find(g => g.id === view.selectedGroupId), [data, view.selectedGroupId]);
     const selectedDept = useMemo(() => selectedGroup?.departments.find(d => d.id === view.selectedDeptId), [selectedGroup, view.selectedDeptId]);
     const selectedCat = useMemo(() => selectedDept?.categories.find(c => c.id === view.selectedCatId), [selectedDept, view.selectedCatId]);
+
+    const auditLookupIndex = useMemo(() => {
+        if (!data) return [] as Array<{
+            groupId: string;
+            groupName: string;
+            deptId: string;
+            deptName: string;
+            catId: string;
+            catName: string;
+            productName: string;
+            barcode: string;
+            reducedCode: string;
+            searchText: string;
+        }>;
+
+        return data.groups.flatMap(group =>
+            group.departments.flatMap(dept =>
+                dept.categories.flatMap(cat =>
+                    cat.products.map(product => {
+                        const barcode = String(product.code || '').trim();
+                        const reducedCode = String(product.reducedCode || '').trim();
+                        return {
+                            groupId: group.id,
+                            groupName: group.name,
+                            deptId: dept.id,
+                            deptName: dept.name,
+                            catId: cat.id,
+                            catName: cat.name,
+                            productName: product.name,
+                            barcode,
+                            reducedCode,
+                            searchText: normalizeLookupText(
+                                `${barcode} ${reducedCode} ${product.name} ${group.id} ${group.name} ${dept.id} ${dept.name} ${cat.id} ${cat.name}`
+                            )
+                        };
+                    })
+                )
+            )
+        );
+    }, [data]);
+
+    const normalizedAuditLookup = useMemo(() => normalizeLookupText(auditLookup), [auditLookup]);
+    const auditLookupResults = useMemo(() => {
+        if (!normalizedAuditLookup) return [] as typeof auditLookupIndex;
+        return auditLookupIndex
+            .filter(item => item.searchText.includes(normalizedAuditLookup))
+            .slice(0, 25);
+    }, [auditLookupIndex, normalizedAuditLookup]);
+    const handleOpenAuditLookupResult = useCallback((result: (typeof auditLookupIndex)[number]) => {
+        setView({
+            level: 'products',
+            selectedGroupId: result.groupId,
+            selectedDeptId: result.deptId,
+            selectedCatId: result.catId
+        });
+        setAuditLookup('');
+        setAuditLookupOpen(false);
+    }, []);
     const termScopeInfo = useMemo(() => (termModal ? buildTermScopeInfo(termModal) : null), [termModal, data]);
     const partialInfoList = useMemo(() => {
         if (!data?.partialStarts || data.partialStarts.length === 0) return [];
@@ -2644,12 +2733,64 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             </div>
 
             <main className="max-w-[1400px] mx-auto px-8 mt-8">
-                <Breadcrumbs
-                    view={view}
-                    onNavigate={l => setView(prev => ({ ...prev, level: l }))}
-                    groupName={selectedGroup?.name}
-                    deptName={selectedDept?.name}
-                />
+                <div className="mb-6 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                    <Breadcrumbs
+                        className="mb-0"
+                        view={view}
+                        onNavigate={l => setView(prev => ({ ...prev, level: l }))}
+                        groupName={selectedGroup?.name}
+                        deptName={selectedDept?.name}
+                    />
+                    <div className="relative w-full xl:max-w-[540px]">
+                        <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-xl px-3 h-12 shadow-sm">
+                            <Search className="w-4 h-4 text-slate-400 shrink-0" />
+                            <input
+                                ref={auditLookupInputRef}
+                                type="text"
+                                value={auditLookup}
+                                onChange={(e) => {
+                                    setAuditLookup(e.target.value);
+                                    setAuditLookupOpen(true);
+                                }}
+                                onFocus={() => setAuditLookupOpen(true)}
+                                onBlur={() => setTimeout(() => setAuditLookupOpen(false), 120)}
+                                placeholder="Buscar por reduzido, código de barras ou descrição (Ctrl+F)"
+                                className="w-full bg-transparent text-sm text-slate-700 placeholder:text-slate-400 outline-none"
+                            />
+                        </div>
+
+                        {auditLookupOpen && normalizedAuditLookup && (
+                            <div className="absolute top-[calc(100%+8px)] left-0 right-0 bg-white border border-slate-200 rounded-xl shadow-xl z-40 max-h-[360px] overflow-y-auto">
+                                {auditLookupResults.length === 0 ? (
+                                    <div className="px-4 py-3 text-xs text-slate-500">
+                                        Nenhum produto encontrado.
+                                    </div>
+                                ) : (
+                                    auditLookupResults.map((result, index) => (
+                                        <button
+                                            key={`${result.groupId}-${result.deptId}-${result.catId}-${result.barcode}-${result.reducedCode}-${index}`}
+                                            onMouseDown={(event) => {
+                                                event.preventDefault();
+                                                handleOpenAuditLookupResult(result);
+                                            }}
+                                            className="w-full text-left px-4 py-3 border-b border-slate-100 last:border-b-0 hover:bg-indigo-50 transition-colors"
+                                        >
+                                            <p className="text-xs font-black text-slate-800 uppercase leading-tight">{result.productName}</p>
+                                            <p className="text-[11px] text-slate-500 mt-1">
+                                                Barras: <span className="font-semibold text-slate-700">{result.barcode || 'N/D'}</span>
+                                                {' • '}
+                                                Reduzido: <span className="font-semibold text-slate-700">{result.reducedCode || 'N/D'}</span>
+                                            </p>
+                                            <p className="text-[11px] text-indigo-600 font-semibold mt-1">
+                                                Grupo {result.groupId} ({result.groupName}) • Depto {result.deptName} • Cat {result.catName}
+                                            </p>
+                                        </button>
+                                    ))
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
 
                 <div className={`grid gap-6 ${view.level === 'groups' ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}>
                     {view.level === 'groups' && data.groups.map(group => {

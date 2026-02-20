@@ -7,11 +7,12 @@ interface BreadcrumbsProps {
     onNavigate: (level: ViewState['level']) => void;
     groupName?: string;
     deptName?: string;
+    className?: string;
 }
 
-const Breadcrumbs: React.FC<BreadcrumbsProps> = ({ view, onNavigate, groupName, deptName }) => {
+const Breadcrumbs: React.FC<BreadcrumbsProps> = ({ view, onNavigate, groupName, deptName, className = 'mb-6' }) => {
     return (
-        <nav className="flex items-center text-sm text-slate-500 mb-6 font-medium overflow-x-auto whitespace-nowrap pb-2">
+        <nav className={`flex items-center text-sm text-slate-500 font-medium overflow-x-auto whitespace-nowrap pb-2 ${className}`}>
             <button
                 onClick={() => onNavigate('groups')}
                 className={`hover:text-indigo-600 transition-colors ${view.level === 'groups' ? 'text-indigo-600 font-bold' : ''}`}

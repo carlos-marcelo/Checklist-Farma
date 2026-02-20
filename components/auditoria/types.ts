@@ -7,6 +7,7 @@ export enum AuditStatus {
 
 export interface Product {
     code: string;
+    reducedCode?: string;
     name: string;
     quantity: number;
     cost?: number; // Preço de custo unitário
