@@ -32,6 +32,8 @@ const createInitialAccessMatrix = () => mergeAccessMatrixWithDefaults({});
 
 const sanitizeStockBranch = (branch?: string) => branch?.trim() || 'Filial não informada';
 const sanitizeStockArea = (area?: string) => area?.trim() || 'Área não informada';
+const BRANCH_REVALIDATION_DAYS = 60;
+const BRANCH_CONFIRM_EVENT_TYPE = 'branch_check_confirmed';
 
 const EVENT_TYPE_LABELS: Record<string, string> = {
     app_view_enter: 'Entrada no app',
@@ -74,7 +76,10 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
     company_created: 'Empresa criada',
     login: 'Login',
     login_auto: 'Login automático (recarregamento)',
-    logout: 'Logout'
+    logout: 'Logout',
+    branch_check_confirmed: 'Confirmação de filial',
+    branch_changed_on_login: 'Filial alterada no login',
+    global_base_uploaded: 'Arquivo base global carregado'
 };
 
 const EVENT_TYPE_GROUPS: Record<string, string> = {
@@ -83,6 +88,9 @@ const EVENT_TYPE_GROUPS: Record<string, string> = {
     login: 'Sistema',
     login_auto: 'Sistema',
     logout: 'Sistema',
+    branch_check_confirmed: 'Sistema',
+    branch_changed_on_login: 'Sistema',
+    global_base_uploaded: 'Cadastros Globais',
     checklist_started: 'Checklists',
     checklist_report_saved: 'Checklists',
     checklist_printed: 'Checklists',
@@ -142,6 +150,26 @@ const extractEventLocation = (log: SupabaseService.DbAppEventLog) => {
     })();
     return meta.url || meta.location || meta.source || log.source || '-';
 };
+
+type GlobalBaseModuleSlot = {
+    key: string;
+    label: string;
+    description: string;
+};
+
+const GLOBAL_BASE_MODULE_SLOTS: GlobalBaseModuleSlot[] = [
+    { key: 'shared_cadastro_produtos', label: 'Cadastro Produtos (Global)', description: 'Base principal para Pré‑Vencidos e Conferência.' },
+    { key: 'pre_dcb_base', label: 'Relatório DCB (Pré‑Vencidos)', description: 'Base DCB compartilhada para análise de similares.' },
+    { key: 'audit_cadastro_2000', label: 'Auditoria Cadastro 2000', description: 'Arquivo fixo de cadastro grupo 2000.' },
+    { key: 'audit_cadastro_3000', label: 'Auditoria Cadastro 3000', description: 'Arquivo fixo de cadastro grupo 3000.' },
+    { key: 'audit_cadastro_4000', label: 'Auditoria Cadastro 4000', description: 'Arquivo fixo de cadastro grupo 4000.' },
+    { key: 'audit_cadastro_8000', label: 'Auditoria Cadastro 8000', description: 'Arquivo fixo de cadastro grupo 8000.' },
+    { key: 'audit_cadastro_10000', label: 'Auditoria Cadastro 10000', description: 'Arquivo fixo de cadastro grupo 10000.' },
+    { key: 'audit_cadastro_66', label: 'Auditoria Cadastro 66', description: 'Arquivo fixo de cadastro grupo 66.' },
+    { key: 'audit_cadastro_67', label: 'Auditoria Cadastro 67', description: 'Arquivo fixo de cadastro grupo 67.' },
+    { key: 'audit_ids_departamento', label: 'Auditoria IDs Departamento', description: 'Relacionamento de departamentos para auditoria.' },
+    { key: 'audit_ids_categoria', label: 'Auditoria IDs Categoria', description: 'Relacionamento de categorias para auditoria.' }
+];
 
 const canonicalizeFilterLabel = (value: string) => {
     const normalized = value.normalize('NFKC').replace(/\s+/g, ' ').trim();
@@ -206,6 +234,16 @@ const formatFullDateTime = (value?: string | null) => {
     const timePart = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     return datePart + ' às ' + timePart;
 };
+
+const formatFileSize = (bytes?: number | null) => {
+    if (!bytes || bytes <= 0) return '—';
+    if (bytes < 1024) return `${bytes} B`;
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+    const mb = kb / 1024;
+    return `${mb.toFixed(2)} MB`;
+};
+
 const mapStockConferenceReports = (reports: SupabaseService.DbStockConferenceReport[]): StockConferenceHistoryItem[] => {
     return reports.map(rep => {
         const parsedSummary = parseJsonValue<StockConferenceSummary>((rep as any).summary) || rep.summary || { total: 0, matched: 0, divergent: 0, pending: 0, percent: 0 };
@@ -1222,6 +1260,13 @@ const App: React.FC = () => {
     // Auth State
     const [users, setUsers] = useState<User[]>(INITIAL_USERS);
     const [currentUser, setCurrentUser] = useState<User | null>(null);
+    const [showBranchSelectionModal, setShowBranchSelectionModal] = useState(false);
+    const [branchSelectionMode, setBranchSelectionMode] = useState<'required' | 'confirm'>('required');
+    const [branchSelectionValue, setBranchSelectionValue] = useState('');
+    const [branchSelectionArea, setBranchSelectionArea] = useState('');
+    const [branchSelectionMessage, setBranchSelectionMessage] = useState('');
+    const [isSavingBranchSelection, setIsSavingBranchSelection] = useState(false);
+    const [branchPromptCheckedForUser, setBranchPromptCheckedForUser] = useState<string | null>(null);
 
     // Config State
     const [config, setConfig] = useState<AppConfig>({
@@ -1245,10 +1290,7 @@ const App: React.FC = () => {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [showErrors, setShowErrors] = useState(false);
 
-    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit' | 'logs'>(() => {
-        const saved = localStorage.getItem('APP_CURRENT_VIEW');
-        return (saved as any) || 'checklist';
-    });
+    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit' | 'logs' | 'cadastros_globais'>('dashboard');
 
     useEffect(() => {
         if (currentView) {
@@ -1285,6 +1327,9 @@ const App: React.FC = () => {
     const [logsEventFilter, setLogsEventFilter] = useState<string>('all');
     const [logsGroupRepeats, setLogsGroupRepeats] = useState(true);
     const [logsDateRange, setLogsDateRange] = useState<'7d' | '30d' | 'all'>('30d');
+    const [globalBaseFiles, setGlobalBaseFiles] = useState<SupabaseService.DbGlobalBaseFile[]>([]);
+    const [isLoadingGlobalBaseFiles, setIsLoadingGlobalBaseFiles] = useState(false);
+    const [uploadingGlobalBaseKey, setUploadingGlobalBaseKey] = useState<string | null>(null);
 
     // Master User Management State
     const [newUserName, setNewUserName] = useState('');
@@ -1697,6 +1742,8 @@ const App: React.FC = () => {
         if (savedEmail && !currentUser) {
             const u = users.find(u => u.email === savedEmail);
             if (u) {
+                localStorage.setItem('APP_CURRENT_VIEW', 'dashboard');
+                setCurrentView('dashboard');
                 setCurrentUser(u);
                 if (!autoLoginLoggedRef.current) {
                     autoLoginLoggedRef.current = true;
@@ -1713,13 +1760,296 @@ const App: React.FC = () => {
                         source: window.location.pathname || 'web',
                         event_meta: {
                             url: window.location.href,
-                            view: localStorage.getItem('APP_CURRENT_VIEW') || 'checklist'
+                            view: 'dashboard'
                         }
                     }).catch(() => { });
                 }
             }
         }
     }, [users]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const evaluateBranchPrompt = async () => {
+            if (!currentUser || isLoadingData) return;
+            if (currentUser.role === 'MASTER') {
+                if (!cancelled) {
+                    setShowBranchSelectionModal(false);
+                    setBranchPromptCheckedForUser(currentUser.email);
+                }
+                return;
+            }
+            if (currentUser.company_id && companies.length === 0) return;
+            if (!currentUser.company_id) return;
+            if (branchPromptCheckedForUser === currentUser.email) return;
+
+            const currentBranch = (currentUser.filial || '').trim();
+
+            if (!currentBranch) {
+                if (cancelled) return;
+                setBranchSelectionMode('required');
+                setBranchSelectionValue('');
+                setBranchSelectionArea('');
+                setBranchSelectionMessage('Selecione sua filial para continuar. A área será preenchida automaticamente. Você pode trocar em Configurações quando necessário.');
+                setShowBranchSelectionModal(true);
+                setBranchPromptCheckedForUser(currentUser.email);
+                return;
+            }
+
+            const logs = await SupabaseService.fetchAppEventLogs({
+                userEmail: currentUser.email,
+                app: 'sistema',
+                eventType: BRANCH_CONFIRM_EVENT_TYPE,
+                limit: 1
+            });
+
+            if (cancelled) return;
+
+            const lastCheckAt = logs[0]?.created_at ? new Date(String(logs[0].created_at)).getTime() : null;
+            const checkExpired =
+                !lastCheckAt ||
+                Number.isNaN(lastCheckAt) ||
+                (Date.now() - lastCheckAt) >= BRANCH_REVALIDATION_DAYS * 24 * 60 * 60 * 1000;
+
+            if (checkExpired) {
+                const resolvedArea = resolveAreaFromCompanyBranch(currentUser.company_id, currentBranch) || currentUser.area || '';
+                setBranchSelectionMode('confirm');
+                setBranchSelectionValue(currentBranch);
+                setBranchSelectionArea(resolvedArea);
+                setBranchSelectionMessage(`Você permanece na filial ${currentBranch}? Você pode trocar em Configurações a qualquer momento.`);
+                setShowBranchSelectionModal(true);
+            } else {
+                setShowBranchSelectionModal(false);
+            }
+            setBranchPromptCheckedForUser(currentUser.email);
+        };
+
+        evaluateBranchPrompt().catch((error) => {
+            console.error('Erro ao validar confirmação de filial:', error);
+        });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [
+        currentUser?.email,
+        currentUser?.role,
+        currentUser?.company_id,
+        currentUser?.filial,
+        currentUser?.area,
+        isLoadingData,
+        branchPromptCheckedForUser,
+        companies
+    ]);
+
+    useEffect(() => {
+        if (!currentUser?.company_id || currentUser.role !== 'MASTER') return;
+        loadGlobalBaseFiles().catch((error) => {
+            console.error('Erro ao carregar cadastros globais:', error);
+        });
+    }, [currentUser?.company_id, currentUser?.role]);
+
+    useEffect(() => {
+        if (!showBranchSelectionModal || !currentUser?.company_id) return;
+        if (!branchSelectionValue) {
+            setBranchSelectionArea('');
+            return;
+        }
+        const nextArea = resolveAreaFromCompanyBranch(currentUser.company_id, branchSelectionValue);
+        setBranchSelectionArea(nextArea || '');
+    }, [showBranchSelectionModal, branchSelectionValue, currentUser?.company_id, companies]);
+
+    const handleKeepCurrentBranch = async () => {
+        if (!currentUser) return;
+        setIsSavingBranchSelection(true);
+        try {
+            const currentBranch = (currentUser.filial || '').trim();
+            if (!currentBranch) {
+                setBranchSelectionMode('required');
+                setBranchSelectionMessage('Selecione sua filial para continuar.');
+                return;
+            }
+
+            const resolvedArea = resolveAreaFromCompanyBranch(currentUser.company_id, currentBranch);
+            if (resolvedArea && resolvedArea !== (currentUser.area || '')) {
+                await SupabaseService.updateUser(currentUser.email, { area: resolvedArea });
+                setUsers(prev => prev.map(u => u.email === currentUser.email ? { ...u, area: resolvedArea } : u));
+                setCurrentUser(prev => prev && prev.email === currentUser.email ? { ...prev, area: resolvedArea } : prev);
+            }
+
+            await SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: currentBranch || null,
+                area: resolvedArea || currentUser.area || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: 'sistema',
+                event_type: BRANCH_CONFIRM_EVENT_TYPE,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: {
+                    action: 'keep',
+                    interval_days: BRANCH_REVALIDATION_DAYS
+                }
+            });
+
+            setShowBranchSelectionModal(false);
+        } catch (error) {
+            console.error('Erro ao confirmar filial atual:', error);
+            alert('Não foi possível confirmar a filial agora. Tente novamente.');
+        } finally {
+            setIsSavingBranchSelection(false);
+        }
+    };
+
+    const loadGlobalBaseFiles = async () => {
+        if (!currentUser?.company_id) return;
+        setIsLoadingGlobalBaseFiles(true);
+        try {
+            const files = await SupabaseService.fetchGlobalBaseFiles(currentUser.company_id);
+            setGlobalBaseFiles(files);
+        } finally {
+            setIsLoadingGlobalBaseFiles(false);
+        }
+    };
+
+    const fileToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+
+    const handleUploadGlobalBaseFile = async (slotKey: string, file: File) => {
+        if (!currentUser?.company_id) {
+            alert('Selecione uma empresa válida para carregar o arquivo.');
+            return;
+        }
+        setUploadingGlobalBaseKey(slotKey);
+        try {
+            const dataUrl = await fileToDataUrl(file);
+            const saved = await SupabaseService.upsertGlobalBaseFile({
+                company_id: currentUser.company_id,
+                module_key: slotKey,
+                file_name: file.name,
+                mime_type: file.type || 'application/octet-stream',
+                file_size: file.size,
+                file_data_base64: dataUrl,
+                uploaded_by: currentUser.email
+            });
+            if (!saved) {
+                alert('Não foi possível salvar o arquivo no Supabase.');
+                return;
+            }
+            await loadGlobalBaseFiles();
+            SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: currentUser.filial || null,
+                area: currentUser.area || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: 'cadastros_globais',
+                event_type: 'global_base_uploaded',
+                entity_type: 'global_base_file',
+                entity_id: slotKey,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: {
+                    file_name: file.name,
+                    file_size: file.size
+                }
+            }).catch(() => { });
+            alert('Arquivo base salvo com sucesso.');
+        } catch (error) {
+            console.error('Erro ao carregar arquivo base global:', error);
+            alert('Erro ao carregar arquivo base.');
+        } finally {
+            setUploadingGlobalBaseKey(null);
+        }
+    };
+
+    const handleSaveBranchSelection = async () => {
+        if (!currentUser) return;
+        const selectedBranch = (branchSelectionValue || '').trim();
+        if (!selectedBranch) {
+            alert('Selecione uma filial para continuar.');
+            return;
+        }
+
+        const resolvedArea = resolveAreaFromCompanyBranch(currentUser.company_id, selectedBranch) || branchSelectionArea || '';
+        setIsSavingBranchSelection(true);
+        try {
+            const updated = await SupabaseService.updateUser(currentUser.email, {
+                filial: selectedBranch,
+                area: resolvedArea || null
+            });
+
+            if (!updated) {
+                alert('Não foi possível salvar a filial no momento.');
+                return;
+            }
+
+            setUsers(prev => prev.map(u => u.email === currentUser.email ? {
+                ...u,
+                filial: selectedBranch,
+                area: resolvedArea || null
+            } : u));
+            setCurrentUser(prev => prev && prev.email === currentUser.email ? {
+                ...prev,
+                filial: selectedBranch,
+                area: resolvedArea || null
+            } : prev);
+
+            await SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: selectedBranch,
+                area: resolvedArea || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: 'sistema',
+                event_type: 'branch_changed_on_login',
+                entity_type: 'user',
+                entity_id: currentUser.email,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: {
+                    previous_branch: currentUser.filial || null,
+                    previous_area: currentUser.area || null,
+                    new_branch: selectedBranch,
+                    new_area: resolvedArea || null,
+                    mode: branchSelectionMode
+                }
+            });
+
+            await SupabaseService.insertAppEventLog({
+                company_id: currentUser.company_id || null,
+                branch: selectedBranch,
+                area: resolvedArea || null,
+                user_email: currentUser.email,
+                user_name: currentUser.name,
+                app: 'sistema',
+                event_type: BRANCH_CONFIRM_EVENT_TYPE,
+                status: 'success',
+                success: true,
+                source: 'web',
+                event_meta: {
+                    action: 'change',
+                    interval_days: BRANCH_REVALIDATION_DAYS
+                }
+            });
+
+            setShowBranchSelectionModal(false);
+        } catch (error) {
+            console.error('Erro ao salvar filial do usuário:', error);
+            alert('Não foi possível salvar a filial no momento.');
+        } finally {
+            setIsSavingBranchSelection(false);
+        }
+    };
 
     // Sincronização bidirecional - Puxa do Supabase apenas quando usuário está INATIVO
     useEffect(() => {
@@ -1944,7 +2274,11 @@ const App: React.FC = () => {
     const handleLogin = (user: User) => {
         // Persist session so F5 doesn't log the user out
         localStorage.setItem('APP_CURRENT_EMAIL', user.email);
+        localStorage.setItem('APP_CURRENT_VIEW', 'dashboard');
+        setCurrentView('dashboard');
         setCurrentUser(user);
+        setBranchPromptCheckedForUser(null);
+        setShowBranchSelectionModal(false);
         SupabaseService.insertAppEventLog({
             company_id: user.company_id || null,
             branch: user.filial || null,
@@ -1958,7 +2292,7 @@ const App: React.FC = () => {
             source: window.location.pathname || 'web',
             event_meta: {
                 url: window.location.href,
-                view: localStorage.getItem('APP_CURRENT_VIEW') || 'checklist'
+                view: 'dashboard'
             }
         }).catch(() => { });
     };
@@ -1984,13 +2318,15 @@ const App: React.FC = () => {
         localStorage.removeItem('APP_VIEWING_REPORT_ID');
         localStorage.removeItem('APP_VIEWING_STOCK_REPORT_ID');
 
+        setBranchPromptCheckedForUser(null);
+        setShowBranchSelectionModal(false);
         setCurrentUser(null);
         setFormData({}); // Clear state from memory, relies on draft re-load
         setImages({});
         setSignatures({});
         setViewHistoryItem(null);
         setViewingStockConferenceReport(null);
-        setCurrentView('checklist');
+        setCurrentView('dashboard');
     };
 
     const handleRegister = async (newUser: User) => {
@@ -3317,8 +3653,8 @@ const App: React.FC = () => {
     };
 
     const handleViewChange = (view: typeof currentView) => {
-        if (view === 'logs' && currentUser?.role !== 'MASTER') {
-            alert('Apenas usuários master podem acessar Métricas Gerenciais.');
+        if ((view === 'logs' || view === 'cadastros_globais') && currentUser?.role !== 'MASTER') {
+            alert('Apenas usuários master podem acessar este módulo.');
             return;
         }
         if (view === 'checklist') {
@@ -3376,7 +3712,8 @@ const App: React.FC = () => {
             access: 'acessos',
             pre: 'pre_vencidos',
             audit: 'auditoria',
-            logs: 'metricas_gerenciais'
+            logs: 'metricas_gerenciais',
+            cadastros_globais: 'cadastros_globais'
         };
         return map[view] || view;
     };
@@ -3631,6 +3968,45 @@ const App: React.FC = () => {
         });
         return Array.from(set).sort((a, b) => formatEventTypeLabel(a).localeCompare(formatEventTypeLabel(b)));
     }, [appEventLogs]);
+
+    const globalBaseFilesByKey = useMemo(() => {
+        const map = new Map<string, SupabaseService.DbGlobalBaseFile>();
+        globalBaseFiles.forEach(file => {
+            if (!file?.module_key) return;
+            map.set(file.module_key, file);
+        });
+        return map;
+    }, [globalBaseFiles]);
+
+    const resolveAreaFromCompanyBranch = (companyId?: string | null, branchName?: string | null) => {
+        if (!companyId || !branchName) return '';
+        const company = companies.find((c: any) => c.id === companyId);
+        if (!company?.areas) return '';
+        const normalizedBranch = String(branchName).trim().toLowerCase();
+        if (!normalizedBranch) return '';
+        const foundArea = company.areas.find((area: any) =>
+            Array.isArray(area.branches) &&
+            area.branches.some((branch: string) => String(branch || '').trim().toLowerCase() === normalizedBranch)
+        );
+        return foundArea?.name || '';
+    };
+
+    const branchSelectionOptions = useMemo(() => {
+        if (!currentUser?.company_id) return [] as { branch: string; area: string }[];
+        const company = companies.find((c: any) => c.id === currentUser.company_id);
+        if (!company?.areas) return [] as { branch: string; area: string }[];
+        const options: { branch: string; area: string }[] = [];
+        company.areas.forEach((area: any) => {
+            (area.branches || []).forEach((branch: string) => {
+                const normalized = String(branch || '').trim();
+                if (!normalized) return;
+                if (!options.some(opt => opt.branch === normalized)) {
+                    options.push({ branch: normalized, area: area.name || '' });
+                }
+            });
+        });
+        return options.sort((a, b) => a.branch.localeCompare(b.branch));
+    }, [companies, currentUser?.company_id]);
 
     const scopedCompanies = useMemo(() => {
         if (!currentUser?.company_id) return companies;
@@ -5396,6 +5772,97 @@ const App: React.FC = () => {
                         <div className="max-w-4xl mx-auto p-10 text-center bg-white rounded-3xl border border-gray-100 shadow-sm">
                             <h2 className="text-xl font-black text-gray-800">Acesso restrito</h2>
                             <p className="text-sm text-gray-500 mt-2">A aba Métricas Gerenciais está disponível apenas para usuários master.</p>
+                        </div>
+                    )}
+
+                    {/* --- CADASTROS BASE GLOBAIS (MASTER) --- */}
+                    {currentView === 'cadastros_globais' && currentUser?.role === 'MASTER' && (
+                        <div className="max-w-7xl mx-auto space-y-8 animate-fade-in pb-24">
+                            <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-6">
+                                <div className="space-y-2">
+                                    <h1 className="text-3xl font-black text-gray-900 tracking-tight">Cadastros Base Globais</h1>
+                                    <p className="text-sm font-bold text-gray-500 max-w-3xl">
+                                        Carregue aqui os arquivos fixos dos módulos. Eles ficam centralizados por empresa e disponíveis para todas as filiais.
+                                    </p>
+                                </div>
+                                <button
+                                    onClick={() => loadGlobalBaseFiles()}
+                                    disabled={isLoadingGlobalBaseFiles}
+                                    className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl border border-gray-200 bg-white text-gray-700 text-xs font-black uppercase tracking-wider hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    <RefreshCw size={14} className={isLoadingGlobalBaseFiles ? 'animate-spin' : ''} />
+                                    {isLoadingGlobalBaseFiles ? 'Atualizando...' : 'Atualizar Lista'}
+                                </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                                {GLOBAL_BASE_MODULE_SLOTS.map(slot => {
+                                    const uploadedFile = globalBaseFilesByKey.get(slot.key);
+                                    const isUploading = uploadingGlobalBaseKey === slot.key;
+                                    const inputId = `global-base-upload-${slot.key}`;
+                                    return (
+                                        <div key={slot.key} className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5 space-y-4">
+                                            <div className="space-y-1">
+                                                <h3 className="text-sm font-black text-gray-900 tracking-tight">{slot.label}</h3>
+                                                <p className="text-xs text-gray-500 font-medium leading-relaxed">{slot.description}</p>
+                                            </div>
+
+                                            <div className={`rounded-2xl border px-4 py-3 ${uploadedFile ? 'border-emerald-200 bg-emerald-50/40' : 'border-amber-200 bg-amber-50/50'}`}>
+                                                <div className="flex items-center justify-between gap-2">
+                                                    <span className={`text-[10px] font-black uppercase tracking-widest ${uploadedFile ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                                        {uploadedFile ? 'Arquivo carregado' : 'Aguardando upload'}
+                                                    </span>
+                                                    {uploadedFile ? <CheckCircle size={14} className="text-emerald-600" /> : <AlertCircle size={14} className="text-amber-600" />}
+                                                </div>
+                                                <p className="mt-2 text-xs font-bold text-gray-700 truncate" title={uploadedFile?.file_name || 'Sem arquivo'}>
+                                                    {uploadedFile?.file_name || 'Sem arquivo'}
+                                                </p>
+                                                <p className="mt-1 text-[11px] text-gray-500 font-semibold">
+                                                    {uploadedFile ? `${formatFileSize(uploadedFile.file_size)} • ${formatFullDateTime(uploadedFile.uploaded_at || uploadedFile.updated_at)}` : 'Nenhum envio registrado'}
+                                                </p>
+                                                <p className="mt-1 text-[11px] text-gray-400 font-semibold truncate">
+                                                    {uploadedFile?.uploaded_by ? `Responsável: ${uploadedFile.uploaded_by}` : 'Responsável: —'}
+                                                </p>
+                                            </div>
+
+                                            <input
+                                                id={inputId}
+                                                type="file"
+                                                accept=".xls,.xlsx,.csv,.xml,.txt"
+                                                className="hidden"
+                                                onChange={(e) => {
+                                                    const selectedFile = e.target.files?.[0];
+                                                    if (!selectedFile) return;
+                                                    handleUploadGlobalBaseFile(slot.key, selectedFile);
+                                                    e.currentTarget.value = '';
+                                                }}
+                                            />
+                                            <button
+                                                type="button"
+                                                onClick={() => document.getElementById(inputId)?.click()}
+                                                disabled={isUploading}
+                                                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl bg-slate-900 text-white text-xs font-black uppercase tracking-wider hover:bg-slate-800 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                                            >
+                                                {isUploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                                                {isUploading ? 'Enviando...' : 'Carregar arquivo'}
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+
+                            <div className="bg-blue-50/70 border border-blue-100 rounded-3xl p-5">
+                                <p className="text-xs font-black text-blue-900 uppercase tracking-widest mb-2">Escopo do módulo</p>
+                                <p className="text-sm font-semibold text-blue-800">
+                                    Esses arquivos são salvos por empresa e compartilhados entre as filiais. Use esta tela para manter as bases fixas atualizadas sem depender de envio por filial.
+                                </p>
+                            </div>
+                        </div>
+                    )}
+                    {currentView === 'cadastros_globais' && currentUser?.role !== 'MASTER' && (
+                        <div className="max-w-4xl mx-auto p-10 text-center bg-white rounded-3xl border border-gray-100 shadow-sm">
+                            <h2 className="text-xl font-black text-gray-800">Acesso restrito</h2>
+                            <p className="text-sm text-gray-500 mt-2">A aba Cadastros Base está disponível apenas para usuários master.</p>
                         </div>
                     )}
 
@@ -7267,6 +7734,88 @@ const App: React.FC = () => {
                                         className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-70 disabled:cursor-wait"
                                     >
                                         {isSavingChecklistDefinition ? 'Salvando...' : 'Salvar checklist'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {showBranchSelectionModal && currentUser && currentUser.role !== 'MASTER' && (
+                        <div className="fixed inset-0 z-[130] flex items-center justify-center p-4">
+                            <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                            <div className="relative w-full max-w-xl rounded-3xl border border-white/30 bg-white shadow-2xl p-6 md:p-8">
+                                <div className="flex items-start gap-3">
+                                    <div className="h-11 w-11 rounded-2xl bg-blue-100 text-blue-700 flex items-center justify-center shrink-0">
+                                        <Store size={20} />
+                                    </div>
+                                    <div>
+                                        <p className="text-[10px] uppercase tracking-widest text-gray-400 font-bold">Validação de Filial</p>
+                                        <h3 className="text-xl font-black text-gray-900">
+                                            {branchSelectionMode === 'required' ? 'Selecione sua filial' : 'Confirmar filial atual'}
+                                        </h3>
+                                        <p className="text-sm text-gray-600 mt-1">
+                                            {branchSelectionMessage}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">Filial</label>
+                                        {branchSelectionOptions.length > 0 ? (
+                                            <select
+                                                value={branchSelectionValue}
+                                                onChange={(e) => setBranchSelectionValue(e.target.value)}
+                                                className="w-full rounded-xl border border-gray-200 px-3 py-3 text-sm font-semibold text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                disabled={isSavingBranchSelection}
+                                            >
+                                                <option value="">Selecione...</option>
+                                                {branchSelectionOptions.map(option => (
+                                                    <option key={option.branch} value={option.branch}>
+                                                        {option.branch}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        ) : (
+                                            <input
+                                                type="text"
+                                                value={branchSelectionValue}
+                                                onChange={(e) => setBranchSelectionValue(e.target.value)}
+                                                className="w-full rounded-xl border border-gray-200 px-3 py-3 text-sm font-semibold text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                placeholder="Digite a filial"
+                                                disabled={isSavingBranchSelection}
+                                            />
+                                        )}
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs font-bold uppercase tracking-widest text-gray-500 mb-2">Área (automática)</label>
+                                        <input
+                                            type="text"
+                                            value={branchSelectionArea || 'Área não identificada'}
+                                            readOnly
+                                            className="w-full rounded-xl border border-gray-200 px-3 py-3 text-sm font-semibold text-gray-700 bg-gray-50"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div className="mt-6 flex flex-wrap justify-end gap-3">
+                                    {branchSelectionMode === 'confirm' && (
+                                        <button
+                                            type="button"
+                                            onClick={handleKeepCurrentBranch}
+                                            disabled={isSavingBranchSelection}
+                                            className="px-4 py-2.5 rounded-xl border border-gray-200 bg-white text-sm font-bold text-gray-700 hover:bg-gray-50 transition disabled:opacity-50"
+                                        >
+                                            OK, manter filial
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={handleSaveBranchSelection}
+                                        disabled={isSavingBranchSelection || !branchSelectionValue.trim()}
+                                        className="px-5 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-bold hover:bg-blue-700 transition disabled:opacity-50"
+                                    >
+                                        {isSavingBranchSelection ? 'Salvando...' : branchSelectionMode === 'required' ? 'Salvar e continuar' : 'Trocar filial'}
                                     </button>
                                 </div>
                             </div>

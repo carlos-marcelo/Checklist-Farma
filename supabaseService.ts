@@ -213,6 +213,19 @@ export interface DbAppEventLog {
   created_at?: string | null;
 }
 
+export interface DbGlobalBaseFile {
+  id?: string;
+  company_id: string;
+  module_key: string;
+  file_name?: string | null;
+  mime_type?: string | null;
+  file_size?: number | null;
+  file_data_base64?: string | null;
+  uploaded_by?: string | null;
+  uploaded_at?: string | null;
+  updated_at?: string | null;
+}
+
 export interface DbPVSessionData {
   master_products?: Product[];
   system_products?: Product[];
@@ -1581,6 +1594,7 @@ export async function fetchAppEventLogs(params: {
   branch?: string | null;
   area?: string | null;
   app?: string | null;
+  eventType?: string | null;
   userEmail?: string | null;
   sinceISO?: string | null;
   limit?: number;
@@ -1595,6 +1609,7 @@ export async function fetchAppEventLogs(params: {
     if (params.branch) query = query.eq('branch', params.branch);
     if (params.area) query = query.eq('area', params.area);
     if (params.app) query = query.eq('app', params.app);
+    if (params.eventType) query = query.eq('event_type', params.eventType);
     if (params.userEmail) query = query.eq('user_email', params.userEmail);
     if (params.sinceISO) query = query.gte('created_at', params.sinceISO);
     if (params.limit) query = query.limit(params.limit);
@@ -1605,6 +1620,47 @@ export async function fetchAppEventLogs(params: {
   } catch (error) {
     console.error('Error fetching app event logs:', error);
     return [];
+  }
+}
+
+export async function fetchGlobalBaseFiles(companyId: string): Promise<DbGlobalBaseFile[]> {
+  try {
+    const { data, error } = await supabase
+      .from('global_base_files')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('updated_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching global base files:', error);
+    return [];
+  }
+}
+
+export async function upsertGlobalBaseFile(file: DbGlobalBaseFile): Promise<DbGlobalBaseFile | null> {
+  try {
+    const payload = {
+      company_id: file.company_id,
+      module_key: file.module_key,
+      file_name: file.file_name ?? null,
+      mime_type: file.mime_type ?? null,
+      file_size: file.file_size ?? null,
+      file_data_base64: file.file_data_base64 ?? null,
+      uploaded_by: file.uploaded_by ?? null,
+      uploaded_at: file.uploaded_at ?? new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    const { data, error } = await supabase
+      .from('global_base_files')
+      .upsert(payload, { onConflict: 'company_id,module_key' })
+      .select()
+      .single();
+    if (error) throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error upserting global base file:', error);
+    return null;
   }
 }
 

@@ -248,7 +248,8 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   };
 
   const [filterText, setFilterText] = useState('');
-  const [filterMonth, setFilterMonth] = useState('');
+  const [filterMonthInput, setFilterMonthInput] = useState('');
+  const [selectedMonths, setSelectedMonths] = useState<string[]>([]);
   const [filterStatus, setFilterStatus] = useState<string>('');
   const labByReduced = useMemo(() => {
     const map: Record<string, string> = {};
@@ -436,7 +437,9 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       ? true
       : rec.name.toLowerCase().includes(search)
       || rec.reducedCode.toLowerCase().includes(search);
-    const matchMonth = filterMonth ? rec.expiryDate.includes(filterMonth) : true;
+    const matchMonth = selectedMonths.length > 0
+      ? selectedMonths.includes(rec.expiryDate)
+      : (filterMonthInput ? rec.expiryDate.includes(filterMonthInput) : true);
 
     let matchStatus = true;
     if (filterStatus) {
@@ -731,24 +734,28 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                   sortedDates.map(date => {
                     const data = grouped[date];
                     const status = getExpiryStatus(date);
-                    const isActive = filterMonth === date;
+                    const isActive = selectedMonths.includes(date);
 
                     return (
                       <button
                         key={date}
-                        onClick={() => setFilterMonth(isActive ? '' : date)}
+                        onClick={() =>
+                          setSelectedMonths(prev =>
+                            prev.includes(date) ? prev.filter(m => m !== date) : [...prev, date]
+                          )
+                        }
                         className={`w-[240px] p-3 rounded-2xl border-2 transition-all flex flex-col gap-2 relative overflow-hidden group/item flex-none
                           ${isActive
-                            ? 'border-blue-500 bg-blue-50 shadow-inner ring-1 ring-blue-100'
+                            ? 'border-amber-400 bg-amber-50 shadow-inner ring-1 ring-amber-100'
                             : `${status.bg} border-transparent hover:border-slate-200`
                           }`}
                       >
                         <div className="flex items-center justify-between gap-2 relative z-10">
-                          <span className={`text-sm font-black ${isActive ? 'text-blue-700' : status.color}`}>{date}</span>
+                          <span className={`text-sm font-black ${isActive ? 'text-amber-700' : status.color}`}>{date}</span>
                           <span className="text-[10px] font-black text-slate-700">{formatCurrency(data.costTotal)}</span>
                         </div>
                         <div className="flex items-center justify-between gap-2 relative z-10 text-[8px] font-black uppercase tracking-widest">
-                          <span className={`${isActive ? 'text-blue-500' : 'text-slate-400'}`}>
+                          <span className={`${isActive ? 'text-amber-600' : 'text-slate-400'}`}>
                             {data.items} unidades · {data.skus.size} skus
                           </span>
                           <span className={`px-1.5 py-0.5 rounded text-white ${status.label === 'VENCIDO' ? 'bg-red-500' :
@@ -757,7 +764,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                             {status.label}
                           </span>
                         </div>
-                        {isActive && <div className="absolute right-0 top-0 h-full w-1 bg-blue-500"></div>}
+                        {isActive && <div className="absolute right-0 top-0 h-full w-1 bg-amber-500"></div>}
                       </button>
                     );
                   })
@@ -837,9 +844,9 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                 Vencido
               </button>
 
-              {(filterText || filterMonth || filterStatus) && (
+              {(filterText || filterMonthInput || selectedMonths.length > 0 || filterStatus) && (
                 <button
-                  onClick={() => { setFilterText(''); setFilterMonth(''); setFilterStatus(''); }}
+                  onClick={() => { setFilterText(''); setFilterMonthInput(''); setSelectedMonths([]); setFilterStatus(''); }}
                   className="ml-2 flex items-center gap-1.5 px-3 py-2 bg-slate-100 text-slate-600 rounded-xl text-[10px] font-bold uppercase hover:bg-red-100 hover:text-red-600 transition-all border border-slate-200"
                 >
                   <X size={12} /> Limpar Filtros
@@ -902,11 +909,11 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                         type="text"
                         placeholder="Mês"
                         maxLength={5}
-                        value={filterMonth}
+                        value={filterMonthInput}
                         onChange={(e) => {
                           let v = e.target.value.replace(/\D/g, '');
                           if (v.length > 2) v = v.substring(0, 2) + '/' + v.substring(2, 4);
-                          setFilterMonth(v);
+                          setFilterMonthInput(v);
                         }}
                         className="w-full px-2 py-1 rounded-lg border border-slate-200 text-[10px] text-slate-700 focus:border-blue-400 focus:ring-2 focus:ring-blue-100 outline-none font-medium normal-case"
                         onClick={(e) => e.stopPropagation()}
@@ -925,7 +932,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                     <div className="flex flex-col items-center gap-3">
                       <Search size={40} className="text-slate-200" />
                       <p className="text-sm">Nenhum item encontrado.</p>
-                      {filterText || filterMonth ? <p className="text-xs text-blue-500 cursor-pointer hover:underline" onClick={() => { setFilterText(''); setFilterMonth('') }}>Limpar filtros</p> : null}
+                      {filterText || filterMonthInput || selectedMonths.length > 0 ? <p className="text-xs text-blue-500 cursor-pointer hover:underline" onClick={() => { setFilterText(''); setFilterMonthInput(''); setSelectedMonths([]); }}>Limpar filtros</p> : null}
                     </div>
                   </td>
                 </tr>

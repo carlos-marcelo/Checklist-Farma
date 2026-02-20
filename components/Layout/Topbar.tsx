@@ -15,7 +15,8 @@ import {
     Building2,
     MapPin,
     Store,
-    Search
+    Search,
+    FolderArchive
 } from 'lucide-react';
 import { User, ChecklistDefinition, AppConfig } from '../../types';
 import { Logo } from './Logo';
@@ -65,9 +66,13 @@ export const Topbar: React.FC<TopbarProps> = ({
         navItems.splice(navItems.findIndex(item => item.view === 'support'), 0, { label: 'Métricas Gerenciais', view: 'logs', color: 'slate', icon: <FileSearch size={18} /> });
     }
 
-    const adminItems = [
-        { label: 'Configurações', view: 'settings', color: 'slate', icon: <Settings size={18} /> },
-        { label: 'Acessos', view: 'access', color: 'indigo', icon: <Lock size={18} /> }
+    const commonAdminItems = [
+        { label: 'Configurações', view: 'settings', color: 'slate', icon: <Settings size={18} /> }
+    ];
+
+    const masterOnlyAdminItems = [
+        { label: 'Acessos', view: 'access', color: 'indigo', icon: <Lock size={18} /> },
+        { label: 'Cadastros Base', view: 'cadastros_globais', color: 'slate', icon: <FolderArchive size={18} /> }
     ];
 
     const company = currentUser.company_id ? companies.find((c: any) => c.id === currentUser.company_id) : null;
@@ -154,10 +159,21 @@ export const Topbar: React.FC<TopbarProps> = ({
                         />
                     ))}
 
+                    <div className="h-6 w-px bg-gray-200 mx-2 hidden lg:block"></div>
+                    {commonAdminItems.map(item => (
+                        <TopbarButton
+                            key={item.view}
+                            icon={item.icon}
+                            label={item.label}
+                            active={currentView === item.view}
+                            onClick={() => handleViewChange(item.view)}
+                            color={item.color as TopbarButtonProps['color']}
+                        />
+                    ))}
+
                     {currentUser.role === 'MASTER' && (
                         <>
-                            <div className="h-6 w-px bg-gray-200 mx-2 hidden lg:block"></div>
-                            {adminItems.map(item => (
+                            {masterOnlyAdminItems.map(item => (
                                 <TopbarButton
                                     key={item.view}
                                     icon={item.icon}

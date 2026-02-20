@@ -52,7 +52,8 @@ import {
   insertPVBranchRecordEvent,
   insertAppEventLog,
   fetchPVInventoryReport,
-  upsertPVInventoryReport
+  upsertPVInventoryReport,
+  fetchGlobalBaseFiles
 } from '../../supabaseService';
 import {
   loadLocalPVSession,
@@ -307,6 +308,38 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }));
   }, []);
 
+  const decodeGlobalFileToBrowserFile = useCallback((file: {
+    file_data_base64?: string | null;
+    file_name?: string | null;
+    mime_type?: string | null;
+    module_key?: string | null;
+  }) => {
+    const raw = String(file?.file_data_base64 || '').trim();
+    if (!raw) return null;
+
+    let mimeType = file?.mime_type || 'application/octet-stream';
+    let base64 = raw;
+    const dataUrlMatch = raw.match(/^data:([^;]+);base64,(.*)$/);
+    if (dataUrlMatch) {
+      mimeType = dataUrlMatch[1] || mimeType;
+      base64 = dataUrlMatch[2] || '';
+    }
+    if (!base64) return null;
+
+    try {
+      const binary = window.atob(base64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      const fileName = file?.file_name || `${file?.module_key || 'base'}.xlsx`;
+      return new File([bytes], fileName, { type: mimeType });
+    } catch (error) {
+      console.error('Erro ao decodificar arquivo global:', error);
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     setHasInitialHydrationCompleted(false);
   }, [userEmail]);
@@ -499,12 +532,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
         const localSystem = storedReports?.systemProducts || [];
         const localDcb = storedReports?.dcbProducts || [];
-        const finalSystem = Array.isArray(systemReport?.products) && systemReport.products.length > 0
+        let finalSystem = Array.isArray(systemReport?.products) && systemReport.products.length > 0
           ? systemReport.products
           : localSystem;
-        const finalDcb = Array.isArray(dcbReport?.products) && dcbReport.products.length > 0
+        let finalDcb = Array.isArray(dcbReport?.products) && dcbReport.products.length > 0
           ? dcbReport.products
           : localDcb;
+        let loadedSystemFromGlobal = false;
+        let loadedDcbFromGlobal = false;
 
         const dbSystemSyncedAt = systemReport?.updated_at || systemReport?.created_at || null;
         const dbDcbSyncedAt = dcbReport?.updated_at || dcbReport?.created_at || null;
@@ -515,9 +550,59 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           }));
         }
 
+        // Fallback global por empresa (carregado no módulo Cadastros Base) quando faltar system/dcb.
+        if (
+          reportLookupCompanyId &&
+          (finalSystem.length === 0 || finalDcb.length === 0)
+        ) {
+          try {
+            const globalFiles = await fetchGlobalBaseFiles(reportLookupCompanyId);
+            if (!cancelled && globalFiles.length > 0) {
+              const fileByKey = new Map(globalFiles.map(file => [file.module_key, file]));
+              const systemGlobal = fileByKey.get('shared_cadastro_produtos');
+              const dcbGlobal = fileByKey.get('pre_dcb_base');
+
+              if (finalSystem.length === 0 && systemGlobal?.file_data_base64) {
+                const file = decodeGlobalFileToBrowserFile(systemGlobal);
+                if (file) {
+                  const parsed = await parseSystemProductsXLSX(file);
+                  if (!cancelled && parsed.length > 0) {
+                    finalSystem = parsed;
+                    loadedSystemFromGlobal = true;
+                    setReportSyncedAt(prev => ({
+                      ...prev,
+                      system: systemGlobal.updated_at || systemGlobal.uploaded_at || prev.system
+                    }));
+                  }
+                }
+              }
+
+              if (finalDcb.length === 0 && dcbGlobal?.file_data_base64) {
+                const file = decodeGlobalFileToBrowserFile(dcbGlobal);
+                if (file) {
+                  const parsed = await parseDCBProductsXLSX(file);
+                  if (!cancelled && parsed.length > 0) {
+                    finalDcb = parsed;
+                    loadedDcbFromGlobal = true;
+                    setReportSyncedAt(prev => ({
+                      ...prev,
+                      dcb: dcbGlobal.updated_at || dcbGlobal.uploaded_at || prev.dcb
+                    }));
+                  }
+                }
+              }
+            }
+          } catch (globalError) {
+            console.error('Erro ao carregar cadastros globais para PV:', globalError);
+          }
+        }
+
         if (finalSystem.length) setSystemProducts(finalSystem);
         if (finalDcb.length) setDcbBaseProducts(finalDcb);
-        setPendingReportPersist({ system: false, dcb: false });
+        setPendingReportPersist({
+          system: loadedSystemFromGlobal,
+          dcb: loadedDcbFromGlobal
+        });
 
         if (dbReports.length > 0 || finalSystem.length > 0 || finalDcb.length > 0) {
           console.log(`✅ [PV Sync] Carregados do DB: ${finalSystem.length} sistem, ${finalDcb.length} dcb`);
@@ -550,7 +635,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [userEmail, setupDraftInfo?.companyId, setupDraftInfo?.filial, sessionInfo?.companyId, sessionInfo?.filial]);
+  }, [userEmail, setupDraftInfo?.companyId, setupDraftInfo?.filial, sessionInfo?.companyId, sessionInfo?.filial, decodeGlobalFileToBrowserFile]);
 
   const applySessionFromData = useCallback((session: DbPVSession) => {
     const data = session.session_data || {};

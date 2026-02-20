@@ -40,7 +40,10 @@ export const Header: React.FC<HeaderProps> = ({
         if (currentView === 'access') return 'Níveis de Acesso';
         if (currentView === 'history') return 'Histórico de Relatórios';
         if (currentView === 'pre') return 'Pré-Vencidos';
-        if (currentView === 'stock_conference') return 'Conferência de Estoque';
+        if (currentView === 'stock') return 'Conferência de Estoque';
+        if (currentView === 'audit') return 'Auditoria';
+        if (currentView === 'logs') return 'Métricas Gerenciais';
+        if (currentView === 'cadastros_globais') return 'Cadastros Base Globais';
         if (currentView === 'support') return 'Suporte e Melhorias';
         return activeChecklist.title;
     };
