@@ -270,6 +270,32 @@ CREATE TABLE IF NOT EXISTS public.pv_reports (
   UNIQUE(user_email, report_type)
 );
 
+-- PV: Products (Main product list)
+CREATE TABLE IF NOT EXISTS public.pre_vencidos_products (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  reduced_code text,
+  product_name text,
+  dcb text,
+  presentation text,
+  category text,
+  company_id text,
+  branch text,
+  user_email text,
+  created_at timestamptz DEFAULT now()
+);
+
+-- PV: Product Registrations (System records)
+CREATE TABLE IF NOT EXISTS public.product_registrations (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  reduced_code text,
+  product_name text,
+  category text,
+  presentation text,
+  user_email text,
+  company_id text,
+  created_at timestamptz DEFAULT now()
+);
+
 -- 5. SYSTEM TABLES
 
 -- Global Base Files (base64 storage)
