@@ -620,10 +620,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           }));
         }
 
-        // Fallback global por empresa (carregado no módulo Cadastros Base) quando faltar system/dcb.
+        const systemMissingLab = finalSystem.some(item => !String((item as any)?.lab || '').trim());
+        // Fallback/enriquecimento global por empresa (carregado no módulo Cadastros Base).
+        // Também usa o arquivo global para preencher laboratório ausente no system já salvo em DB.
         if (
           reportLookupCompanyId &&
-          (finalSystem.length === 0 || finalDcb.length === 0)
+          (finalSystem.length === 0 || finalDcb.length === 0 || systemMissingLab)
         ) {
           try {
             const globalFiles = await fetchGlobalBaseFiles(reportLookupCompanyId);
@@ -632,12 +634,33 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
               const systemGlobal = fileByKey.get('shared_cadastro_produtos');
               const dcbGlobal = fileByKey.get('pre_dcb_base');
 
-              if (finalSystem.length === 0 && systemGlobal?.file_data_base64) {
+              if ((finalSystem.length === 0 || systemMissingLab) && systemGlobal?.file_data_base64) {
                 const file = decodeGlobalFileToBrowserFile(systemGlobal);
                 if (file) {
                   const parsed = await parseSystemProductsXLSX(file);
                   if (!cancelled && parsed.length > 0) {
-                    finalSystem = parsed;
+                    if (finalSystem.length === 0) {
+                      finalSystem = parsed;
+                    } else {
+                      const parsedByReduced = new Map<string, Product>();
+                      parsed.forEach(item => {
+                        const reduced = normalizeReducedCode(item.reducedCode);
+                        if (!reduced) return;
+                        if (!parsedByReduced.has(reduced)) parsedByReduced.set(reduced, item);
+                      });
+                      finalSystem = finalSystem.map(item => {
+                        const reduced = normalizeReducedCode(item.reducedCode);
+                        if (!reduced) return item;
+                        const fromGlobal = parsedByReduced.get(reduced);
+                        if (!fromGlobal) return item;
+                        return {
+                          ...item,
+                          lab: item.lab || fromGlobal.lab || item.lab,
+                          barcode: item.barcode || fromGlobal.barcode || item.barcode,
+                          name: item.name || fromGlobal.name || item.name
+                        };
+                      });
+                    }
                     loadedSystemFromGlobal = true;
                     setReportSyncedAt(prev => ({
                       ...prev,
@@ -860,22 +883,37 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   useEffect(() => {
     if (systemProducts.length > 0 || dcbBaseProducts.length > 0) {
       const merged: Product[] = [];
-      const allReducedCodes = new Set([
-        ...systemProducts.map(p => p.reducedCode),
-        ...dcbBaseProducts.map(p => p.reducedCode)
+      const systemByNormalized = new Map<string, Product>();
+      const dcbByNormalized = new Map<string, Product>();
+
+      systemProducts.forEach((p) => {
+        const normalized = normalizeReducedCode(p.reducedCode);
+        if (!normalized) return;
+        if (!systemByNormalized.has(normalized)) systemByNormalized.set(normalized, p);
+      });
+      dcbBaseProducts.forEach((p) => {
+        const normalized = normalizeReducedCode(p.reducedCode);
+        if (!normalized) return;
+        if (!dcbByNormalized.has(normalized)) dcbByNormalized.set(normalized, p);
+      });
+
+      const allNormalizedCodes = new Set([
+        ...Array.from(systemByNormalized.keys()),
+        ...Array.from(dcbByNormalized.keys())
       ]);
 
-      allReducedCodes.forEach(code => {
+      allNormalizedCodes.forEach(code => {
         if (!code) return;
-        const sysProd = systemProducts.find(p => p.reducedCode === code);
-        const dcbProd = dcbBaseProducts.find(p => p.reducedCode === code);
+        const sysProd = systemByNormalized.get(code);
+        const dcbProd = dcbByNormalized.get(code);
+        const sysLab = systemProducts.find(p => normalizeReducedCode(p.reducedCode) === code && !!(p.lab || '').trim())?.lab;
         merged.push({
           id: sysProd?.id || dcbProd?.id || `merge-${code}`,
           name: sysProd?.name || dcbProd?.name || 'Produto identificado via DCB',
           barcode: sysProd?.barcode || dcbProd?.barcode || '',
           reducedCode: code,
           dcb: dcbProd?.dcb || sysProd?.dcb || 'N/A',
-          lab: sysProd?.lab || dcbProd?.lab
+          lab: sysLab || sysProd?.lab || dcbProd?.lab
         });
       });
       setMasterProducts(merged);
@@ -1215,12 +1253,18 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     const map: Record<string, string> = {};
     masterProducts.forEach(prod => {
       if (prod.reducedCode && prod.lab) {
-        map[prod.reducedCode] = prod.lab;
+        const raw = String(prod.reducedCode);
+        const normalized = normalizeReducedCode(raw);
+        map[raw] = prod.lab;
+        if (normalized) map[normalized] = prod.lab;
       }
     });
     pvRecords.forEach(rec => {
-      if (!map[rec.reducedCode] && rec.lab) {
-        map[rec.reducedCode] = rec.lab;
+      if (rec.lab) {
+        const raw = String(rec.reducedCode || '');
+        const normalized = normalizeReducedCode(raw);
+        if (!map[raw]) map[raw] = rec.lab;
+        if (normalized && !map[normalized]) map[normalized] = rec.lab;
       }
     });
     return map;
@@ -2975,23 +3019,16 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     if (isLoadingSession) return false;
     if (!isInitialSyncDone || reportsSyncStatus === 'loading') return false;
     if (shouldWaitSetupPrefetch && isBranchPrefetching) return false;
-    if (!hasBranchContext) return true;
-    return !isLoadingBranchSalesState
-      && !isLoadingSalesUploads
-      && !isLoadingAnalysisReports
-      && !isLoadingInventoryReport;
+    // Do not block initial render waiting for branch auxiliary datasets.
+    // These can continue loading in background for better perceived performance.
+    return true;
   }, [
     userEmail,
     isLoadingSession,
     isInitialSyncDone,
     reportsSyncStatus,
     shouldWaitSetupPrefetch,
-    isBranchPrefetching,
-    hasBranchContext,
-    isLoadingBranchSalesState,
-    isLoadingSalesUploads,
-    isLoadingAnalysisReports,
-    isLoadingInventoryReport
+    isBranchPrefetching
   ]);
 
   useEffect(() => {

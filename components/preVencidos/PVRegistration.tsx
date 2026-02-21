@@ -153,6 +153,15 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     return { byBarcode, byReduced };
   }, [masterProducts]);
 
+  const resolveLabFromCadastro = (product?: Product | null) => {
+    if (!product) return '';
+    if (product.lab) return product.lab;
+    const normalizedReduced = normalizeReducedCode(product.reducedCode);
+    if (!normalizedReduced) return '';
+    const fromMaster = masterProducts.find(p => normalizeReducedCode(p.reducedCode) === normalizedReduced);
+    return fromMaster?.lab || '';
+  };
+
   const handleScan = (code: string) => {
     const rawCode = String(code || '').trim();
     const normalizedBarcode = normalizeBarcode(rawCode);
@@ -208,7 +217,8 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     }
 
     if (found) {
-      setScanningProduct(found);
+      const resolvedLab = resolveLabFromCadastro(found);
+      setScanningProduct({ ...found, lab: resolvedLab || found.lab });
       setSearchMethod((foundByBarcode || (foundFromRecords && fallbackMatchedByBarcode)) ? 'K' : 'C');
       setQuantity(1);
     } else {
@@ -343,10 +353,25 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
   const labByReduced = useMemo(() => {
     const map: Record<string, string> = {};
     masterProducts.forEach(prod => {
-      if (prod.reducedCode) map[prod.reducedCode] = prod.lab || '';
+      if (!prod.reducedCode || !prod.lab) return;
+      const raw = String(prod.reducedCode);
+      const normalized = normalizeReducedCode(raw);
+      map[raw] = prod.lab;
+      if (normalized) map[normalized] = prod.lab;
     });
     return map;
   }, [masterProducts]);
+
+  const resolveLabByReduced = (reducedCode?: string, fallbackLab?: string) => {
+    if (!reducedCode) return fallbackLab || 'N/D';
+    const raw = String(reducedCode);
+    const normalized = normalizeReducedCode(raw);
+    const direct = labByReduced[raw] || (normalized ? labByReduced[normalized] : '');
+    if (direct) return direct;
+    const matchedKey = Object.keys(labByReduced).find(key => normalizeReducedCode(key) === normalized);
+    if (matchedKey && labByReduced[matchedKey]) return labByReduced[matchedKey];
+    return fallbackLab || 'N/D';
+  };
 
   const formatCurrency = (value: number) => {
     try {
@@ -1039,7 +1064,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                         </div>
                       </td>
                       <td className="px-4 py-2 text-[10px] font-bold text-slate-600 uppercase">
-                        {rec.lab || labByReduced[rec.reducedCode] || 'N/D'}
+                        {resolveLabByReduced(rec.reducedCode, rec.lab)}
                       </td>
                       <td className="px-4 py-2">
                         <select
