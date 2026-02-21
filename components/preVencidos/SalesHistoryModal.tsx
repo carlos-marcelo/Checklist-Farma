@@ -1,4 +1,5 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { X, FileText, User, Eye, Printer } from 'lucide-react';
 import { DbPVSalesUpload } from '../../supabaseService';
 import { AnalysisReportPayload, buildAnalysisReportHtml } from '../../preVencidos/analysisReport';
@@ -12,6 +13,14 @@ interface SalesHistoryModalProps {
 
 const SalesHistoryModal: React.FC<SalesHistoryModalProps> = ({ isOpen, onClose, history, analysisReports = {} }) => {
     if (!isOpen) return null;
+    if (typeof document === 'undefined') return null;
+
+    const formatUploadDate = (value?: string | null) => {
+        if (!value) return '-';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '-';
+        return date.toLocaleString('pt-BR');
+    };
 
     const openReportWindow = (payload: AnalysisReportPayload, autoPrint = false) => {
         const html = buildAnalysisReportHtml(payload, { autoPrint });
@@ -25,8 +34,8 @@ const SalesHistoryModal: React.FC<SalesHistoryModalProps> = ({ isOpen, onClose, 
         win.document.close();
     };
 
-    return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
+    return createPortal(
+        <div className="fixed inset-0 z-[2147483647] flex items-center justify-center bg-black/50 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-4xl max-h-[80vh] rounded-3xl shadow-2xl flex flex-col animate-in zoom-in-95 duration-200">
                 <div className="p-6 border-b border-slate-100 flex items-center justify-between shrink-0">
                     <div>
@@ -54,7 +63,7 @@ const SalesHistoryModal: React.FC<SalesHistoryModalProps> = ({ isOpen, onClose, 
                         <table className="w-full text-sm text-left">
                             <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs sticky top-0 z-10 shadow-sm">
                                 <tr>
-                                    <th className="px-6 py-4">Data Upload</th>
+                                    <th className="px-6 py-4">Data/Hora Relatório</th>
                                     <th className="px-6 py-4">Período Venda</th>
                                     <th className="px-6 py-4">Arquivo</th>
                                     <th className="px-6 py-4">Responsável</th>
@@ -68,7 +77,7 @@ const SalesHistoryModal: React.FC<SalesHistoryModalProps> = ({ isOpen, onClose, 
                                     return (
                                     <tr key={upload.id} className="hover:bg-blue-50/50 transition-colors group">
                                         <td className="px-6 py-4 text-slate-600 font-medium group-hover:text-blue-700">
-                                            {upload.uploaded_at ? new Date(upload.uploaded_at).toLocaleString('pt-BR') : '-'}
+                                            {formatUploadDate(upload.uploaded_at)}
                                         </td>
                                         <td className="px-6 py-4 font-bold text-slate-800">
                                             {upload.period_label}
@@ -120,7 +129,8 @@ const SalesHistoryModal: React.FC<SalesHistoryModalProps> = ({ isOpen, onClose, 
                     </button>
                 </div>
             </div>
-        </div>
+        </div>,
+        document.body
     );
 };
 

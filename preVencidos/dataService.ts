@@ -207,7 +207,7 @@ export const parseDCBProductsXLSX = async (file: File): Promise<Product[]> => {
   });
 };
 
-export const parseSalesXLSX = async (file: File): Promise<{ sales: SalesRecord[], period: string }> => {
+export const parseSalesXLSX = async (file: File): Promise<{ sales: SalesRecord[], period: string, reportExtractedAt?: string }> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -245,6 +245,98 @@ export const parseSalesXLSX = async (file: File): Promise<{ sales: SalesRecord[]
           }
           return parseFloat(cleaned) || 0;
         };
+
+        const parseExcelDate = (value: any): Date | null => {
+          if (value === null || value === undefined || value === '') return null;
+
+          if (value instanceof Date && !Number.isNaN(value.getTime())) {
+            return new Date(value.getTime());
+          }
+
+          if (typeof value === 'number' && Number.isFinite(value)) {
+            const excelEpoch = Date.UTC(1899, 11, 30);
+            const ms = Math.round(value * 24 * 60 * 60 * 1000);
+            const asDate = new Date(excelEpoch + ms);
+            if (!Number.isNaN(asDate.getTime())) return asDate;
+          }
+
+          const raw = String(value).trim();
+          if (!raw) return null;
+
+          const dmy = raw.match(/(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{2,4})/);
+          if (dmy) {
+            const day = Number(dmy[1]);
+            const month = Number(dmy[2]);
+            const yearRaw = Number(dmy[3]);
+            const year = yearRaw < 100 ? 2000 + yearRaw : yearRaw;
+            const parsed = new Date(year, month - 1, day);
+            if (!Number.isNaN(parsed.getTime())) return parsed;
+          }
+
+          const iso = new Date(raw);
+          if (!Number.isNaN(iso.getTime())) return iso;
+          return null;
+        };
+
+        const parseExcelTime = (value: any): { hours: number; minutes: number; seconds: number } | null => {
+          if (value === null || value === undefined || value === '') return null;
+
+          if (value instanceof Date && !Number.isNaN(value.getTime())) {
+            return {
+              hours: value.getHours(),
+              minutes: value.getMinutes(),
+              seconds: value.getSeconds()
+            };
+          }
+
+          if (typeof value === 'number' && Number.isFinite(value)) {
+            const fraction = value >= 1 ? value % 1 : value;
+            const totalSeconds = Math.round(fraction * 24 * 60 * 60);
+            const hours = Math.floor(totalSeconds / 3600) % 24;
+            const minutes = Math.floor((totalSeconds % 3600) / 60);
+            const seconds = totalSeconds % 60;
+            return { hours, minutes, seconds };
+          }
+
+          const raw = String(value).trim();
+          if (!raw) return null;
+          const hms = raw.match(/(\d{1,2})[:h](\d{2})(?::(\d{2}))?/i);
+          if (!hms) return null;
+
+          const hours = Math.min(23, Math.max(0, Number(hms[1] || 0)));
+          const minutes = Math.min(59, Math.max(0, Number(hms[2] || 0)));
+          const seconds = Math.min(59, Math.max(0, Number(hms[3] || 0)));
+          return { hours, minutes, seconds };
+        };
+
+        // Metadados do relatório (J1 = data, J2 = hora de emissão no sistema Trier)
+        const readCellValue = (address: string, fallbackRow: number, fallbackCol: number) => {
+          const cell = worksheet[address];
+          if (cell) {
+            if (cell.v !== null && cell.v !== undefined && cell.v !== '') return cell.v;
+            if (cell.w !== null && cell.w !== undefined && cell.w !== '') return cell.w;
+          }
+          return rows[fallbackRow]?.[fallbackCol];
+        };
+
+        const j1Value = readCellValue('J1', 0, 9);
+        const j2Value = readCellValue('J2', 1, 9);
+        const extractedDate = parseExcelDate(j1Value);
+        const extractedTime = parseExcelTime(j2Value);
+        let reportExtractedAt: string | undefined;
+        if (extractedDate) {
+          const merged = new Date(
+            extractedDate.getFullYear(),
+            extractedDate.getMonth(),
+            extractedDate.getDate(),
+            extractedTime?.hours ?? 0,
+            extractedTime?.minutes ?? 0,
+            extractedTime?.seconds ?? 0
+          );
+          if (!Number.isNaN(merged.getTime())) {
+            reportExtractedAt = merged.toISOString();
+          }
+        }
 
         // Período (default: linha 5, coluna I)
         let period = "Não identificado";
@@ -437,7 +529,7 @@ export const parseSalesXLSX = async (file: File): Promise<{ sales: SalesRecord[]
           console.warn('⚠️ Nenhuma venda localizada no arquivo. Amostra das primeiras linhas:', rows.slice(0, 12));
           throw new Error('Nenhuma venda encontrada. Verifique se a planilha contém Código, Quantidade e Valor de Vendas.');
         }
-        resolve({ sales, period });
+        resolve({ sales, period, reportExtractedAt });
       } catch (err) {
         reject(err);
       }

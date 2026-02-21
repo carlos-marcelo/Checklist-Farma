@@ -128,11 +128,11 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
 
     const resolveCostUnit = (reducedCode?: string, _fallbackCostUnit?: number, _allowFallback = false) => {
       if (!reducedCode) return 0;
-      const reducedKey = `red:${String(reducedCode).replace(/\D/g, '') || reducedCode}`;
-      const reducedCost = inventoryCostByBarcode[reducedKey];
+      const normalizedReduced = normalizeReducedCode(reducedCode);
+      const reducedKey = normalizedReduced ? `red:${normalizedReduced}` : '';
+      const reducedCost = reducedKey ? inventoryCostByBarcode[reducedKey] : undefined;
       if (reducedCost !== undefined) return Number(reducedCost || 0);
-
-      const raw = barcodeByReduced[reducedCode] || '';
+      const raw = barcodeByReduced[String(reducedCode)] || (normalizedReduced ? barcodeByReduced[normalizedReduced] : '') || '';
       const normalized = String(raw || '').replace(/\D/g, '');
       if (!normalized) return 0;
 
@@ -142,10 +142,11 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     };
     const getInventoryStock = (reducedCode?: string) => {
       if (!reducedCode) return null;
-      const reducedKey = `red:${String(reducedCode).replace(/\D/g, '') || reducedCode}`;
-      const reducedStock = inventoryStockByBarcode[reducedKey];
+      const normalizedReduced = normalizeReducedCode(reducedCode);
+      const reducedKey = normalizedReduced ? `red:${normalizedReduced}` : '';
+      const reducedStock = reducedKey ? inventoryStockByBarcode[reducedKey] : undefined;
       if (reducedStock !== undefined) return Number(reducedStock || 0);
-      const raw = barcodeByReduced[reducedCode] || '';
+      const raw = barcodeByReduced[String(reducedCode)] || (normalizedReduced ? barcodeByReduced[normalizedReduced] : '') || '';
       const normalized = String(raw || '').replace(/\D/g, '');
       if (!normalized) return null;
       const noZeros = normalized.replace(/^0+/, '') || normalized;

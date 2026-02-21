@@ -397,7 +397,7 @@ const SetupView: React.FC<SetupViewProps> = ({
             <table className="w-full text-sm text-left">
               <thead className="bg-gradient-to-r from-slate-50 to-slate-100 text-slate-500 font-bold uppercase text-xs">
                 <tr>
-                  <th className="px-6 py-4">Data Upload</th>
+                  <th className="px-6 py-4">Data/Hora Relatório</th>
                   <th className="px-6 py-4">Período Venda</th>
                   <th className="px-6 py-4">Arquivo</th>
                   <th className="px-6 py-4">Responsável</th>
@@ -407,7 +407,7 @@ const SetupView: React.FC<SetupViewProps> = ({
                 {uploadHistory.map((upload) => (
                   <tr key={upload.id} className="hover:bg-prevencidos-50/30 transition-colors duration-150">
                     <td className="px-6 py-4 text-slate-600">
-                      {new Date(upload.uploaded_at || '').toLocaleString('pt-BR')}
+                      {formatSupabaseDate(upload.uploaded_at) || '-'}
                     </td>
                     <td className="px-6 py-4 font-medium text-slate-800">
                       {upload.period_label}
@@ -445,7 +445,7 @@ const SetupView: React.FC<SetupViewProps> = ({
               <tbody className="divide-y divide-slate-50">
                 <tr className="hover:bg-amber-50/30 transition-colors duration-150">
                   <td className="px-6 py-4 text-slate-600">
-                    {inventoryReport.uploaded_at ? new Date(inventoryReport.uploaded_at).toLocaleString('pt-BR') : '-'}
+                    {formatSupabaseDate(inventoryReport.uploaded_at) || '-'}
                   </td>
                   <td className="px-6 py-4 text-slate-500 text-xs font-mono">
                     {inventoryReport.file_name || '-'}

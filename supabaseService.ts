@@ -1121,18 +1121,25 @@ export async function deleteAuditPartialTermsForAudit(
 
 export async function upsertActiveSalesReport(report: DbActiveSalesReport): Promise<boolean> {
   try {
+    const payload: any = {
+      company_id: report.company_id,
+      branch: report.branch,
+      sales_records: report.sales_records,
+      sales_period: report.sales_period,
+      confirmed_sales: report.confirmed_sales,
+      user_email: report.user_email,
+      file_name: report.file_name,
+      updated_at: new Date().toISOString()
+    };
+
+    // Keep original report extraction timestamp unless an explicit value is provided.
+    if (report.uploaded_at !== undefined) {
+      payload.uploaded_at = report.uploaded_at;
+    }
+
     const { error } = await supabase
       .from('pv_active_sales_reports')
-      .upsert({
-        company_id: report.company_id,
-        branch: report.branch,
-        sales_records: report.sales_records,
-        sales_period: report.sales_period,
-        confirmed_sales: report.confirmed_sales,
-        user_email: report.user_email,
-        file_name: report.file_name,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'company_id,branch' });
+      .upsert(payload, { onConflict: 'company_id,branch' });
 
     if (error) throw error;
     return true;
@@ -1405,7 +1412,7 @@ export async function insertPVSalesUpload(upload: DbPVSalesUpload): Promise<DbPV
       period_start: upload.period_start,
       period_end: upload.period_end,
       file_name: upload.file_name,
-      uploaded_at: new Date().toISOString()
+      uploaded_at: upload.uploaded_at ?? null
     };
 
     const { data, error } = await supabase

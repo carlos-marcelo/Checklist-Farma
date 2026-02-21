@@ -267,12 +267,20 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     }
   };
 
+  const normalizeReducedCode = (value?: string) => {
+    if (value === null || value === undefined) return '';
+    const digits = String(value).replace(/\D/g, '');
+    if (!digits) return '';
+    return digits.replace(/^0+/, '') || digits;
+  };
+
   const getInventoryCostUnitByReduced = (reducedCode?: string) => {
     if (!reducedCode) return 0;
-    const reducedKey = `red:${String(reducedCode).replace(/\D/g, '') || reducedCode}`;
-    const reducedCost = inventoryCostByBarcode[reducedKey];
+    const normalizedReduced = normalizeReducedCode(reducedCode);
+    const reducedKey = normalizedReduced ? `red:${normalizedReduced}` : '';
+    const reducedCost = reducedKey ? inventoryCostByBarcode[reducedKey] : undefined;
     if (reducedCost !== undefined) return Number(reducedCost || 0);
-    const barcode = barcodeByReduced[reducedCode] || '';
+    const barcode = barcodeByReduced[String(reducedCode)] || (normalizedReduced ? barcodeByReduced[normalizedReduced] : '') || '';
     if (!barcode) return 0;
     const normalized = String(barcode || '').replace(/\D/g, '');
     const noZeros = normalized.replace(/^0+/, '') || normalized;

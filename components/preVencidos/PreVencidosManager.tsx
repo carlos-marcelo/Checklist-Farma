@@ -149,6 +149,13 @@ const normalizeBarcode = (value?: string) => {
   return raw.replace(/\D/g, '');
 };
 
+const normalizeReducedCode = (value?: string) => {
+  if (value === null || value === undefined) return '';
+  const digits = String(value).replace(/\D/g, '');
+  if (!digits) return '';
+  return digits.replace(/^0+/, '') || digits;
+};
+
 const buildSetupDraftKey = (email: string) => `PV_SETUP_DRAFT_${(email || '').trim().toLowerCase()}`;
 
 const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
@@ -271,7 +278,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       const normalized = normalizeBarcode(rawBarcode);
       const noZeros = normalized.replace(/^0+/, '') || normalized;
       const barcodeKeys = Array.from(new Set([normalized, noZeros].filter(Boolean)));
-      const reducedKey = rec.reducedCode ? `red:${String(rec.reducedCode).replace(/\D/g, '') || rec.reducedCode}` : '';
+      const normalizedReduced = normalizeReducedCode(rec.reducedCode);
+      const reducedKey = normalizedReduced ? `red:${normalizedReduced}` : '';
       if (barcodeKeys.length === 0 && !reducedKey) return;
       if (barcodeKeys.length > 0) {
         barcodeKeys.forEach(barcode => {
@@ -402,7 +410,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
             setLocalLastUpload({
               period_label: activeSales.sales_period,
               file_name: activeSales.file_name || 'Relatório Ativo',
-              uploaded_at: activeSales.uploaded_at || new Date().toISOString(),
+              uploaded_at: activeSales.uploaded_at || undefined,
               user_email: activeSales.user_email || '',
               company_id: activeSales.company_id,
               branch: activeSales.branch,
@@ -504,6 +512,28 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       saveLocalPVSession(userEmail || '', tempSession);
     }
   };
+
+  useEffect(() => {
+    if (!userEmail) return;
+    const currentViewLabel =
+      currentView === AppView.DASHBOARD
+        ? 'dashboard'
+        : currentView === AppView.REGISTRATION
+          ? 'registration'
+          : currentView === AppView.ANALYSIS
+            ? 'analysis'
+            : 'setup';
+    const existing = loadLocalPVSession(userEmail);
+    const payload: DbPVSession = {
+      ...(existing || { user_email: userEmail }),
+      user_email: userEmail,
+      session_data: {
+        ...(existing?.session_data || {}),
+        currentView: currentViewLabel
+      }
+    };
+    saveLocalPVSession(userEmail, payload);
+  }, [currentView, userEmail]);
 
   useEffect(() => {
     if (!userEmail) return;
@@ -638,7 +668,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     };
   }, [userEmail, setupDraftInfo?.companyId, setupDraftInfo?.filial, sessionInfo?.companyId, sessionInfo?.filial, decodeGlobalFileToBrowserFile]);
 
-  const applySessionFromData = useCallback((session: DbPVSession) => {
+  const applySessionFromData = useCallback((session: DbPVSession, preferredView?: string) => {
     const data = session.session_data || {};
     setPvSessionId(session.id || null);
 
@@ -666,12 +696,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       });
       setHasCompletedSetup(true);
 
-      // Restore View
-      if (data.currentView) {
-        switch (data.currentView) {
+      // Restore View (prefer local view to avoid stale server overwriting on refresh)
+      const viewToApply = (preferredView || data.currentView || '').trim().toLowerCase();
+      if (viewToApply) {
+        switch (viewToApply) {
           case 'dashboard': setCurrentView(AppView.DASHBOARD); break;
           case 'registration': setCurrentView(AppView.REGISTRATION); break;
           case 'analysis': setCurrentView(AppView.ANALYSIS); break;
+          case 'setup': setCurrentView(AppView.SETUP); break;
           default: setCurrentView(AppView.REGISTRATION);
         }
       } else {
@@ -702,6 +734,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
 
     const localSession = loadLocalPVSession(userEmail);
+    const localCurrentView = (localSession?.session_data?.currentView || '').trim();
     if (localSession) {
       applySessionFromData(localSession);
       setIsLoadingSession(false); // Assume local is fast
@@ -710,8 +743,15 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     fetchPVSession(userEmail)
       .then(session => {
         if (!isMounted || !session) return;
-        applySessionFromData(session);
-        saveLocalPVSession(userEmail, session);
+        applySessionFromData(session, localCurrentView || undefined);
+        const mergedSession: DbPVSession = {
+          ...session,
+          session_data: {
+            ...(session.session_data || {}),
+            currentView: localCurrentView || session.session_data?.currentView || 'registration'
+          }
+        };
+        saveLocalPVSession(userEmail, mergedSession);
       })
       .catch(error => {
         console.error('Erro ao carregar sessão PV do Supabase:', error);
@@ -956,7 +996,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
             setLocalLastUpload({
               period_label: report.sales_period,
               file_name: report.file_name || 'Relatório Ativo',
-              uploaded_at: report.uploaded_at || new Date().toISOString(),
+              uploaded_at: report.uploaded_at || undefined,
               user_email: report.user_email || '',
               company_id: report.company_id,
               branch: report.branch,
@@ -1110,12 +1150,22 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     const map: Record<string, string> = {};
     masterProducts.forEach(prod => {
       if (prod.reducedCode) {
-        map[prod.reducedCode] = normalizeBarcode(prod.barcode || '');
+        const barcode = normalizeBarcode(prod.barcode || '');
+        const reduced = String(prod.reducedCode || '');
+        const normalizedReduced = normalizeReducedCode(reduced);
+        map[reduced] = barcode;
+        if (normalizedReduced) map[normalizedReduced] = barcode;
       }
     });
     pvRecords.forEach(rec => {
-      if (!map[rec.reducedCode] && rec.barcode) {
-        map[rec.reducedCode] = normalizeBarcode(rec.barcode || '');
+      const reduced = String(rec.reducedCode || '');
+      const normalizedReduced = normalizeReducedCode(reduced);
+      const hasDirect = !!map[reduced];
+      const hasNormalized = !!(normalizedReduced && map[normalizedReduced]);
+      if ((!hasDirect && !hasNormalized) && rec.barcode) {
+        const barcode = normalizeBarcode(rec.barcode || '');
+        map[reduced] = barcode;
+        if (normalizedReduced) map[normalizedReduced] = barcode;
       }
     });
     return map;
@@ -1187,10 +1237,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   const getInventoryCostUnitByReduced = (reducedCode?: string) => {
     if (!reducedCode) return 0;
-    const reducedKey = `red:${String(reducedCode).replace(/\D/g, '') || reducedCode}`;
-    const reducedCost = inventoryCostByBarcode[reducedKey];
+    const normalizedReduced = normalizeReducedCode(reducedCode);
+    const reducedKey = normalizedReduced ? `red:${normalizedReduced}` : '';
+    const reducedCost = reducedKey ? inventoryCostByBarcode[reducedKey] : undefined;
     if (reducedCost !== undefined) return Number(reducedCost || 0);
-    const barcode = barcodeByReduced[reducedCode] || '';
+    const barcode = barcodeByReduced[String(reducedCode)] || (normalizedReduced ? barcodeByReduced[normalizedReduced] : '') || '';
     if (!barcode) return 0;
     const normalized = barcode.replace(/\D/g, '');
     const noZeros = normalized.replace(/^0+/, '') || normalized;
@@ -1266,6 +1317,26 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     };
   };
 
+  const effectiveCurrentUpload = useMemo<SalesUploadRecord | null>(() => {
+    const normalizedPeriod = (salesPeriod || '').trim();
+    if (!normalizedPeriod) return localLastUpload;
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) return localLastUpload;
+
+    const { fileName, uploadedAt } = resolveUploadMetaForPeriod(normalizedPeriod);
+    if (!fileName && !uploadedAt) return localLastUpload;
+
+    return {
+      user_email: localLastUpload?.user_email || userEmail || '',
+      company_id: sessionInfo.companyId,
+      branch: sessionInfo.filial,
+      period_label: normalizedPeriod,
+      period_start: null,
+      period_end: null,
+      file_name: fileName || localLastUpload?.file_name || null,
+      uploaded_at: uploadedAt || localLastUpload?.uploaded_at
+    };
+  }, [salesPeriod, sessionInfo?.companyId, sessionInfo?.filial, salesUploads, localLastUpload, userEmail]);
+
   const currentAnalysisReport = useMemo(() => {
     const normalizedPeriod = (salesPeriod || '').trim();
     if (!normalizedPeriod || salesRecords.length === 0 || pvRecords.length === 0) return null;
@@ -1281,8 +1352,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         company: sessionInfo?.company,
         branch: sessionInfo?.filial,
         area: sessionInfo?.area,
-        file_name: fileName || localLastUpload?.file_name || null,
-        uploaded_at: uploadedAt || localLastUpload?.uploaded_at || null,
+        file_name: fileName || effectiveCurrentUpload?.file_name || localLastUpload?.file_name || null,
+        uploaded_at: uploadedAt || effectiveCurrentUpload?.uploaded_at || localLastUpload?.uploaded_at || null,
         period_start: range.start ? range.start.toISOString() : null,
         period_end: range.end ? range.end.toISOString() : null
       }
@@ -1295,6 +1366,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     sessionInfo?.company,
     sessionInfo?.filial,
     sessionInfo?.area,
+    effectiveCurrentUpload,
     localLastUpload,
     salesUploads
   ]);
@@ -1346,7 +1418,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         branch: sessionInfo.filial,
         area: sessionInfo.area,
         file_name: fileName || null,
-        uploaded_at: uploadedAt || new Date().toISOString(),
+        uploaded_at: uploadedAt || localLastUpload?.uploaded_at || null,
         period_start: range.start ? range.start.toISOString() : null,
         period_end: range.end ? range.end.toISOString() : null
       }
@@ -1383,6 +1455,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           sales_records: salesRecords,
           sales_period: salesPeriod,
           confirmed_sales: buildConfirmedSalesPayload(newState, effectiveFinalizedByPeriod),
+          uploaded_at: localLastUpload?.uploaded_at,
           user_email: userEmail || '',
           status: 'processed'
         }).catch(err => console.error('Erro ao salvar classificação:', err));
@@ -1581,6 +1654,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         sales_records: salesRecords,
         sales_period: normalizedPeriod,
         confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedForPersist),
+        uploaded_at: localLastUpload?.uploaded_at,
         user_email: userEmail || '',
         status: 'processed'
       }).catch(err => console.error('Erro ao persistir finalização:', err));
@@ -1620,7 +1694,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           branch: sessionInfo.filial,
           area: sessionInfo.area,
           file_name: localLastUpload?.file_name || null,
-          uploaded_at: localLastUpload?.uploaded_at || new Date().toISOString()
+          uploaded_at: localLastUpload?.uploaded_at || null
         }
       });
       setAnalysisReports(prev => ({
@@ -1679,7 +1753,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   };
 
   const formatUploadTimestamp = (value?: string) => {
-    if (!value) return 'momento anterior';
+    if (!value) return 'não informado';
     try {
       const date = new Date(value);
       const datePart = new Intl.DateTimeFormat('pt-BR', {
@@ -1761,7 +1835,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       setLocalLastUpload({
         period_label: cleanedPeriod,
         file_name: fileName || 'Upload Manual',
-        uploaded_at: uploadedAt || new Date().toISOString(),
+        uploaded_at: uploadedAt,
         user_email: userEmail || '',
         company_id: sessionInfo.companyId,
         branch: sessionInfo.filial,
@@ -1778,6 +1852,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         sales_records: enrichedSales,
         sales_period: cleanedPeriod,
         confirmed_sales: buildConfirmedSalesPayload({}, {}), // Reset confirmed sales + metadata on new report
+        uploaded_at: uploadedAt,
         user_email: userEmail || '',
         file_name: fileName,
         status: 'processed'
@@ -1792,7 +1867,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
   };
 
-  const handleParsedSales = async (sales: SalesRecord[], rawPeriodLabel: string | undefined, fileName: string) => {
+  const handleParsedSales = async (
+    sales: SalesRecord[],
+    rawPeriodLabel: string | undefined,
+    fileName: string,
+    reportExtractedAt?: string
+  ) => {
     if (pendingLaunchCount > 0) {
       alert(`Ainda existem ${pendingLaunchCount} itens com "Falta Lançar no Período".\n\nFinalize todos os lançamentos pendentes antes de carregar um novo arquivo de vendas.`);
       return;
@@ -1803,6 +1883,49 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
     // Check against currently loaded/active report (Already handled by findConflictingUpload if localLastUpload is checked there, but keeping strict label check for clarity)
     if (localLastUpload && localLastUpload.period_label === normalizedLabel) {
+      if (reportExtractedAt) {
+        const patchedUpload: SalesUploadRecord = {
+          ...localLastUpload,
+          file_name: fileName || localLastUpload.file_name,
+          uploaded_at: reportExtractedAt
+        };
+
+        setLocalLastUpload(patchedUpload);
+        if (userEmail) saveLastSalesUpload(userEmail, patchedUpload);
+        setSalesUploads(prev => prev.map(item => (
+          item.period_label === normalizedLabel
+            ? { ...item, uploaded_at: reportExtractedAt, file_name: fileName || item.file_name }
+            : item
+        )));
+
+        if (sessionInfo?.companyId && sessionInfo?.filial) {
+          upsertActiveSalesReport({
+            company_id: sessionInfo.companyId,
+            branch: sessionInfo.filial,
+            sales_records: salesRecords,
+            sales_period: normalizedLabel,
+            confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedREDSByPeriod),
+            uploaded_at: reportExtractedAt,
+            user_email: userEmail || '',
+            file_name: fileName || localLastUpload.file_name,
+            status: 'processed'
+          }).catch(err => console.error('Erro ao atualizar horário do relatório ativo:', err));
+
+          if (salesRecords.length > 0) {
+            persistAnalysisReport(
+              salesRecords,
+              normalizedLabel,
+              parsedRange,
+              fileName || localLastUpload.file_name || undefined,
+              reportExtractedAt
+            ).catch(err => console.error('Erro ao atualizar horário da análise:', err));
+          }
+        }
+
+        alert(`Período já existente. Horário do relatório atualizado para ${formatUploadTimestamp(reportExtractedAt)}.`);
+        return;
+      }
+
       alert(`Já existe um relatório ativo para este período: "${normalizedLabel}".\n\nArquivo atual: ${fileName}\nArquivo ativo: ${localLastUpload.file_name}\n\nNão é permitido carregar novamente o mesmo período de venda.`);
       return;
     }
@@ -1818,15 +1941,15 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         `Detalhes do conflito:\n` +
         `Relatório Existente: ${conflict.period_label}\n` +
         `${fileHint}\n` +
-        `Carregado em: ${friendlyTimestamp}\n\n` +
+        `Relatório extraído em: ${friendlyTimestamp}\n\n` +
         `Para manter a integridade do histórico, não é permitido carregar períodos sobrepostos.`
       );
       return;
     }
 
-    const uploadedAt = new Date().toISOString();
-    processAndSetSales(sales, normalizedLabel, fileName, parsedRange, uploadedAt);
-    await persistSalesUploadRecord(normalizedLabel, parsedRange, fileName, uploadedAt);
+    const effectiveUploadedAt = reportExtractedAt || new Date().toISOString();
+    processAndSetSales(sales, normalizedLabel, fileName, parsedRange, effectiveUploadedAt);
+    await persistSalesUploadRecord(normalizedLabel, parsedRange, fileName, effectiveUploadedAt);
     if (sessionInfo?.companyId && sessionInfo?.filial) {
       insertAppEventLog({
         company_id: sessionInfo.companyId,
@@ -1907,7 +2030,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         try {
           const text = event.target?.result as string;
           const sales = parseSalesCSV(text);
-          await handleParsedSales(sales, `CSV-Upload-${new Date().toLocaleDateString()}`, fileName);
+          await handleParsedSales(sales, `CSV-Upload-${new Date().toLocaleDateString()}`, fileName, new Date().toISOString());
         } catch (err) {
           console.error('Erro ao ler CSV de vendas:', err);
           notifyError(err);
@@ -1919,7 +2042,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       (async () => {
         try {
           const salesData = await parseSalesXLSX(file);
-          await handleParsedSales(salesData.sales, salesData.period, fileName);
+          await handleParsedSales(salesData.sales, salesData.period, fileName, salesData.reportExtractedAt);
         } catch (error) {
           console.error('Erro ao ler XLSX de vendas:', error);
           notifyError(error);
@@ -2375,6 +2498,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   const persistPVSession = useCallback(async () => {
     if (!userEmail) return;
+    const currentViewLabel =
+      currentView === AppView.DASHBOARD
+        ? 'dashboard'
+        : currentView === AppView.REGISTRATION
+          ? 'registration'
+          : currentView === AppView.ANALYSIS
+            ? 'analysis'
+            : 'setup';
     const payload: DbPVSession = {
       id: pvSessionId || undefined,
       user_email: userEmail,
@@ -2395,7 +2526,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
         confirmed_pv_sales: confirmedPVSales,
         finalized_reds_by_period: finalizedREDSByPeriod,
-        sales_period: salesPeriod
+        sales_period: salesPeriod,
+        currentView: currentViewLabel
       },
       updated_at: new Date().toISOString()
     };
@@ -2410,7 +2542,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     } finally {
       setIsSavingSession(false);
     }
-  }, [userEmail, pvSessionId, sessionInfo, confirmedPVSales, finalizedREDSByPeriod, salesPeriod]);
+  }, [userEmail, pvSessionId, sessionInfo, confirmedPVSales, finalizedREDSByPeriod, salesPeriod, currentView]);
 
 
   const schedulePersist = useCallback(() => {
@@ -2424,7 +2556,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   useEffect(() => {
     schedulePersist();
-  }, [masterProducts, systemProducts, dcbBaseProducts, pvRecords, confirmedPVSales, finalizedREDSByPeriod, salesPeriod, sessionInfo, userEmail, schedulePersist]);
+  }, [masterProducts, systemProducts, dcbBaseProducts, pvRecords, confirmedPVSales, finalizedREDSByPeriod, salesPeriod, currentView, sessionInfo, userEmail, schedulePersist]);
 
   const handleRefreshDashboard = () => {
     refreshDashboardHistory();
@@ -3010,6 +3142,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
                       sales_records: salesRecords,
                       sales_period: salesPeriod,
                       confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedREDSByPeriod),
+                      uploaded_at: localLastUpload?.uploaded_at,
                       user_email: userEmail || '',
                       file_name: localLastUpload?.file_name || 'Upload via Setup',
                       status: 'processed'
@@ -3180,10 +3313,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] font-bold bg-white/20 px-3 py-1 rounded-full uppercase">Excel Linha 5 / Coluna I</span>
-                    {localLastUpload && localLastUpload.company_id === sessionInfo?.companyId && localLastUpload.branch === sessionInfo?.filial && (
+                    {effectiveCurrentUpload && effectiveCurrentUpload.company_id === sessionInfo?.companyId && effectiveCurrentUpload.branch === sessionInfo?.filial && (
                       <p className="text-[10px] font-bold uppercase tracking-widest text-white/80">
-                        Último carregamento: {formatUploadTimestamp(localLastUpload.uploaded_at)} · {localLastUpload.file_name || 'arquivo sem nome'}
-                        <span className="ml-2 text-white/60">Período: {localLastUpload.period_label || 'sem período'}</span>
+                        Relatório extraído em: {formatUploadTimestamp(effectiveCurrentUpload.uploaded_at)} · {effectiveCurrentUpload.file_name || 'arquivo sem nome'}
+                        <span className="ml-2 text-white/60">Período: {effectiveCurrentUpload.period_label || 'sem período'}</span>
                       </p>
                     )}
                   </div>
@@ -3194,7 +3327,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
                 finalizedREDSByPeriod={effectiveFinalizedByPeriod}
                 currentSalesPeriod={salesPeriod}
                 sessionInfo={sessionInfo}
-                lastUpload={localLastUpload}
+                lastUpload={effectiveCurrentUpload}
                 barcodeByReduced={barcodeByReduced}
                 inventoryCostByBarcode={inventoryCostByBarcode}
                 inventoryStockByBarcode={inventoryStockByBarcode}

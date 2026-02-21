@@ -204,7 +204,7 @@ export const buildAnalysisReportHtml = (
     payload.meta?.branch ? `Filial: ${payload.meta.branch}` : '',
     payload.meta?.area ? `Área: ${payload.meta.area}` : '',
     payload.meta?.file_name ? `Arquivo: ${payload.meta.file_name}` : '',
-    payload.meta?.uploaded_at ? `Carregado em: ${formatTimestamp(payload.meta.uploaded_at)}` : ''
+    payload.meta?.uploaded_at ? `Relatório extraído em: ${formatTimestamp(payload.meta.uploaded_at)}` : ''
   ].filter(Boolean);
 
   const itemsHtml = payload.items.map(item => {
