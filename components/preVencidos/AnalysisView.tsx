@@ -126,23 +126,19 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
       || finalizedREDSByPeriod[currentSalesPeriod]
       || [];
 
-    const getInventoryCostUnit = (reducedCode?: string): number | null => {
+    const resolveCostUnit = (reducedCode?: string, _fallbackCostUnit?: number, _allowFallback = false) => {
       if (!reducedCode) return 0;
       const reducedKey = `red:${String(reducedCode).replace(/\D/g, '') || reducedCode}`;
       const reducedCost = inventoryCostByBarcode[reducedKey];
       if (reducedCost !== undefined) return Number(reducedCost || 0);
+
       const raw = barcodeByReduced[reducedCode] || '';
       const normalized = String(raw || '').replace(/\D/g, '');
-      if (!normalized) return null;
+      if (!normalized) return 0;
+
       const noZeros = normalized.replace(/^0+/, '') || normalized;
       const value = inventoryCostByBarcode[normalized] ?? inventoryCostByBarcode[noZeros];
-      if (value === undefined) return null;
       return Number(value || 0);
-    };
-    const resolveCostUnit = (reducedCode?: string, fallbackCostUnit?: number, allowFallback = false) => {
-      const inv = getInventoryCostUnit(reducedCode);
-      if (inv !== null) return inv;
-      return allowFallback ? Number(fallbackCostUnit || 0) : 0;
     };
     const getInventoryStock = (reducedCode?: string) => {
       if (!reducedCode) return null;
@@ -187,18 +183,18 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
       const directSalesDetails = directSales.map((s, idx) => {
         const resolvedCostUnit = resolveCostUnit(s.reducedCode, s.costUnit, false);
         return {
-        name: s.productName,
-        totalSoldInReport: s.quantity,
-        seller: s.salesperson,
-        code: s.reducedCode,
-        unitPrice: s.unitPrice || 0,
-        totalValue: s.totalValue || 0,
-        costUnit: s.costUnit || 0,
-        costTotal: s.costTotal || 0,
-        inventoryCostUnit: resolvedCostUnit,
-        inventoryCostTotal: resolvedCostUnit * s.quantity,
-        lab: getLabByReducedCode(s.reducedCode, s.lab),
-        id: `${normalizedPeriod || currentSalesPeriod}-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
+          name: s.productName,
+          totalSoldInReport: s.quantity,
+          seller: s.salesperson,
+          code: s.reducedCode,
+          unitPrice: s.unitPrice || 0,
+          totalValue: s.totalValue || 0,
+          costUnit: s.costUnit || 0,
+          costTotal: s.costTotal || 0,
+          inventoryCostUnit: resolvedCostUnit,
+          inventoryCostTotal: resolvedCostUnit * s.quantity,
+          lab: getLabByReducedCode(s.reducedCode, s.lab),
+          id: `${normalizedPeriod || currentSalesPeriod}-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
         };
       });
 
@@ -211,18 +207,18 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
       const similarSalesDetails = similarSales.map((s, idx) => {
         const resolvedCostUnit = resolveCostUnit(s.reducedCode, s.costUnit, false);
         return {
-        name: s.productName,
-        qty: s.quantity,
-        seller: s.salesperson,
-        code: s.reducedCode,
-        unitPrice: s.unitPrice || 0,
-        totalValue: s.totalValue || 0,
-        costUnit: s.costUnit || 0,
-        costTotal: s.costTotal || 0,
-        inventoryCostUnit: resolvedCostUnit,
-        inventoryCostTotal: resolvedCostUnit * s.quantity,
-        lab: getLabByReducedCode(s.reducedCode, s.lab),
-        id: `${normalizedPeriod || currentSalesPeriod}-sim-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
+          name: s.productName,
+          qty: s.quantity,
+          seller: s.salesperson,
+          code: s.reducedCode,
+          unitPrice: s.unitPrice || 0,
+          totalValue: s.totalValue || 0,
+          costUnit: s.costUnit || 0,
+          costTotal: s.costTotal || 0,
+          inventoryCostUnit: resolvedCostUnit,
+          inventoryCostTotal: resolvedCostUnit * s.quantity,
+          lab: getLabByReducedCode(s.reducedCode, s.lab),
+          id: `${normalizedPeriod || currentSalesPeriod}-sim-${s.salesperson}-${s.reducedCode}-${s.quantity}-${idx}`
         };
       });
 
@@ -436,11 +432,10 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                 type="button"
                 onClick={() => handleFilterClick('pending')}
                 aria-pressed={activeFilter === 'pending'}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${
-                  activeFilter === 'pending'
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${activeFilter === 'pending'
                     ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-200 scale-[1.02]'
                     : 'bg-white text-slate-400 border-slate-200 hover:text-blue-600 hover:border-blue-200 hover:shadow-sm'
-                }`}
+                  }`}
               >
                 <div className={`w-2.5 h-2.5 rounded-full ${activeFilter === 'pending' ? 'bg-white' : 'bg-blue-500'}`}></div>
                 Falta Lançar no Período
@@ -449,11 +444,10 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                 type="button"
                 onClick={() => handleFilterClick('finalized')}
                 aria-pressed={activeFilter === 'finalized'}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${
-                  activeFilter === 'finalized'
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${activeFilter === 'finalized'
                     ? 'bg-green-600 text-white border-green-500 shadow-lg shadow-green-200 scale-[1.02]'
                     : 'bg-white text-slate-400 border-slate-200 hover:text-green-600 hover:border-green-200 hover:shadow-sm'
-                }`}
+                  }`}
               >
                 <div className={`w-2.5 h-2.5 rounded-full ${activeFilter === 'finalized' ? 'bg-white' : 'bg-green-500'}`}></div>
                 Lançamento Finalizado
@@ -462,11 +456,10 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                 type="button"
                 onClick={() => handleFilterClick('similar')}
                 aria-pressed={activeFilter === 'similar'}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${
-                  activeFilter === 'similar'
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${activeFilter === 'similar'
                     ? 'bg-amber-500 text-white border-amber-400 shadow-lg shadow-amber-200 scale-[1.02]'
                     : 'bg-white text-slate-400 border-slate-200 hover:text-amber-600 hover:border-amber-200 hover:shadow-sm'
-                }`}
+                  }`}
               >
                 <div className={`w-2.5 h-2.5 rounded-full ${activeFilter === 'similar' ? 'bg-white' : 'bg-amber-500'}`}></div>
                 Similar Vendido
