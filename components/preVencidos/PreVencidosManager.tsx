@@ -27,7 +27,6 @@ import {
   DbPVInventoryReport,
   fetchPVSession,
   upsertPVSession,
-  deletePVSession,
   insertPVBranchRecord,
   fetchPVBranchRecords,
   deletePVBranchRecord,
@@ -58,13 +57,11 @@ import {
 import {
   loadLocalPVSession,
   saveLocalPVSession,
-  clearLocalPVSession,
   loadLocalPVReports,
   saveLocalPVReports,
   clearLocalPVReports,
   loadLastSalesUpload,
-  saveLastSalesUpload,
-  clearLastSalesUpload
+  saveLastSalesUpload
 } from '../../preVencidos/storage';
 import { AnalysisReportPayload, buildAnalysisReportPayload } from '../../preVencidos/analysisReport';
 
@@ -207,6 +204,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   const [lastDashboardReport, setLastDashboardReport] = useState<DbPVDashboardReport | null>(null);
   const [isGeneratingDashboardReport, setIsGeneratingDashboardReport] = useState(false);
   const [isRefreshingDashboard, setIsRefreshingDashboard] = useState(false);
+  const [isStartingLaunches, setIsStartingLaunches] = useState(false);
   const [pdfPreview, setPdfPreview] = useState<{ url: string; fileName: string } | null>(null);
   const [historyDetail, setHistoryDetail] = useState<{ type: 'seller' | 'recovered' | 'ignored'; seller?: string } | null>(null);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -315,6 +313,23 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       userName: ''
     }));
   }, []);
+
+  const reloadBranchRecords = useCallback(async (companyId?: string | null, branch?: string | null) => {
+    const cid = String(companyId || '').trim();
+    const br = String(branch || '').trim();
+    if (!cid || !br) return { ok: false, count: 0 };
+    setConnectionStatus('syncing');
+    try {
+      const records = await fetchPVBranchRecords(cid, br);
+      setPvRecords(mapDbRecordsToPV(records));
+      setConnectionStatus('online');
+      return { ok: true, count: records?.length || 0 };
+    } catch (error) {
+      console.error('[PV Reload] Erro ao buscar registros da filial:', error);
+      setConnectionStatus('offline');
+      return { ok: false, count: 0 };
+    }
+  }, [mapDbRecordsToPV]);
 
   const decodeGlobalFileToBrowserFile = useCallback((file: {
     file_data_base64?: string | null;
@@ -448,6 +463,31 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       cancelled = true;
     };
   }, [currentView, setupDraftInfo?.companyId, setupDraftInfo?.filial, buildInventoryMaps]);
+
+  useEffect(() => {
+    if (sessionInfo?.companyId && sessionInfo?.filial) return;
+    if (!setupDraftInfo?.companyId || !setupDraftInfo?.filial) return;
+    const foundCompany = companies.find(c => c.id === setupDraftInfo.companyId);
+    setSessionInfo({
+      companyId: setupDraftInfo.companyId,
+      company: setupDraftInfo.company || foundCompany?.name || '',
+      filial: setupDraftInfo.filial,
+      area: setupDraftInfo.area || '',
+      pharmacist: setupDraftInfo.pharmacist || '',
+      manager: setupDraftInfo.manager || ''
+    });
+    setHasCompletedSetup(true);
+  }, [
+    sessionInfo?.companyId,
+    sessionInfo?.filial,
+    setupDraftInfo?.companyId,
+    setupDraftInfo?.filial,
+    setupDraftInfo?.company,
+    setupDraftInfo?.area,
+    setupDraftInfo?.pharmacist,
+    setupDraftInfo?.manager,
+    companies
+  ]);
 
   useEffect(() => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) {
@@ -686,14 +726,23 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     // Restore Session Context (Company, Branch, etc.)
     if (session.company_id && session.branch) {
       const foundCompany = companies.find(c => c.id === session.company_id);
-      setSessionInfo({
+      const restoredInfo: SessionInfo = {
         companyId: session.company_id,
         company: foundCompany ? foundCompany.name : (session.session_data as any)?.companyName || '',
         filial: session.branch,
         area: session.area || '',
         pharmacist: session.pharmacist || '',
         manager: session.manager || ''
-      });
+      };
+      setSessionInfo(restoredInfo);
+      setSetupDraftInfo(restoredInfo);
+      if (userEmail && typeof window !== 'undefined') {
+        try {
+          window.localStorage.setItem(buildSetupDraftKey(userEmail), JSON.stringify(restoredInfo));
+        } catch (error) {
+          console.error('Erro ao sincronizar rascunho do setup PV:', error);
+        }
+      }
       setHasCompletedSetup(true);
 
       // Restore View (prefer local view to avoid stale server overwriting on refresh)
@@ -703,14 +752,17 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           case 'dashboard': setCurrentView(AppView.DASHBOARD); break;
           case 'registration': setCurrentView(AppView.REGISTRATION); break;
           case 'analysis': setCurrentView(AppView.ANALYSIS); break;
-          case 'setup': setCurrentView(AppView.SETUP); break;
+          case 'setup':
+            // If there is already a valid context, avoid forcing the user back to "Iniciar lançamentos"
+            setCurrentView(AppView.REGISTRATION);
+            break;
           default: setCurrentView(AppView.REGISTRATION);
         }
       } else {
         setCurrentView(AppView.REGISTRATION);
       }
     }
-  }, [companies]);
+  }, [companies, userEmail]);
 
   // Load Session Logic
   useEffect(() => {
@@ -931,25 +983,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   const handleRefresh = async () => {
     if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
-    setConnectionStatus('syncing');
-
-    // 1. Fetch Active Stock
     console.log('🔄 [PV] Forçando atualização da lista...');
-    fetchPVBranchRecords(sessionInfo.companyId, sessionInfo.filial)
-      .then(dbRecords => {
-        if (dbRecords && dbRecords.length > 0) {
-          setPvRecords(mapDbRecordsToPV(dbRecords));
-          alert('Lista atualizada com sucesso!');
-        } else {
-          console.log('🔍 [PV DEBUG] Refresh retornou 0 registros.');
-          alert('Nenhum registro encontrado no banco de dados para esta filial.');
-          setPvRecords([]);
-        }
-      })
-      .catch(err => {
-        console.error('❌ [PV DEBUG] Erro no refresh:', err);
-        alert('Erro ao atualizar lista via banco de dados.');
-      });
+    const result = await reloadBranchRecords(sessionInfo.companyId, sessionInfo.filial);
+    if (result.ok) {
+      alert(`Lista atualizada com sucesso! (${result.count} registro(s))`);
+    } else {
+      alert('Erro ao atualizar lista via banco de dados.');
+    }
   };
 
   // Load persistent branch records and history when company/branch is selected
@@ -2498,6 +2538,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   const persistPVSession = useCallback(async () => {
     if (!userEmail) return;
+    const contextInfo = sessionInfo || setupDraftInfo;
+    if (!contextInfo?.companyId || !contextInfo?.filial) return;
     const currentViewLabel =
       currentView === AppView.DASHBOARD
         ? 'dashboard'
@@ -2509,11 +2551,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     const payload: DbPVSession = {
       id: pvSessionId || undefined,
       user_email: userEmail,
-      company_id: sessionInfo?.companyId || null,
-      branch: sessionInfo?.filial || '',
-      area: sessionInfo?.area || '',
-      pharmacist: sessionInfo?.pharmacist || '',
-      manager: sessionInfo?.manager || '',
+      company_id: contextInfo.companyId || null,
+      branch: contextInfo.filial || '',
+      area: contextInfo.area || '',
+      pharmacist: contextInfo.pharmacist || '',
+      manager: contextInfo.manager || '',
       session_data: {
         // We do NOT save the big product lists to session anymore to keep it light 
         // and force re-upload as requested.
@@ -2542,7 +2584,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     } finally {
       setIsSavingSession(false);
     }
-  }, [userEmail, pvSessionId, sessionInfo, confirmedPVSales, finalizedREDSByPeriod, salesPeriod, currentView]);
+  }, [userEmail, pvSessionId, sessionInfo, setupDraftInfo, confirmedPVSales, finalizedREDSByPeriod, salesPeriod, currentView]);
 
 
   const schedulePersist = useCallback(() => {
@@ -2728,23 +2770,47 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   const logout = async () => {
     if (!confirm('Encerrar sessão?')) return;
 
-    if (userEmail) {
-      clearLocalPVSession(userEmail);
-      clearLastSalesUpload(userEmail);
-      await clearLocalPVReports(userEmail).catch(() => { });
-      await deletePVReports(userEmail).catch(() => { });
-      await deletePVSession(userEmail);
-      if (typeof window !== 'undefined') {
-        window.localStorage.removeItem(buildSetupDraftKey(userEmail));
+    const baseInfo = sessionInfo || setupDraftInfo || null;
+    const nextSetupInfo: SessionInfo | null = baseInfo
+      ? {
+        ...baseInfo,
+        filial: '',
+        area: ''
+      }
+      : null;
+
+    if (userEmail && nextSetupInfo && typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(buildSetupDraftKey(userEmail), JSON.stringify(nextSetupInfo));
+      } catch (error) {
+        console.error('Erro ao atualizar rascunho no logout do módulo PV:', error);
       }
     }
+
+    if (userEmail) {
+      const baseSession = loadLocalPVSession(userEmail);
+      const localResetPayload: DbPVSession = {
+        ...(baseSession || { user_email: userEmail }),
+        user_email: userEmail,
+        company_id: nextSetupInfo?.companyId || baseInfo?.companyId || null,
+        branch: '',
+        area: '',
+        pharmacist: nextSetupInfo?.pharmacist || baseInfo?.pharmacist || '',
+        manager: nextSetupInfo?.manager || baseInfo?.manager || '',
+        session_data: {
+          ...(baseSession?.session_data || {}),
+          currentView: 'setup'
+        },
+        updated_at: new Date().toISOString()
+      };
+      saveLocalPVSession(userEmail, localResetPayload);
+    }
+
+    setSetupDraftInfo(nextSetupInfo);
 
     setHasCompletedSetup(false);
     setCurrentView(AppView.SETUP);
     setSessionInfo(null);
-    setSystemProducts([]);
-    setDcbBaseProducts([]);
-    setMasterProducts([]);
     setPvRecords([]);
     setSalesRecords([]);
     setConfirmedPVSales({});
@@ -2762,6 +2828,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     setPvRecordEvents([]);
     setReportSyncedAt({ system: null, dcb: null });
     setPdfPreview(null);
+    setIsStartingLaunches(false);
   };
 
   const canSimulateDashboard = historyRecords.length > 0 || !!lastDashboardReport;
@@ -2946,6 +3013,18 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     );
   }
 
+  if (isStartingLaunches) {
+    return (
+      <div className="h-full w-full bg-slate-50 flex items-center justify-center">
+        <div className="bg-white border border-slate-200 rounded-2xl shadow-sm px-8 py-6 flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin"></div>
+          <p className="text-sm font-black text-slate-700 uppercase tracking-wider">Sincronizando Pré-Vencidos</p>
+          <p className="text-xs text-slate-500 font-semibold">Preparando a tela de lançamentos...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full w-full overflow-hidden text-slate-900">
       {/* NOVO HEADER DARK SUPERIOR (SUBSTITUI SIDEBAR) */}
@@ -3096,64 +3175,74 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         <div className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar bg-slate-50/50">
           {currentView === AppView.SETUP && (
             <SetupView
-              onComplete={(info) => {
-                if (userEmail) {
-                  const snapshot: DbPVSession = {
-                    id: pvSessionId || undefined,
-                    user_email: userEmail,
-                    company_id: info.companyId || null,
-                    branch: info.filial || '',
-                    area: info.area || '',
-                    pharmacist: info.pharmacist || '',
-                    manager: info.manager || '',
-                    session_data: {
-                      confirmed_pv_sales: confirmedPVSales,
-                      finalized_reds_by_period: finalizedREDSByPeriod,
-                      sales_period: salesPeriod,
-                      currentView: 'registration'
-                    },
-                    updated_at: new Date().toISOString()
-                  };
-                  saveLocalPVSession(userEmail, snapshot);
-                  upsertPVSession(snapshot).then(saved => {
-                    if (saved?.id) setPvSessionId(saved.id);
-                  }).catch(err => console.error('Erro ao salvar snapshot inicial da sessão PV:', err));
-                  if (typeof window !== 'undefined') {
-                    window.localStorage.removeItem(buildSetupDraftKey(userEmail));
+              onComplete={async (info) => {
+                setIsStartingLaunches(true);
+                try {
+                  if (userEmail) {
+                    setSetupDraftInfo(info);
+                    if (typeof window !== 'undefined') {
+                      try {
+                        window.localStorage.setItem(buildSetupDraftKey(userEmail), JSON.stringify(info));
+                      } catch (error) {
+                        console.error('Erro ao persistir rascunho do setup PV:', error);
+                      }
+                    }
+                    const snapshot: DbPVSession = {
+                      id: pvSessionId || undefined,
+                      user_email: userEmail,
+                      company_id: info.companyId || null,
+                      branch: info.filial || '',
+                      area: info.area || '',
+                      pharmacist: info.pharmacist || '',
+                      manager: info.manager || '',
+                      session_data: {
+                        confirmed_pv_sales: confirmedPVSales,
+                        finalized_reds_by_period: finalizedREDSByPeriod,
+                        sales_period: salesPeriod,
+                        currentView: 'registration'
+                      },
+                      updated_at: new Date().toISOString()
+                    };
+                    saveLocalPVSession(userEmail, snapshot);
+                    upsertPVSession(snapshot).then(saved => {
+                      if (saved?.id) setPvSessionId(saved.id);
+                    }).catch(err => console.error('Erro ao salvar snapshot inicial da sessão PV:', err));
                   }
-                }
-                setSessionInfo(info);
-                // Only clear PV records as we are starting a fresh registration session
-                setPvRecords([]);
+                  setSessionInfo(info);
+                  // Sync immediately after setup completion, without needing F5/remount.
+                  await reloadBranchRecords(info.companyId, info.filial);
 
-                // Keep sales records if they were uploaded during setup
-                // If not, clear the classifications
-                if (salesRecords.length === 0) {
-                  setConfirmedPVSales({});
-                  setFinalizedREDSByPeriod({});
-                  setSalesPeriod('');
-                } else {
-                  // If we already have sales, persist them to the new branch/company
-                  if (info.companyId && info.filial) {
-                    console.log('📤 [PV Persistence] Persistindo relatório carregado em memória para a nova filial...');
-                    upsertActiveSalesReport({
-                      company_id: info.companyId,
-                      branch: info.filial,
-                      sales_records: salesRecords,
-                      sales_period: salesPeriod,
-                      confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedREDSByPeriod),
-                      uploaded_at: localLastUpload?.uploaded_at,
-                      user_email: userEmail || '',
-                      file_name: localLastUpload?.file_name || 'Upload via Setup',
-                      status: 'processed'
-                    }).then(ok => {
-                      if (ok) console.log('✅ [PV Persistence] Relatório de vendas persistido com sucesso.');
-                    }).catch(err => console.error('❌ [PV Persistence] Erro ao persistir vendas no setup:', err));
+                  // Keep sales records if they were uploaded during setup
+                  // If not, clear the classifications
+                  if (salesRecords.length === 0) {
+                    setConfirmedPVSales({});
+                    setFinalizedREDSByPeriod({});
+                    setSalesPeriod('');
+                  } else {
+                    // If we already have sales, persist them to the new branch/company
+                    if (info.companyId && info.filial) {
+                      console.log('📤 [PV Persistence] Persistindo relatório carregado em memória para a nova filial...');
+                      upsertActiveSalesReport({
+                        company_id: info.companyId,
+                        branch: info.filial,
+                        sales_records: salesRecords,
+                        sales_period: salesPeriod,
+                        confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedREDSByPeriod),
+                        uploaded_at: localLastUpload?.uploaded_at,
+                        user_email: userEmail || '',
+                        file_name: localLastUpload?.file_name || 'Upload via Setup',
+                        status: 'processed'
+                      }).then(ok => {
+                        if (ok) console.log('✅ [PV Persistence] Relatório de vendas persistido com sucesso.');
+                      }).catch(err => console.error('❌ [PV Persistence] Erro ao persistir vendas no setup:', err));
+                    }
                   }
-                }
 
-                setHasCompletedSetup(true);
-                setCurrentView(AppView.REGISTRATION);
+                  setHasCompletedSetup(true);
+                  setCurrentView(AppView.REGISTRATION);
+                } finally {
+                  setIsStartingLaunches(false);
+                }
               }}
               onSystemProductsUpload={handleSystemProductsUpload}
               onDCBBaseUpload={handleDCBBaseUpload}
@@ -3166,7 +3255,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
               branchPrefetchReady={branchPrefetchReady}
               branchPrefetchError={branchPrefetchError}
               onInfoChange={handleSetupInfoChange}
-              initialInfo={setupDraftInfo}
+              initialInfo={sessionInfo || setupDraftInfo}
               userBranch={userBranch}
               companies={companies as any}
               uploadHistory={salesUploads}

@@ -112,15 +112,104 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     return () => window.removeEventListener('keydown', handleFindShortcut);
   }, []);
 
-  const handleScan = (code: string) => {
-    const foundByBarcode = masterProducts.find(p => p.barcode === code);
-    const foundByReduced = masterProducts.find(p => p.reducedCode === code);
+  const normalizeBarcode = (value?: string) => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'number') return String(Math.trunc(value));
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    if (/e\+?/i.test(raw)) {
+      const num = Number(raw.replace(',', '.'));
+      if (Number.isFinite(num)) return String(Math.trunc(num));
+    }
+    return raw.replace(/\D/g, '');
+  };
 
-    const found = foundByBarcode || foundByReduced;
+  const normalizeReducedCode = (value?: string) => {
+    if (value === null || value === undefined) return '';
+    const digits = String(value).replace(/\D/g, '');
+    if (!digits) return '';
+    return digits.replace(/^0+/, '') || digits;
+  };
+
+  const productsLookup = useMemo(() => {
+    const byBarcode: Record<string, Product> = {};
+    const byReduced: Record<string, Product> = {};
+
+    masterProducts.forEach((product) => {
+      const rawBarcode = String(product.barcode || '').trim();
+      const normalizedBarcode = normalizeBarcode(rawBarcode);
+      const barcodeNoZeros = normalizedBarcode.replace(/^0+/, '') || normalizedBarcode;
+      const rawReduced = String(product.reducedCode || '').trim();
+      const normalizedReduced = normalizeReducedCode(rawReduced);
+
+      [rawBarcode, normalizedBarcode, barcodeNoZeros].filter(Boolean).forEach((key) => {
+        if (!byBarcode[key]) byBarcode[key] = product;
+      });
+      [rawReduced, normalizedReduced].filter(Boolean).forEach((key) => {
+        if (!byReduced[key]) byReduced[key] = product;
+      });
+    });
+
+    return { byBarcode, byReduced };
+  }, [masterProducts]);
+
+  const handleScan = (code: string) => {
+    const rawCode = String(code || '').trim();
+    const normalizedBarcode = normalizeBarcode(rawCode);
+    const barcodeNoZeros = normalizedBarcode.replace(/^0+/, '') || normalizedBarcode;
+    const normalizedReduced = normalizeReducedCode(rawCode);
+
+    const foundByBarcode =
+      productsLookup.byBarcode[rawCode] ||
+      productsLookup.byBarcode[normalizedBarcode] ||
+      productsLookup.byBarcode[barcodeNoZeros];
+    const foundByReduced =
+      productsLookup.byReduced[rawCode] ||
+      productsLookup.byReduced[normalizedReduced];
+
+    let found = foundByBarcode || foundByReduced;
+    let foundFromRecords = false;
+    let fallbackMatchedByBarcode = false;
+
+    if (!found) {
+      const fallbackRecord = pvRecords.find((record) => {
+        const recordReduced = String(record.reducedCode || '').trim();
+        const recordReducedNormalized = normalizeReducedCode(recordReduced);
+        const recordBarcodeRaw = String(record.barcode || '').trim();
+        const recordBarcodeNormalized = normalizeBarcode(recordBarcodeRaw);
+        const recordBarcodeNoZeros = recordBarcodeNormalized.replace(/^0+/, '') || recordBarcodeNormalized;
+
+        const matchedByReduced =
+          recordReduced === rawCode ||
+          (recordReducedNormalized && recordReducedNormalized === normalizedReduced);
+        const matchedByBarcode =
+          recordBarcodeRaw === rawCode ||
+          (recordBarcodeNormalized && recordBarcodeNormalized === normalizedBarcode) ||
+          (recordBarcodeNoZeros && recordBarcodeNoZeros === barcodeNoZeros);
+
+        if (matchedByBarcode) {
+          fallbackMatchedByBarcode = true;
+        }
+
+        return matchedByReduced || matchedByBarcode;
+      });
+
+      if (fallbackRecord) {
+        found = {
+          id: `pv-${fallbackRecord.id}`,
+          name: fallbackRecord.name || 'Produto',
+          barcode: fallbackRecord.barcode || '',
+          reducedCode: String(fallbackRecord.reducedCode || ''),
+          dcb: fallbackRecord.dcb || 'N/A',
+          lab: fallbackRecord.lab
+        };
+        foundFromRecords = true;
+      }
+    }
 
     if (found) {
       setScanningProduct(found);
-      setSearchMethod(foundByBarcode ? 'K' : 'C');
+      setSearchMethod((foundByBarcode || (foundFromRecords && fallbackMatchedByBarcode)) ? 'K' : 'C');
       setQuantity(1);
     } else {
       alert(`Código "${code}" não localizado. Verifique se o relatório DCB de produtos foi carregado corretamente.`);
@@ -265,13 +354,6 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     } catch {
       return `R$ ${Number(value || 0).toFixed(2)}`;
     }
-  };
-
-  const normalizeReducedCode = (value?: string) => {
-    if (value === null || value === undefined) return '';
-    const digits = String(value).replace(/\D/g, '');
-    if (!digits) return '';
-    return digits.replace(/^0+/, '') || digits;
   };
 
   const getInventoryCostUnitByReduced = (reducedCode?: string) => {

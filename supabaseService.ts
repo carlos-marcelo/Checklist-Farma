@@ -1199,21 +1199,39 @@ export interface DbPVBranchRecord {
 
 export async function fetchPVBranchRecords(companyId: string, branch: string): Promise<DbPVBranchRecord[]> {
   try {
-    if (!branch) return [];
+    const normalizedBranch = String(branch || '').trim();
+    if (!normalizedBranch) return [];
 
-    let query = supabase
-      .from('pv_branch_records')
-      .select('*')
-      .eq('branch', branch);
+    const buildBaseQuery = () => {
+      let query = supabase
+        .from('pv_branch_records')
+        .select('*')
+        .order('created_at', { ascending: false });
+      if (companyId) {
+        query = query.or(`company_id.eq.${companyId},company_id.is.null`);
+      }
+      return query;
+    };
 
-    if (companyId) {
-      query = query.eq('company_id', companyId);
-    }
-
-    const { data, error } = await query;
+    const { data, error } = await buildBaseQuery()
+      .eq('branch', normalizedBranch);
 
     if (error) throw error;
-    return data || [];
+    if (data && data.length > 0) return data;
+
+    // Fallback 1: case-insensitive exact-ish match
+    const { data: ilikeData, error: ilikeError } = await buildBaseQuery()
+      .ilike('branch', normalizedBranch);
+    if (ilikeError) throw ilikeError;
+    if (ilikeData && ilikeData.length > 0) return ilikeData;
+
+    // Fallback 2: trim-normalized comparison in memory (handles trailing spaces in DB)
+    const { data: looseData, error: looseError } = await buildBaseQuery();
+    if (looseError) throw looseError;
+    const branchKey = normalizedBranch.toLowerCase();
+    return (looseData || []).filter((record) => (
+      String(record.branch || '').trim().toLowerCase() === branchKey
+    ));
   } catch (error) {
     console.error('Error fetching PV branch records:', error);
     return [];

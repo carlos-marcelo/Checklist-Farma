@@ -1326,7 +1326,15 @@ const App: React.FC = () => {
     const [isSidebarOpen, setIsSidebarOpen] = useState(false);
     const [showErrors, setShowErrors] = useState(false);
 
-    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit' | 'logs' | 'cadastros_globais'>('dashboard');
+    const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit' | 'logs' | 'cadastros_globais'>(() => {
+        if (typeof window === 'undefined') return 'dashboard';
+        const savedView = localStorage.getItem('APP_CURRENT_VIEW');
+        const allowedViews = new Set(['checklist', 'summary', 'dashboard', 'report', 'settings', 'history', 'view_history', 'support', 'stock', 'access', 'pre', 'audit', 'logs', 'cadastros_globais']);
+        if (savedView && allowedViews.has(savedView)) {
+            return savedView as 'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit' | 'logs' | 'cadastros_globais';
+        }
+        return 'dashboard';
+    });
 
     useEffect(() => {
         if (currentView) {
@@ -1792,8 +1800,12 @@ const App: React.FC = () => {
         if (savedEmail && !currentUser) {
             const u = users.find(u => u.email === savedEmail);
             if (u) {
-                localStorage.setItem('APP_CURRENT_VIEW', 'dashboard');
-                setCurrentView('dashboard');
+                const savedView = localStorage.getItem('APP_CURRENT_VIEW');
+                const allowedViews = new Set(['checklist', 'summary', 'dashboard', 'report', 'settings', 'history', 'view_history', 'support', 'stock', 'access', 'pre', 'audit', 'logs', 'cadastros_globais']);
+                const restoredView = (savedView && allowedViews.has(savedView))
+                    ? savedView as 'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit' | 'logs' | 'cadastros_globais'
+                    : 'dashboard';
+                setCurrentView(restoredView);
                 setCurrentUser(u);
                 if (!autoLoginLoggedRef.current) {
                     autoLoginLoggedRef.current = true;
@@ -1810,7 +1822,7 @@ const App: React.FC = () => {
                         source: window.location.pathname || 'web',
                         event_meta: {
                             url: window.location.href,
-                            view: 'dashboard'
+                            view: restoredView
                         }
                     }).catch(() => { });
                 }
