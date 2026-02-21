@@ -1970,7 +1970,7 @@ const App: React.FC = () => {
         if (!currentUser?.company_id) return;
         setIsLoadingGlobalBaseFiles(true);
         try {
-            const files = await SupabaseService.fetchGlobalBaseFiles(currentUser.company_id);
+            const files = await SupabaseService.fetchGlobalBaseFilesMeta(currentUser.company_id);
             setGlobalBaseFiles(files);
         } finally {
             setIsLoadingGlobalBaseFiles(false);
@@ -4322,6 +4322,8 @@ const App: React.FC = () => {
     // If 'gerencial' is ignored, we still have the data because syncing happens on input.
     // Actually, for display in report, we should just use the first checklist in the definitions, as they are synced.
 
+    const isImmersivePreView = currentView === 'pre';
+
     return (
         <div className="min-h-screen bg-gray-50 flex font-sans text-gray-800">
             <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-gray-50/50 relative">
@@ -4347,23 +4349,25 @@ const App: React.FC = () => {
                 {/* Background Mesh Gradient */}
                 <div className="absolute inset-0 z-0 pointer-events-none opacity-40 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-gray-200 via-transparent to-transparent"></div>
 
-                <Header
-                    isSidebarOpen={isSidebarOpen}
-                    setIsSidebarOpen={setIsSidebarOpen}
-                    currentTheme={currentTheme}
-                    displayConfig={displayConfig}
-                    companies={companies}
-                    currentView={currentView}
-                    activeChecklist={activeChecklist}
-                    canControlChecklists={canControlChecklists}
-                    handleResetChecklist={handleResetChecklist}
-                    currentUser={currentUser}
-                    activeChecklistId={activeChecklistId}
-                    openChecklistEditor={openChecklistEditor}
-                />
+                {!isImmersivePreView && (
+                    <Header
+                        isSidebarOpen={isSidebarOpen}
+                        setIsSidebarOpen={setIsSidebarOpen}
+                        currentTheme={currentTheme}
+                        displayConfig={displayConfig}
+                        companies={companies}
+                        currentView={currentView}
+                        activeChecklist={activeChecklist}
+                        canControlChecklists={canControlChecklists}
+                        handleResetChecklist={handleResetChecklist}
+                        currentUser={currentUser}
+                        activeChecklistId={activeChecklistId}
+                        openChecklistEditor={openChecklistEditor}
+                    />
+                )}
 
                 {/* Main Body */}
-                <main className="flex-1 overflow-y-auto p-4 lg:p-10 z-10 scroll-smooth">
+                <main className={`flex-1 overflow-y-auto z-10 scroll-smooth ${isImmersivePreView ? 'p-4' : 'p-4 lg:p-10'}`}>
                     {/* Prominent Pending Users Alert at Top */}
                     {canApproveUsers && pendingUsersCount > 0 && (
                         <div className="mb-8 bg-red-600 rounded-2xl p-6 text-white shadow-2xl shadow-red-200 relative overflow-hidden group transform hover:-translate-y-1 transition-all max-w-2xl mx-auto">

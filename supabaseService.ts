@@ -1663,6 +1663,42 @@ export async function fetchGlobalBaseFiles(companyId: string): Promise<DbGlobalB
   }
 }
 
+export async function fetchGlobalBaseFilesForModules(
+  companyId: string,
+  moduleKeys: string[]
+): Promise<DbGlobalBaseFile[]> {
+  try {
+    const sanitizedKeys = Array.from(new Set((moduleKeys || []).map(key => String(key || '').trim()).filter(Boolean)));
+    if (!companyId || sanitizedKeys.length === 0) return [];
+
+    const { data, error } = await supabase
+      .from('global_base_files')
+      .select('id,company_id,module_key,file_name,mime_type,file_size,file_data_base64,uploaded_by,uploaded_at,updated_at')
+      .eq('company_id', companyId)
+      .in('module_key', sanitizedKeys);
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching global base files for modules:', error);
+    return [];
+  }
+}
+
+export async function fetchGlobalBaseFilesMeta(companyId: string): Promise<DbGlobalBaseFile[]> {
+  try {
+    const { data, error } = await supabase
+      .from('global_base_files')
+      .select('id,company_id,module_key,file_name,mime_type,file_size,uploaded_by,uploaded_at,updated_at')
+      .eq('company_id', companyId)
+      .order('updated_at', { ascending: false });
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching global base files metadata:', error);
+    return [];
+  }
+}
+
 export async function upsertGlobalBaseFile(file: DbGlobalBaseFile): Promise<DbGlobalBaseFile | null> {
   try {
     const payload = {

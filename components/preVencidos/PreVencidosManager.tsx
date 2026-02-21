@@ -17,6 +17,7 @@ import { Package, AlertTriangle, LogOut, Trophy, TrendingUp, MinusCircle, CheckC
 import SalesHistoryModal from './SalesHistoryModal';
 import {
   DbCompany,
+  DbGlobalBaseFile,
   DbPVSession,
   DbPVSalesUpload,
   DbPVConfirmedSalesPayload,
@@ -52,7 +53,7 @@ import {
   insertAppEventLog,
   fetchPVInventoryReport,
   upsertPVInventoryReport,
-  fetchGlobalBaseFiles
+  fetchGlobalBaseFilesForModules
 } from '../../supabaseService';
 import {
   loadLocalPVSession,
@@ -154,6 +155,9 @@ const normalizeReducedCode = (value?: string) => {
 };
 
 const buildSetupDraftKey = (email: string) => `PV_SETUP_DRAFT_${(email || '').trim().toLowerCase()}`;
+const GLOBAL_BASE_CACHE_TTL_MS = 60 * 1000;
+const BRANCH_FETCH_COOLDOWN_MS = 20 * 1000;
+const PV_GLOBAL_MODULE_KEYS = ['shared_cadastro_produtos', 'pre_dcb_base'] as const;
 
 const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   userEmail,
@@ -208,6 +212,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   const [pdfPreview, setPdfPreview] = useState<{ url: string; fileName: string } | null>(null);
   const [historyDetail, setHistoryDetail] = useState<{ type: 'seller' | 'recovered' | 'ignored'; seller?: string } | null>(null);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const globalBaseCacheRef = useRef<Map<string, { files: DbGlobalBaseFile[]; fetchedAt: number }>>(new Map());
+  const globalBaseInFlightRef = useRef<Map<string, Promise<DbGlobalBaseFile[]>>>(new Map());
+  const reportsSyncLastRunRef = useRef<Map<string, number>>(new Map());
+  const reportsSyncInFlightRef = useRef<Set<string>>(new Set());
+  const branchFetchLastRunRef = useRef<Map<string, number>>(new Map());
+  const branchFetchInFlightRef = useRef<Set<string>>(new Set());
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const isMaster = userRole === 'MASTER';
@@ -361,6 +371,38 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       console.error('Erro ao decodificar arquivo global:', error);
       return null;
     }
+  }, []);
+
+  const fetchGlobalBaseFilesCached = useCallback(async (companyId: string): Promise<DbGlobalBaseFile[]> => {
+    const normalizedCompanyId = String(companyId || '').trim();
+    if (!normalizedCompanyId) return [];
+    const cacheKey = `${normalizedCompanyId}|${PV_GLOBAL_MODULE_KEYS.join(',')}`;
+
+    const now = Date.now();
+    const cached = globalBaseCacheRef.current.get(cacheKey);
+    if (cached && (now - cached.fetchedAt) < GLOBAL_BASE_CACHE_TTL_MS) {
+      return cached.files;
+    }
+
+    const inFlight = globalBaseInFlightRef.current.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const request = fetchGlobalBaseFilesForModules(normalizedCompanyId, [...PV_GLOBAL_MODULE_KEYS])
+      .then((files) => {
+        globalBaseCacheRef.current.set(cacheKey, {
+          files,
+          fetchedAt: Date.now()
+        });
+        return files;
+      })
+      .finally(() => {
+        globalBaseInFlightRef.current.delete(cacheKey);
+      });
+
+    globalBaseInFlightRef.current.set(cacheKey, request);
+    return request;
   }, []);
 
   useEffect(() => {
@@ -580,6 +622,16 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     let cancelled = false;
 
     const syncReports = async () => {
+      const reportLookupCompanyId = setupDraftInfo?.companyId || sessionInfo?.companyId || null;
+      const reportLookupBranch = setupDraftInfo?.filial || sessionInfo?.filial || null;
+      const syncKey = `${userEmail}|${reportLookupCompanyId || ''}|${reportLookupBranch || ''}`;
+      const lastRun = reportsSyncLastRunRef.current.get(syncKey) || 0;
+      const now = Date.now();
+      const isCooldown = now - lastRun < BRANCH_FETCH_COOLDOWN_MS;
+      if (reportsSyncInFlightRef.current.has(syncKey) || isCooldown) {
+        return;
+      }
+      reportsSyncInFlightRef.current.add(syncKey);
       try {
         setReportsSyncStatus('loading');
         setReportsReady(false);
@@ -589,8 +641,6 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
         // 2. Se não houver local, ou para garantir sincronia, buscar do Supabase
         console.log('🔄 [PV Sync] Buscando relatórios do Supabase para:', userEmail);
-        const reportLookupCompanyId = setupDraftInfo?.companyId || sessionInfo?.companyId || null;
-        const reportLookupBranch = setupDraftInfo?.filial || sessionInfo?.filial || null;
         const dbReports = await fetchPVReports(userEmail, {
           companyId: reportLookupCompanyId,
           branch: reportLookupBranch
@@ -628,7 +678,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           (finalSystem.length === 0 || finalDcb.length === 0 || systemMissingLab)
         ) {
           try {
-            const globalFiles = await fetchGlobalBaseFiles(reportLookupCompanyId);
+            const globalFiles = await fetchGlobalBaseFilesCached(reportLookupCompanyId);
             if (!cancelled && globalFiles.length > 0) {
               const fileByKey = new Map(globalFiles.map(file => [file.module_key, file]));
               const systemGlobal = fileByKey.get('shared_cadastro_produtos');
@@ -720,6 +770,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           setReportsSyncStatus('error');
         }
       } finally {
+        reportsSyncInFlightRef.current.delete(syncKey);
+        reportsSyncLastRunRef.current.set(syncKey, Date.now());
         if (!cancelled) setIsInitialSyncDone(true);
       }
     };
@@ -729,7 +781,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [userEmail, setupDraftInfo?.companyId, setupDraftInfo?.filial, sessionInfo?.companyId, sessionInfo?.filial, decodeGlobalFileToBrowserFile]);
+  }, [userEmail, setupDraftInfo?.companyId, setupDraftInfo?.filial, sessionInfo?.companyId, sessionInfo?.filial, decodeGlobalFileToBrowserFile, fetchGlobalBaseFilesCached]);
 
   const applySessionFromData = useCallback((session: DbPVSession, preferredView?: string) => {
     const data = session.session_data || {};
@@ -1038,6 +1090,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
 
     let cancelled = false;
+    const fetchKey = `branch-sales:${sessionInfo.companyId}:${sessionInfo.filial}`;
+    const lastRun = branchFetchLastRunRef.current.get(fetchKey) || 0;
+    const now = Date.now();
+    if (branchFetchInFlightRef.current.has(fetchKey) || now - lastRun < BRANCH_FETCH_COOLDOWN_MS) {
+      return;
+    }
+    branchFetchInFlightRef.current.add(fetchKey);
     setIsLoadingBranchSalesState(true);
 
     const loadBranchSalesData = async () => {
@@ -1086,6 +1145,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           console.error('Erro carregando relatório de vendas ativo:', activeSalesRes.reason);
         }
       } finally {
+        branchFetchInFlightRef.current.delete(fetchKey);
+        branchFetchLastRunRef.current.set(fetchKey, Date.now());
         if (!cancelled) setIsLoadingBranchSalesState(false);
       }
     };
@@ -1105,6 +1166,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
 
     let cancelled = false;
+    const fetchKey = `uploads:${sessionInfo.companyId}:${sessionInfo.filial}`;
+    const lastRun = branchFetchLastRunRef.current.get(fetchKey) || 0;
+    const now = Date.now();
+    if (branchFetchInFlightRef.current.has(fetchKey) || now - lastRun < BRANCH_FETCH_COOLDOWN_MS) {
+      return;
+    }
+    branchFetchInFlightRef.current.add(fetchKey);
     setIsLoadingSalesUploads(true);
     fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial)
       .then(reports => {
@@ -1116,6 +1184,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         console.error('Erro carregando histórico de relatórios de vendas:', err);
       })
       .finally(() => {
+        branchFetchInFlightRef.current.delete(fetchKey);
+        branchFetchLastRunRef.current.set(fetchKey, Date.now());
         if (cancelled) return;
         setIsLoadingSalesUploads(false);
       });
@@ -1170,6 +1240,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
 
     let cancelled = false;
+    const fetchKey = `inventory:${sessionInfo.companyId}:${sessionInfo.filial}`;
+    const lastRun = branchFetchLastRunRef.current.get(fetchKey) || 0;
+    const now = Date.now();
+    if (branchFetchInFlightRef.current.has(fetchKey) || now - lastRun < BRANCH_FETCH_COOLDOWN_MS) {
+      return;
+    }
+    branchFetchInFlightRef.current.add(fetchKey);
     setIsLoadingInventoryReport(true);
     fetchPVInventoryReport(sessionInfo.companyId, sessionInfo.filial)
       .then(report => {
@@ -1188,6 +1265,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         console.error('Erro carregando relatório de estoque da filial:', err);
       })
       .finally(() => {
+        branchFetchInFlightRef.current.delete(fetchKey);
+        branchFetchLastRunRef.current.set(fetchKey, Date.now());
         if (cancelled) return;
         setIsLoadingInventoryReport(false);
       });
