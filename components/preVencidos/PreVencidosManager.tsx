@@ -3235,14 +3235,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         {/* HEADER COMPACTO DE SESSÃO */}
-        <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-20 shadow-sm shadow-slate-200/50">
-          <div className="flex items-center gap-6 flex-wrap">
+        <header className="min-h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6 py-2 shrink-0 z-20 shadow-sm shadow-slate-200/50 overflow-x-auto">
+          <div className="flex items-center gap-5 min-w-0 flex-nowrap whitespace-nowrap">
             <div className="flex items-center gap-2 text-blue-600">
               <Building size={16} />
               <span className="text-[10px] font-black uppercase tracking-widest">{headerInfo?.company || 'DROGARIA CIDADE'}</span>
             </div>
             <div className="w-px h-4 bg-slate-200"></div>
-            <div className="flex items-center gap-2 text-slate-600 flex-wrap">
+            <div className="flex items-center gap-2 text-slate-600 whitespace-nowrap">
               <User size={16} className="text-blue-500" />
               <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Farmacêutico</span>
               <span className="text-[10px] font-bold uppercase text-slate-700">{headerInfo?.pharmacist || 'Convidado'}</span>
@@ -3254,7 +3254,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-3 flex-wrap justify-end">
+          <div className="flex items-center gap-2 justify-end flex-nowrap shrink-0 whitespace-nowrap">
             <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-full border border-slate-100" title={`Status: ${connectionStatus}`}>
               <div className={`w-2 h-2 rounded-full ${connectionStatus === 'online' ? 'bg-emerald-500 animate-pulse-slow shadow-[0_0_8px_rgba(16,185,129,0.3)]' : connectionStatus === 'syncing' ? 'bg-amber-500 animate-pulse' : 'bg-red-500'}`}></div>
               <span className={`text-[9px] font-black ${connectionStatus === 'online' ? 'text-emerald-700' : 'text-amber-700'}`}>
@@ -3272,17 +3272,17 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
               <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-slate-100 bg-white text-slate-600" title={lastCreatedTooltip}>
                 <UserPlus size={12} className="text-emerald-500" />
                 <span className="text-[8px] font-black uppercase tracking-tight">Cadastro</span>
-                <span className="text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastCreatedLabel}</span>
+                <span className="hidden 2xl:inline text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastCreatedLabel}</span>
               </div>
               <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-slate-100 bg-white text-slate-600" title={lastUpdatedTooltip}>
                 <PencilLine size={12} className="text-amber-500" />
                 <span className="text-[8px] font-black uppercase tracking-tight">Edição</span>
-                <span className="text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastUpdatedLabel}</span>
+                <span className="hidden 2xl:inline text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastUpdatedLabel}</span>
               </div>
               <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-slate-100 bg-white text-slate-600" title={lastDeletedTooltip}>
                 <Trash size={12} className="text-red-500" />
                 <span className="text-[8px] font-black uppercase tracking-tight">Exclusão</span>
-                <span className="text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastDeletedLabel}</span>
+                <span className="hidden 2xl:inline text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastDeletedLabel}</span>
               </div>
             </div>
           </div>
