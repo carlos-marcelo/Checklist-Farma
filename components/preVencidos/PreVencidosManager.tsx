@@ -17,6 +17,7 @@ import { Package, AlertTriangle, LogOut, Trophy, TrendingUp, MinusCircle, CheckC
 import SalesHistoryModal from './SalesHistoryModal';
 import {
   DbCompany,
+  DbGlobalBaseFile,
   DbPVSession,
   DbPVSalesUpload,
   DbPVConfirmedSalesPayload,
@@ -51,7 +52,8 @@ import {
   insertPVBranchRecordEvent,
   insertAppEventLog,
   fetchPVInventoryReport,
-  upsertPVInventoryReport
+  upsertPVInventoryReport,
+  fetchGlobalBaseFilesForModules
 } from '../../supabaseService';
 import { CadastrosBaseService } from '../../src/cadastrosBase/cadastrosBaseService';
 import {
@@ -154,6 +156,9 @@ const normalizeReducedCode = (value?: string) => {
 };
 
 const buildSetupDraftKey = (email: string) => `PV_SETUP_DRAFT_${(email || '').trim().toLowerCase()}`;
+const GLOBAL_BASE_CACHE_TTL_MS = 60 * 1000;
+const BRANCH_FETCH_COOLDOWN_MS = 20 * 1000;
+const PV_GLOBAL_MODULE_KEYS = ['shared_cadastro_produtos', 'pre_dcb_base'] as const;
 
 const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   userEmail,
@@ -209,6 +214,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   const [pdfPreview, setPdfPreview] = useState<{ url: string; fileName: string } | null>(null);
   const [historyDetail, setHistoryDetail] = useState<{ type: 'seller' | 'recovered' | 'ignored'; seller?: string } | null>(null);
   const persistTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const globalBaseCacheRef = useRef<Map<string, { files: DbGlobalBaseFile[]; fetchedAt: number }>>(new Map());
+  const globalBaseInFlightRef = useRef<Map<string, Promise<DbGlobalBaseFile[]>>>(new Map());
+  const reportsSyncLastRunRef = useRef<Map<string, number>>(new Map());
+  const reportsSyncInFlightRef = useRef<Set<string>>(new Set());
+  const branchFetchLastRunRef = useRef<Map<string, number>>(new Map());
+  const branchFetchInFlightRef = useRef<Set<string>>(new Set());
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const isMaster = userRole === 'MASTER';
@@ -365,6 +376,38 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       console.error('Erro ao decodificar arquivo global:', error);
       return null;
     }
+  }, []);
+
+  const fetchGlobalBaseFilesCached = useCallback(async (companyId: string): Promise<DbGlobalBaseFile[]> => {
+    const normalizedCompanyId = String(companyId || '').trim();
+    if (!normalizedCompanyId) return [];
+    const cacheKey = `${normalizedCompanyId}|${PV_GLOBAL_MODULE_KEYS.join(',')}`;
+
+    const now = Date.now();
+    const cached = globalBaseCacheRef.current.get(cacheKey);
+    if (cached && (now - cached.fetchedAt) < GLOBAL_BASE_CACHE_TTL_MS) {
+      return cached.files;
+    }
+
+    const inFlight = globalBaseInFlightRef.current.get(cacheKey);
+    if (inFlight) {
+      return inFlight;
+    }
+
+    const request = fetchGlobalBaseFilesForModules(normalizedCompanyId, [...PV_GLOBAL_MODULE_KEYS])
+      .then((files) => {
+        globalBaseCacheRef.current.set(cacheKey, {
+          files,
+          fetchedAt: Date.now()
+        });
+        return files;
+      })
+      .finally(() => {
+        globalBaseInFlightRef.current.delete(cacheKey);
+      });
+
+    globalBaseInFlightRef.current.set(cacheKey, request);
+    return request;
   }, []);
 
   useEffect(() => {
@@ -587,6 +630,16 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     let cancelled = false;
 
     const syncReports = async () => {
+      const reportLookupCompanyId = setupDraftInfo?.companyId || sessionInfo?.companyId || null;
+      const reportLookupBranch = setupDraftInfo?.filial || sessionInfo?.filial || null;
+      const syncKey = `${userEmail}|${reportLookupCompanyId || ''}|${reportLookupBranch || ''}`;
+      const lastRun = reportsSyncLastRunRef.current.get(syncKey) || 0;
+      const now = Date.now();
+      const isCooldown = now - lastRun < BRANCH_FETCH_COOLDOWN_MS;
+      if (reportsSyncInFlightRef.current.has(syncKey) || isCooldown) {
+        return;
+      }
+      reportsSyncInFlightRef.current.add(syncKey);
       try {
         // 1. Tentar carregar localmente primeiro para velocidade
         const storedReports = await loadLocalPVReports(userEmail);
@@ -613,8 +666,6 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
         // 2. Continua buscando do Supabase em background para garantir sincronia
         console.log('🔄 [PV Sync] Buscando relatórios do Supabase para:', userEmail);
-        const reportLookupCompanyId = setupDraftInfo?.companyId || sessionInfo?.companyId || null;
-        const reportLookupBranch = setupDraftInfo?.filial || sessionInfo?.filial || null;
         const dbReports = await fetchPVReports(userEmail, {
           companyId: reportLookupCompanyId,
           branch: reportLookupBranch
@@ -644,6 +695,24 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
         const systemMissingLab = finalSystem.some(item => !String((item as any)?.lab || '').trim());
         const hasMissingCacheForLab = systemMissingLab && !(storedReports as any)?.enrichedLabs;
+
+        // Fallback/enriquecimento global por empresa (carregado no módulo Cadastros Base).
+        // Também usa o arquivo global para preencher laboratório ausente no system já salvo em DB.
+        if (
+          reportLookupCompanyId &&
+          (finalSystem.length === 0 || finalDcb.length === 0 || systemMissingLab)
+        ) {
+          try {
+            const globalFiles = await fetchGlobalBaseFilesCached(reportLookupCompanyId);
+            if (!cancelled && globalFiles.length > 0) {
+              const fileByKey = new Map(globalFiles.map(file => [file.module_key, file]));
+              const systemGlobal = fileByKey.get('shared_cadastro_produtos');
+              const dcbGlobal = fileByKey.get('pre_dcb_base');
+            }
+          } catch (e) {
+            console.warn('Fallback global falhou', e)
+          }
+        }
 
         // [Otimização] Fallback global desabilitado temporariamente para debugar lentidão na inicialização
 
@@ -681,6 +750,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           setReportsSyncStatus('error');
         }
       } finally {
+        reportsSyncInFlightRef.current.delete(syncKey);
+        reportsSyncLastRunRef.current.set(syncKey, Date.now());
         if (!cancelled) setIsInitialSyncDone(true);
       }
     };
@@ -690,7 +761,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [userEmail, setupDraftInfo?.companyId, setupDraftInfo?.filial, sessionInfo?.companyId, sessionInfo?.filial, decodeGlobalFileToBrowserFile]);
+  }, [userEmail, setupDraftInfo?.companyId, setupDraftInfo?.filial, sessionInfo?.companyId, sessionInfo?.filial, decodeGlobalFileToBrowserFile, fetchGlobalBaseFilesCached]);
 
   const applySessionFromData = useCallback((session: DbPVSession, preferredView?: string) => {
     const data = session.session_data || {};
@@ -1013,6 +1084,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
 
     let cancelled = false;
+    const fetchKey = `branch-sales:${sessionInfo.companyId}:${sessionInfo.filial}`;
+    const lastRun = branchFetchLastRunRef.current.get(fetchKey) || 0;
+    const now = Date.now();
+    if (branchFetchInFlightRef.current.has(fetchKey) || now - lastRun < BRANCH_FETCH_COOLDOWN_MS) {
+      return;
+    }
+    branchFetchInFlightRef.current.add(fetchKey);
     setIsLoadingBranchSalesState(true);
 
     const loadBranchSalesData = async () => {
@@ -1061,6 +1139,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           console.error('Erro carregando relatório de vendas ativo:', activeSalesRes.reason);
         }
       } finally {
+        branchFetchInFlightRef.current.delete(fetchKey);
+        branchFetchLastRunRef.current.set(fetchKey, Date.now());
         if (!cancelled) setIsLoadingBranchSalesState(false);
       }
     };
@@ -1080,6 +1160,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
 
     let cancelled = false;
+    const fetchKey = `uploads:${sessionInfo.companyId}:${sessionInfo.filial}`;
+    const lastRun = branchFetchLastRunRef.current.get(fetchKey) || 0;
+    const now = Date.now();
+    if (branchFetchInFlightRef.current.has(fetchKey) || now - lastRun < BRANCH_FETCH_COOLDOWN_MS) {
+      return;
+    }
+    branchFetchInFlightRef.current.add(fetchKey);
     setIsLoadingSalesUploads(true);
     fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial)
       .then(reports => {
@@ -1091,6 +1178,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         console.error('Erro carregando histórico de relatórios de vendas:', err);
       })
       .finally(() => {
+        branchFetchInFlightRef.current.delete(fetchKey);
+        branchFetchLastRunRef.current.set(fetchKey, Date.now());
         if (cancelled) return;
         setIsLoadingSalesUploads(false);
       });
@@ -1145,6 +1234,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
 
     let cancelled = false;
+    const fetchKey = `inventory:${sessionInfo.companyId}:${sessionInfo.filial}`;
+    const lastRun = branchFetchLastRunRef.current.get(fetchKey) || 0;
+    const now = Date.now();
+    if (branchFetchInFlightRef.current.has(fetchKey) || now - lastRun < BRANCH_FETCH_COOLDOWN_MS) {
+      return;
+    }
+    branchFetchInFlightRef.current.add(fetchKey);
     setIsLoadingInventoryReport(true);
     fetchPVInventoryReport(sessionInfo.companyId, sessionInfo.filial)
       .then(report => {
@@ -1163,6 +1259,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         console.error('Erro carregando relatório de estoque da filial:', err);
       })
       .finally(() => {
+        branchFetchInFlightRef.current.delete(fetchKey);
+        branchFetchLastRunRef.current.set(fetchKey, Date.now());
         if (cancelled) return;
         setIsLoadingInventoryReport(false);
       });
@@ -3144,14 +3242,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
       <main className="flex-1 flex flex-col min-w-0 overflow-hidden relative">
         {/* HEADER COMPACTO DE SESSÃO */}
-        <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6 shrink-0 z-20 shadow-sm shadow-slate-200/50">
-          <div className="flex items-center gap-6 flex-wrap">
+        <header className="min-h-14 bg-white border-b border-slate-200 flex items-center justify-between px-6 py-2 shrink-0 z-20 shadow-sm shadow-slate-200/50 overflow-x-auto">
+          <div className="flex items-center gap-5 min-w-0 flex-nowrap whitespace-nowrap">
             <div className="flex items-center gap-2 text-blue-600">
               <Building size={16} />
               <span className="text-[10px] font-black uppercase tracking-widest">{headerInfo?.company || 'DROGARIA CIDADE'}</span>
             </div>
             <div className="w-px h-4 bg-slate-200"></div>
-            <div className="flex items-center gap-2 text-slate-600 flex-wrap">
+            <div className="flex items-center gap-2 text-slate-600 whitespace-nowrap">
               <User size={16} className="text-blue-500" />
               <span className="text-[9px] font-black uppercase tracking-widest text-slate-400">Farmacêutico</span>
               <span className="text-[10px] font-bold uppercase text-slate-700">{headerInfo?.pharmacist || 'Convidado'}</span>
@@ -3163,7 +3261,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-3 flex-wrap justify-end">
+          <div className="flex items-center gap-2 justify-end flex-nowrap shrink-0 whitespace-nowrap">
             <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 rounded-full border border-slate-100" title={`Status: ${connectionStatus}`}>
               <div className={`w-2 h-2 rounded-full ${connectionStatus === 'online' ? 'bg-emerald-500 animate-pulse-slow shadow-[0_0_8px_rgba(16,185,129,0.3)]' : connectionStatus === 'syncing' ? 'bg-amber-500 animate-pulse' : 'bg-red-500'}`}></div>
               <span className={`text-[9px] font-black ${connectionStatus === 'online' ? 'text-emerald-700' : 'text-amber-700'}`}>
@@ -3181,17 +3279,17 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
               <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-slate-100 bg-white text-slate-600" title={lastCreatedTooltip}>
                 <UserPlus size={12} className="text-emerald-500" />
                 <span className="text-[8px] font-black uppercase tracking-tight">Cadastro</span>
-                <span className="text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastCreatedLabel}</span>
+                <span className="hidden 2xl:inline text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastCreatedLabel}</span>
               </div>
               <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-slate-100 bg-white text-slate-600" title={lastUpdatedTooltip}>
                 <PencilLine size={12} className="text-amber-500" />
                 <span className="text-[8px] font-black uppercase tracking-tight">Edição</span>
-                <span className="text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastUpdatedLabel}</span>
+                <span className="hidden 2xl:inline text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastUpdatedLabel}</span>
               </div>
               <div className="flex items-center gap-2 px-2.5 py-1 rounded-full border border-slate-100 bg-white text-slate-600" title={lastDeletedTooltip}>
                 <Trash size={12} className="text-red-500" />
                 <span className="text-[8px] font-black uppercase tracking-tight">Exclusão</span>
-                <span className="text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastDeletedLabel}</span>
+                <span className="hidden 2xl:inline text-[8px] font-bold text-slate-500 whitespace-nowrap">{lastDeletedLabel}</span>
               </div>
             </div>
           </div>
