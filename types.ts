@@ -93,9 +93,11 @@ export interface ReportHistoryItem {
   signatures: Record<string, Record<string, string>>;
   ignoredChecklists: string[]; // IDs
   empresa_avaliada?: string;
+  companyName?: string; // Alias para compatibilidade
   area?: string;
   filial?: string;
   gestor?: string;
+  createdAt?: string; // Alias para compatibilidade
 }
 
 export interface StockConferenceHistoryItem {
@@ -138,4 +140,16 @@ export interface AccessLevelMeta {
   description: string;
   badgeLabel: string;
   badgeClasses: string;
+}
+
+export interface ActiveSession {
+  client_id: string;
+  user_email: string;
+  user_name: string | null;
+  branch: string | null;
+  area: string | null;
+  current_view: string | null;
+  last_ping: string;
+  command: 'FORCE_LOGOUT' | 'RELOAD' | null;
+  updated_at: string;
 }

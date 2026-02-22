@@ -16,10 +16,12 @@ import {
     insertAppEventLog
 } from '../../supabaseService';
 import { CadastrosBaseService } from '../../src/cadastrosBase/cadastrosBaseService';
+import * as AuditStorage from '../../src/auditoria/storage';
 import type { DbGlobalBaseFile } from '../../supabaseService';
 import ProgressBar from './ProgressBar';
 import Breadcrumbs from './Breadcrumbs';
 import SignaturePad from '../SignaturePad';
+import { ImageUtils } from '../../src/utils/imageUtils';
 import {
     ClipboardList,
     FileBox,
@@ -326,6 +328,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [view, setView] = useState<ViewState>({ level: 'groups' });
     const [isProcessing, setIsProcessing] = useState(false);
     const [isTrierLoading, setIsTrierLoading] = useState(false);
+    const [isRefreshing, setIsRefreshing] = useState(false);
     const [trierError, setTrierError] = useState<string | null>(null);
     const [sessionStartTime, setSessionStartTime] = useState<number>(Date.now());
     const [initialDoneUnits, setInitialDoneUnits] = useState<number>(0);
@@ -340,7 +343,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [selectedFilial, setSelectedFilial] = useState("");
     const selectedCompany = useMemo(() => companies.find(c => c.name === selectedEmpresa), [companies, selectedEmpresa]);
     const [nextAuditNumber, setNextAuditNumber] = useState(1);
-    const [dbSessionId, setDbSessionId] = useState<string | undefined>(undefined);
+    // Persiste o ID da sessão no sessionStorage para sobreviver a refresh/troca de aba
+    const CONFIRMED_SESSION_KEY = 'audit_confirmed_session_id';
+    const [dbSessionId, setDbSessionId] = useState<string | undefined>(
+        () => sessionStorage.getItem(CONFIRMED_SESSION_KEY) || undefined
+    );
     const [isUpdatingStock, setIsUpdatingStock] = useState(false);
 
     const loadAuditNum = useCallback(async (silent: boolean = false) => {
@@ -348,9 +355,39 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         try {
             const latest = await fetchLatestAudit(selectedFilial);
 
-            // Se estiver em polling (silent) e já tivermos esse ID carregado, ignoramos alertas
-            if (silent && latest && dbSessionId === latest.id) {
-                return;
+            // Polling silencioso com mesma sessão → atualiza dados sem popups
+            if (silent && latest && dbSessionId === latest.id && latest.data) {
+                // Normaliza e aplica os dados frescos do banco para todos os usuários
+                if ((latest.data as any).partialStart && !(latest.data as any).partialStarts) {
+                    (latest.data as any).partialStarts = [(latest.data as any).partialStart];
+                }
+                if (!(latest.data as any).partialCompleted) {
+                    (latest.data as any).partialCompleted = [];
+                }
+                if ((latest.data as any).partialCompleted) {
+                    const deduped = new Map<string, any>();
+                    (latest.data as any).partialCompleted.forEach((p: any) => {
+                        deduped.set(partialCompletedKey(p), p);
+                    });
+                    (latest.data as any).partialCompleted = Array.from(deduped.values());
+                }
+                if (latest.data.groups) {
+                    latest.data.groups.forEach((g: any) => {
+                        g.departments.forEach((d: any) => {
+                            d.categories.forEach((c: any) => {
+                                c.status = normalizeAuditStatus(c.status);
+                                if (c.totalCost === undefined || c.totalCost === null || (c.totalCost === 0 && c.totalQuantity > 0)) {
+                                    let catCost = 0;
+                                    c.products.forEach((p: any) => { catCost += (p.quantity * (p.cost || 0)); });
+                                    c.totalCost = catCost;
+                                }
+                            });
+                        });
+                    });
+                }
+                setData(latest.data);
+                setTermDrafts((latest.data as any).termDrafts || {});
+                return; // Dados atualizados silenciosamente, sem popups
             }
 
             if (latest && latest.status !== 'completed') {
@@ -399,17 +436,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                     if (!silent) {
                         const isNewSession = dbSessionId !== latest.id;
+                        // Sessão já confirmada nesta janela do browser (sobrevive a refresh)
+                        const alreadyConfirmed = sessionStorage.getItem(CONFIRMED_SESSION_KEY) === latest.id;
 
                         if (isMaster) {
-                            // Só pergunta se for uma nova sessão (ou se o usuário forçado o refresh manual)
-                            // Se for refresh manual (silent=false) mas a sessão for a mesma, talvez não queira perguntar sempre.
-                            // Mas se ele clicou no botão ATUALIZAR, talvez queira. 
-                            // Vamos manter o confirm apenas se o ID mudar ou se não tivermos dados ainda.
-                            if (isNewSession || !data) {
+                            if ((isNewSession || !data) && !alreadyConfirmed) {
                                 const wantsToUpdate = window.confirm(`Auditoria Nº ${latest.audit_number} em aberto encontrada.\n\nDeseja abrir a tela para carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
                                 if (wantsToUpdate) {
                                     setIsUpdatingStock(true);
-                                    // Em auditoria já iniciada, só permitimos troca de SALDOS.
                                     setGroupFiles(createInitialGroupFiles());
                                     setFileDeptIds(null);
                                     setFileCatIds(null);
@@ -418,16 +452,19 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     setIsUpdatingStock(false);
                                 }
                             }
+                            // Marca esta sessão como confirmada para não perguntar novamente
+                            sessionStorage.setItem(CONFIRMED_SESSION_KEY, latest.id);
                             setView({ level: 'groups' });
                         } else {
-                            // Non-master: auto-enter and warn ONLY if it is a new session for this user
                             setIsUpdatingStock(false);
                             setView({ level: 'groups' });
 
-                            if (isNewSession || !data) {
+                            if ((isNewSession || !data) && !alreadyConfirmed) {
                                 const lastLoadStr = latest.updated_at ? new Date(latest.updated_at).toLocaleString('pt-BR') : 'não informada';
                                 alert(`ENTRANDO EM MODO CONSULTA.\n\nAviso: O estoque exibido reflete a última carga realizada pelo usuário Master em ${lastLoadStr} e pode estar desatualizado.`);
                             }
+                            // Marca como confirmada
+                            sessionStorage.setItem(CONFIRMED_SESSION_KEY, latest.id);
                         }
                     } else if (!data) {
                         // Se for polling mas não estávamos em uma auditoria, entra automaticamente
@@ -473,15 +510,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }
     }, [selectedFilial]);
 
-    // Polling (30s) - SEM a chamada de loadAuditNum() inicial
+    // Polling a cada 10s — detecta mudanças feitas por outros usuários na mesma filial
     useEffect(() => {
         if (!selectedFilial) return;
-
         const interval = setInterval(() => {
-            console.log('🔄 [AuditFlow] Verificação automática...');
-            loadAuditNum(true); // Silent check
-        }, 30000);
-
+            loadAuditNum(true);
+        }, 10000);
         return () => clearInterval(interval);
     }, [selectedFilial, loadAuditNum]);
 
@@ -608,25 +642,24 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     }, [selectedCompany?.id]);
 
     useEffect(() => {
-        const saved = localStorage.getItem(STORAGE_KEY);
-        if (saved) {
-            try {
-                const parsed = JSON.parse(saved);
-                if (parsed) {
-                    // Restore basic settings but let loadAuditNum fetch the fresh 'data' from Supabase
-                    if (parsed.filial) setSelectedFilial(parsed.filial);
-                    if (parsed.inventoryNumber) setInventoryNumber(parsed.inventoryNumber);
-                }
-            } catch (e) {
-                localStorage.removeItem(STORAGE_KEY);
+        AuditStorage.cleanupLegacyAuditStorage();
+
+        const loadLocal = async () => {
+            const savedData = await AuditStorage.loadLocalAuditSession();
+            if (savedData) {
+                // Restoration of basic settings - but let loadAuditNum fetch full fresh context usually.
+                // However, we can use savedData if Supabase fails.
+                if (savedData.filial) setSelectedFilial(savedData.filial);
+                if (savedData.inventoryNumber) setInventoryNumber(savedData.inventoryNumber);
             }
-        }
+        };
+        loadLocal();
     }, []);
 
 
     useEffect(() => {
         if (data) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+            AuditStorage.saveLocalAuditSession(data);
         }
     }, [data]);
 
@@ -639,7 +672,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         // Se não for Master, não precisa confirmar nem salvar (já que não salvou nada)
         if (!isMaster) {
-            localStorage.removeItem(STORAGE_KEY);
+            await AuditStorage.clearLocalAuditSession();
+            sessionStorage.removeItem(CONFIRMED_SESSION_KEY);
             setData(null);
             setDbSessionId(undefined);
             setSelectedFilial("");
@@ -671,7 +705,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 });
 
                 // Clear local view state to 'exit'
-                localStorage.removeItem(STORAGE_KEY);
+                await AuditStorage.clearLocalAuditSession();
+                sessionStorage.removeItem(CONFIRMED_SESSION_KEY);
                 setData(null);
                 setDbSessionId(undefined);
                 setSelectedFilial("");
@@ -717,7 +752,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 alert("Auditoria finalizada com sucesso!");
 
                 // Clear local view state to 'exit'
-                localStorage.removeItem(STORAGE_KEY);
+                await AuditStorage.clearLocalAuditSession();
+                sessionStorage.removeItem(CONFIRMED_SESSION_KEY);
                 setData(null);
                 setDbSessionId(undefined);
                 setSelectedFilial("");
@@ -2729,8 +2765,26 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     </div>
                 </div>
                 <div className="flex gap-3">
-                    <button onClick={() => loadAuditNum()} className="bg-indigo-500/20 hover:bg-indigo-500/40 px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all border border-indigo-400/30">
-                        <RefreshCw className="w-4 h-4" /> ATUALIZAR
+                    <button
+                        onClick={async () => {
+                            setIsRefreshing(true);
+                            await loadAuditNum();
+                            setIsRefreshing(false);
+                        }}
+                        disabled={isRefreshing}
+                        className="relative px-5 py-2.5 rounded-xl font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all shadow-lg active:scale-95"
+                        style={{
+                            background: isRefreshing
+                                ? 'linear-gradient(135deg, #f59e0b, #d97706)'
+                                : 'linear-gradient(135deg, #f97316, #f59e0b)',
+                            color: '#fff',
+                            boxShadow: isRefreshing ? '0 0 12px #f59e0b88' : '0 0 18px #f9731688, 0 2px 8px #0004',
+                            border: '1px solid rgba(251,191,36,0.4)'
+                        }}
+                        title="Buscar dados atualizados do servidor"
+                    >
+                        <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                        {isRefreshing ? 'ATUALIZANDO...' : 'ATUALIZAR'}
                     </button>
                     <button onClick={handleExportPDF} className="bg-white/10 hover:bg-white/20 px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all border border-white/10">
                         <FileBox className="w-4 h-4" /> PDF ANALÍTICO
@@ -3399,7 +3453,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 )}
                                             </div>
                                         ) : isMaster ? (
-                                            <SignaturePad onEnd={(dataUrl) => updateTermForm(prev => ({ ...prev, managerSignature2: dataUrl }))} />
+                                            <SignaturePad onEnd={async (dataUrl) => {
+                                                const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
+                                                updateTermForm(prev => ({ ...prev, managerSignature2: compressed }));
+                                            }} />
                                         ) : (
                                             <div className="border border-slate-100 rounded-xl bg-slate-50 h-40 flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase tracking-widest italic">Assinatura Pendente</div>
                                         )}
@@ -3439,7 +3496,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 )}
                                             </div>
                                         ) : isMaster ? (
-                                            <SignaturePad onEnd={(dataUrl) => updateTermForm(prev => ({ ...prev, managerSignature: dataUrl }))} />
+                                            <SignaturePad onEnd={async (dataUrl) => {
+                                                const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
+                                                updateTermForm(prev => ({ ...prev, managerSignature: compressed }));
+                                            }} />
                                         ) : (
                                             <div className="border border-slate-100 rounded-xl bg-slate-50 h-40 flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase tracking-widest italic">Assinatura Pendente</div>
                                         )}
@@ -3512,10 +3572,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                     ) : isMaster ? (
                                                         <SignaturePad
                                                             label={`Assinatura ${collabNumber}`}
-                                                            onEnd={(dataUrl) => updateTermForm(prev => ({
-                                                                ...prev,
-                                                                collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: dataUrl } : c)
-                                                            }))}
+                                                            onEnd={async (dataUrl) => {
+                                                                const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
+                                                                updateTermForm(prev => ({
+                                                                    ...prev,
+                                                                    collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: compressed } : c)
+                                                                }));
+                                                            }}
                                                         />
                                                     ) : (
                                                         <div className="border border-slate-100 rounded-xl bg-slate-50 h-40 flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase tracking-widest italic">Assinatura Pendente</div>

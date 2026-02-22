@@ -38,68 +38,20 @@ import {
 import SignaturePad from './SignaturePad';
 import * as SupabaseService from '../supabaseService';
 import { CadastrosBaseService } from '../src/cadastrosBase/cadastrosBaseService';
+import * as StockStorage from '../src/stockConference/storage';
+import { ImageUtils } from '../src/utils/imageUtils';
 
-const LOCAL_STOCK_SESSION_PREFIX = 'STOCK_SESSION_';
-const buildLocalSessionKey = (email: string) => `${LOCAL_STOCK_SESSION_PREFIX}${email}`;
+// Migrado para StockStorage (IndexedDB)
 
-const loadLocalStockSession = (email: string): SupabaseService.DbStockConferenceSession | null => {
-  if (typeof window === 'undefined' || !email) return null;
-  try {
-    const raw = window.localStorage.getItem(buildLocalSessionKey(email));
-    if (!raw) return null;
-    return JSON.parse(raw);
-  } catch (error) {
-    console.error('Erro ao carregar sessão local de conferência:', error);
-    return null;
-  }
-};
 
-const saveLocalStockSession = (email: string, session: SupabaseService.DbStockConferenceSession) => {
-  if (typeof window === 'undefined' || !email) return;
-  try {
-    // Limpar outras sessões antigas para liberar espaço
-    const allKeys = Object.keys(window.localStorage);
-    allKeys.forEach(key => {
-      if (key.startsWith(LOCAL_STOCK_SESSION_PREFIX) && key !== buildLocalSessionKey(email)) {
-        window.localStorage.removeItem(key);
-      }
-    });
 
-    window.localStorage.setItem(buildLocalSessionKey(email), JSON.stringify(session));
-  } catch (error) {
-    console.error('❌ Erro ao salvar sessão local:', error);
-    // Se falhar por quota, tentar limpar tudo e salvar novamente
-    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
-      try {
-        // Limpar TODAS as sessões de estoque antigas
-        const allKeys = Object.keys(window.localStorage);
-        allKeys.forEach(key => {
-          if (key.startsWith(LOCAL_STOCK_SESSION_PREFIX)) {
-            window.localStorage.removeItem(key);
-          }
-        });
-        // Tentar salvar novamente
-        window.localStorage.setItem(buildLocalSessionKey(email), JSON.stringify(session));
-        console.log('✅ Sessão salva após limpeza de espaço');
-      } catch (retryError) {
-        console.error('❌ Falha mesmo após limpeza:', retryError);
-      }
-    }
-  }
-};
 
-const clearLocalStockSession = (email: string) => {
-  if (typeof window === 'undefined' || !email) return;
-  try {
-    window.localStorage.removeItem(buildLocalSessionKey(email));
-  } catch (error) {
-    console.error('Erro ao limpar sessão local de conferência:', error);
-  }
-};
+
+
 
 const getSessionTimestamp = (session?: SupabaseService.DbStockConferenceSession | null): number => {
   if (!session) return 0;
-  const rawDate = session.updated_at || session.created_at || '';
+  const rawDate = session.updated_at || '';
   const parsed = Date.parse(rawDate);
   return Number.isNaN(parsed) ? 0 : parsed;
 };
@@ -478,6 +430,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const [lastSavedReportId, setLastSavedReportId] = useState<string | null>(null);
   const [lastSavedSummary, setLastSavedSummary] = useState<StockSummaryPayload | null>(null);
   const manualSessionStartedRef = useRef(false);
+  const lastSyncTimestampRef = useRef<number>(0);
   const signatureHashRef = useRef('');
 
   // --- Effects ---
@@ -501,6 +454,11 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
 
     return () => clearInterval(interval);
   }, [step, userEmail, masterProducts.size, inventory.size]);
+
+  // Limpeza de cache legado no mount
+  useEffect(() => {
+    StockStorage.cleanupLegacyStockStorage();
+  }, []);
 
   // --- Calculations (Memoized for performance and Hook Stability) ---
 
@@ -607,6 +565,8 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     const restoredStep = session.step && session.step !== 'report' ? session.step as AppStep : 'conference';
     setStep(restoredStep);
     setSessionId(session.id || null);
+    const ts = getSessionTimestamp(session);
+    lastSyncTimestampRef.current = ts;
     manualSessionStartedRef.current = true;
 
     console.log('✅ Session restored from data:', { id: session.id, products: prodMap.size, inventory: inventoryMap.size });
@@ -642,7 +602,8 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
 
       if (!isMounted) return;
 
-      const localSession = loadLocalStockSession(userEmail);
+      // Mudança para IndexedDB (Async)
+      const localSession = await StockStorage.loadLocalStockSession(userEmail || '');
       const supabaseTimestamp = getSessionTimestamp(supabaseSession);
       const localTimestamp = getSessionTimestamp(localSession);
       const supabaseScore = getSessionProgressScore(supabaseSession);
@@ -671,17 +632,17 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
         if (!isMounted) break;
         const restored = restoreSessionFromData(candidate.session);
         if (!restored) continue;
-        console.log(`✅ Session restored from ${candidate.source === "local" ? "LocalStorage" : "Supabase"}`);
+        console.log(`✅ Session restored from ${candidate.source === "local" ? "IndexedDB" : "Supabase"}`);
         if (candidate.source === "local") {
           console.log("🔁 Local session has priority, syncing it back to Supabase...");
           await persistSession();
         } else {
-          saveLocalStockSession(userEmail, candidate.session);
+          await StockStorage.saveLocalStockSession(userEmail || '', candidate.session);
         }
         return;
       }
 
-      console.log("⚠️ No session found in Supabase or LocalStorage.");
+      console.log("⚠️ No session found in Supabase or IndexedDB.");
     };
 
     loadSession();
@@ -738,9 +699,9 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       updated_at: now
     };
 
-    // Save to LocalStorage first (always works)
-    saveLocalStockSession(userEmail, payload);
-    console.log('💾 Session saved to LocalStorage');
+    // Save to IndexedDB (Async)
+    await StockStorage.saveLocalStockSession(userEmail, payload);
+    console.log('💾 Session saved to IndexedDB');
 
     console.log('🔄 Persisting stock session to Supabase...', {
       email: userEmail,
@@ -750,9 +711,37 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     });
 
     try {
+      const remoteSession = await SupabaseService.fetchStockConferenceSession(userEmail);
+      const remoteTs = getSessionTimestamp(remoteSession);
+
+      // Buffer de 5 segundos para evitar falsos positivos por latência/clock drift
+      const SYNC_BUFFER_MS = 5000;
+      // Usamos o Ref para garantir que comparamos com o último valor REAL salvo nesta aba
+      const isConflict = remoteTs > (lastSyncTimestampRef.current + SYNC_BUFFER_MS);
+
+      if (isConflict) {
+        console.warn('⚠️ Sync Conflict Detected:', {
+          remote: new Date(remoteTs).toISOString(),
+          local: new Date(lastSyncTimestampRef.current).toISOString(),
+          diff_ms: remoteTs - lastSyncTimestampRef.current
+        });
+
+        const proceed = window.confirm(
+          '⚠️ Conflito de Sincronização:\n\n' +
+          'Esta sessão foi atualizada em outro dispositivo (ou aba).\n' +
+          'Deseja sobrescrever as alterações remotas com o que você tem agora?'
+        );
+        if (!proceed) {
+          setIsSavingSession(false);
+          return;
+        }
+      }
+
       const saved = await SupabaseService.upsertStockConferenceSession(payload);
       if (saved?.id) {
         setSessionId(saved.id);
+        const newTs = getSessionTimestamp(saved);
+        lastSyncTimestampRef.current = newTs;
         console.log('✅ Stock session saved to Supabase! ID:', saved.id);
       } else {
         console.error('❌ Supabase returned null - check error details');
@@ -794,7 +783,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     }
 
     resetConferenceState();
-    clearLocalStockSession(userEmail || '');
+    await StockStorage.clearLocalStockSession(userEmail || '');
     if (userEmail) {
       void SupabaseService.deleteStockConferenceSession(userEmail);
       SupabaseService.insertAppEventLog({
@@ -1320,7 +1309,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       manualSessionStartedRef.current = false;
       setSessionId(null);
       if (userEmail) {
-        clearLocalStockSession(userEmail);
+        await StockStorage.clearLocalStockSession(userEmail);
         try {
           await SupabaseService.deleteStockConferenceSession(userEmail);
         } catch (deleteError) {
@@ -2291,7 +2280,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
                 <p className="text-sm font-semibold text-gray-600 mb-2">Farmacêutico: {pharmacist}</p>
                 {pharmSignature ? (
                   <div className="relative border rounded-lg overflow-hidden bg-white h-40 flex items-center justify-center">
-                    <img src={pharmSignature} alt="Assinatura Farmacêutico" className="max-h-full" />
+                    <img src={pharmSignature} alt="Assinatura Farmacêutico" className="max-h-full" style={{ background: '#fff' }} />
                     <button
                       onClick={() => setPharmSignature(null)}
                       className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
@@ -2301,14 +2290,17 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
                     </button>
                   </div>
                 ) : (
-                  <SignaturePad label="Farmacêutico(a)" onEnd={setPharmSignature} />
+                  <SignaturePad label="Farmacêutico(a)" onEnd={async (dataUrl) => {
+                    const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
+                    setPharmSignature(compressed);
+                  }} />
                 )}
               </div>
               <div>
                 <p className="text-sm font-semibold text-gray-600 mb-2">Gestor: {manager}</p>
                 {managerSignature ? (
                   <div className="relative border rounded-lg overflow-hidden bg-white h-40 flex items-center justify-center">
-                    <img src={managerSignature} alt="Assinatura Gestor" className="max-h-full" />
+                    <img src={managerSignature} alt="Assinatura Gestor" className="max-h-full" style={{ background: '#fff' }} />
                     <button
                       onClick={() => setManagerSignature(null)}
                       className="absolute top-2 right-2 bg-red-100 text-red-600 p-1 rounded hover:bg-red-200"
@@ -2318,7 +2310,10 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
                     </button>
                   </div>
                 ) : (
-                  <SignaturePad label="Gestor(a)" onEnd={setManagerSignature} />
+                  <SignaturePad label="Gestor(a)" onEnd={async (dataUrl) => {
+                    const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
+                    setManagerSignature(compressed);
+                  }} />
                 )}
               </div>
             </div>

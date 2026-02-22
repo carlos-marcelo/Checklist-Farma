@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package, ArrowRight, ArrowLeft, ShieldCheck, HelpCircle, Info, LayoutGrid, UserCircle, FileSearch, ChevronDown, Calendar, RefreshCw, UserCircle2, Plus, SearchX } from 'lucide-react';
+import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package, ArrowRight, ArrowLeft, ShieldCheck, HelpCircle, Info, LayoutGrid, UserCircle, FileSearch, ChevronDown, Calendar, RefreshCw, UserCircle2, Plus, SearchX, WifiOff } from 'lucide-react';
 import { CHECKLISTS as BASE_CHECKLISTS, THEMES, ACCESS_MODULES, ACCESS_LEVELS, INPUT_TYPE_LABELS, generateId } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem, ThemeColor, AppConfig, User, ReportHistoryItem, StockConferenceHistoryItem, CompanyArea, AccessLevelId, AccessModule, AccessLevelMeta, UserRole, StockConferenceSummary } from './types';
 import PreVencidosManager from './components/preVencidos/PreVencidosManager';
@@ -13,6 +13,8 @@ import { updateCompany, saveConfig, fetchTickets, createTicket, updateTicketStat
 import { Topbar } from './components/Layout/Topbar';
 import { Header } from './components/Layout/Header';
 import { Logo, MFLogo, LogoPrint } from './components/Layout/Logo';
+import { AppStorage } from './src/appStorage';
+import { ImageUtils } from './src/utils/imageUtils';
 
 
 const mergeAccessMatrixWithDefaults = (incoming: Partial<Record<AccessLevelId, Record<string, boolean>>>) => {
@@ -97,6 +99,26 @@ const EVENT_TYPE_LABELS: Record<string, string> = {
     branch_check_confirmed: 'Confirmação de filial',
     branch_changed_on_login: 'Filial alterada no login',
     global_base_uploaded: 'Arquivo base global carregado'
+};
+
+const mapViewToAppName = (view: string) => {
+    const map: Record<string, string> = {
+        checklist: 'checklists',
+        summary: 'visao_geral',
+        dashboard: 'dashboard',
+        report: 'relatorio',
+        settings: 'configuracoes',
+        history: 'historico',
+        view_history: 'historico',
+        support: 'suporte',
+        stock: 'conferencia',
+        access: 'acessos',
+        pre: 'pre_vencidos',
+        audit: 'auditoria',
+        logs: 'metricas_gerenciais',
+        cadastros_globais: 'cadastros_globais'
+    };
+    return map[view] || view;
 };
 
 const EVENT_TYPE_GROUPS: Record<string, string> = {
@@ -197,6 +219,20 @@ const canonicalizeFilterLabel = (value: string) => {
 };
 
 const normalizeFilterKey = (value: string) => canonicalizeFilterLabel(value).toLowerCase();
+
+/**
+ * Normaliza nomes de filiais para uma forma canônica.
+ * "8" → "Filial 8", "14" → "Filial 14", " Filial 8 " → "Filial 8"
+ * Valores como "Sem Filial" permanecem intocados.
+ */
+const normalizeBranchLabel = (raw: string | null | undefined): string => {
+    if (!raw || !String(raw).trim()) return 'Sem Filial';
+    const s = String(raw).trim();
+    // Se for puramente numérico (ex: "8", "14"), prefixar com "Filial "
+    if (/^\d+$/.test(s)) return `Filial ${s}`;
+    // Normaliza espaços extras
+    return s.replace(/\s+/g, ' ');
+};
 
 const formatBranchFilterLabel = (value: string) => {
     const canonical = canonicalizeFilterLabel(value);
@@ -370,9 +406,11 @@ const mapDbReportToHistoryItem = (r: SupabaseService.DbReport): ReportHistoryIte
         signatures: r.signatures || {},
         ignoredChecklists: r.ignored_checklists || [],
         empresa_avaliada: String(foundInfo.empresa || 'Sem Empresa'),
+        companyName: String(foundInfo.empresa || 'Sem Empresa'),
         area: String(foundInfo.area || 'N/A'),
         filial: String(foundInfo.filial || r.pharmacy_name || 'Sem Filial'),
-        gestor: String(foundInfo.gestor || 'N/A')
+        gestor: String(foundInfo.gestor || 'N/A'),
+        createdAt: r.created_at || new Date().toISOString()
     };
 };
 
@@ -525,103 +563,103 @@ const StockConferenceReportViewer = ({ report, onClose, currentUser }: StockConf
             }
 
             const doc = new jsPDF();
-        doc.setFontSize(18);
-        doc.text('Relatório de Conferência de Estoque', 14, 20);
-        doc.setFontSize(10);
+            doc.setFontSize(18);
+            doc.text('Relatório de Conferência de Estoque', 14, 20);
+            doc.setFontSize(10);
 
-        let headerY = 28;
-        const infoLines = [
-            'Filial: ' + (report.branch || 'Sem filial'),
-            'Área: ' + (report.area || 'Área não informada'),
-            'Farmacêutico(a): ' + (report.pharmacist || '-'),
-            'Gestor(a): ' + (report.manager || '-'),
-            'Responsável: ' + (report.user_name || report.user_email),
-            'Início: ' + startLabel,
-            'Término: ' + endLabel,
-            'Duração: ' + durationLabel,
-            'Registrado em: ' + recordedAtLabel
-        ];
+            let headerY = 28;
+            const infoLines = [
+                'Filial: ' + (report.branch || 'Sem filial'),
+                'Área: ' + (report.area || 'Área não informada'),
+                'Farmacêutico(a): ' + (report.pharmacist || '-'),
+                'Gestor(a): ' + (report.manager || '-'),
+                'Responsável: ' + (report.user_name || report.user_email),
+                'Início: ' + startLabel,
+                'Término: ' + endLabel,
+                'Duração: ' + durationLabel,
+                'Registrado em: ' + recordedAtLabel
+            ];
 
-        infoLines.forEach(line => {
-            doc.text(line, 14, headerY);
-            headerY += 5;
-        });
+            infoLines.forEach(line => {
+                doc.text(line, 14, headerY);
+                headerY += 5;
+            });
 
-        const totalsY = headerY + 2;
-        doc.text('Total itens: ' + summaryTotals.total, 14, totalsY);
-        doc.setTextColor(0, 128, 0);
-        doc.text('Corretos: ' + summaryTotals.matched, 14, totalsY + 5);
-        doc.setTextColor(200, 0, 0);
-        doc.text('Divergentes: ' + summaryTotals.divergent, 70, totalsY + 5);
-        doc.setTextColor(255, 165, 0);
-        doc.text('Pendentes: ' + summaryTotals.pending, 120, totalsY + 5);
-        doc.setTextColor(0, 0, 0);
+            const totalsY = headerY + 2;
+            doc.text('Total itens: ' + summaryTotals.total, 14, totalsY);
+            doc.setTextColor(0, 128, 0);
+            doc.text('Corretos: ' + summaryTotals.matched, 14, totalsY + 5);
+            doc.setTextColor(200, 0, 0);
+            doc.text('Divergentes: ' + summaryTotals.divergent, 70, totalsY + 5);
+            doc.setTextColor(255, 165, 0);
+            doc.text('Pendentes: ' + summaryTotals.pending, 120, totalsY + 5);
+            doc.setTextColor(0, 0, 0);
 
-        const tableColumn = ['Reduzido', 'Descrição', 'Sistema', 'Contagem', 'Diferença', 'Status'];
-        const tableRows: any[] = [];
-        sortedItems.forEach(item => {
-            const diff = (item.counted_qty ?? 0) - (item.system_qty ?? 0);
-            const statusKey = (item.status || 'pending') as 'divergent' | 'pending' | 'matched';
-            const statusLabel = statusLabelText[statusKey] || 'Pendente';
-            tableRows.push([
-                item.reduced_code,
-                item.description || '',
-                (item.system_qty ?? 0).toString(),
-                (item.counted_qty ?? 0).toString(),
-                diff.toString(),
-                statusLabel
-            ]);
-        });
+            const tableColumn = ['Reduzido', 'Descrição', 'Sistema', 'Contagem', 'Diferença', 'Status'];
+            const tableRows: any[] = [];
+            sortedItems.forEach(item => {
+                const diff = (item.counted_qty ?? 0) - (item.system_qty ?? 0);
+                const statusKey = (item.status || 'pending') as 'divergent' | 'pending' | 'matched';
+                const statusLabel = statusLabelText[statusKey] || 'Pendente';
+                tableRows.push([
+                    item.reduced_code,
+                    item.description || '',
+                    (item.system_qty ?? 0).toString(),
+                    (item.counted_qty ?? 0).toString(),
+                    diff.toString(),
+                    statusLabel
+                ]);
+            });
 
-        (doc as any).autoTable({
-            startY: totalsY + 16,
-            head: [tableColumn],
-            body: tableRows,
-            theme: 'grid',
-            styles: { fontSize: 8 },
-            headStyles: { fillColor: [66, 133, 244] },
-            didParseCell: (data: any) => {
-                if (data.section === 'body' && data.column.index === 4) {
-                    const diffVal = parseFloat(data.row.raw[4]);
-                    if (diffVal > 0) {
-                        data.cell.styles.textColor = [0, 0, 255];
-                        data.cell.styles.fontStyle = 'bold';
-                    } else if (diffVal < 0) {
-                        data.cell.styles.textColor = [200, 0, 0];
-                        data.cell.styles.fontStyle = 'bold';
-                    } else {
-                        data.cell.styles.textColor = [0, 128, 0];
+            (doc as any).autoTable({
+                startY: totalsY + 16,
+                head: [tableColumn],
+                body: tableRows,
+                theme: 'grid',
+                styles: { fontSize: 8 },
+                headStyles: { fillColor: [66, 133, 244] },
+                didParseCell: (data: any) => {
+                    if (data.section === 'body' && data.column.index === 4) {
+                        const diffVal = parseFloat(data.row.raw[4]);
+                        if (diffVal > 0) {
+                            data.cell.styles.textColor = [0, 0, 255];
+                            data.cell.styles.fontStyle = 'bold';
+                        } else if (diffVal < 0) {
+                            data.cell.styles.textColor = [200, 0, 0];
+                            data.cell.styles.fontStyle = 'bold';
+                        } else {
+                            data.cell.styles.textColor = [0, 128, 0];
+                        }
                     }
                 }
-            }
-        });
-        if (pharmacistSignature || managerSignature) {
-            const autoTableMeta = (doc as any).lastAutoTable;
-            const tableEndY = autoTableMeta?.finalY ?? 0;
-            const nextSignatureY = tableEndY > 0 ? tableEndY + 20 : 20;
-            const needsPageBreak = nextSignatureY > 250;
-            const signatureStartY = needsPageBreak ? 20 : nextSignatureY;
+            });
+            if (pharmacistSignature || managerSignature) {
+                const autoTableMeta = (doc as any).lastAutoTable;
+                const tableEndY = autoTableMeta?.finalY ?? 0;
+                const nextSignatureY = tableEndY > 0 ? tableEndY + 20 : 20;
+                const needsPageBreak = nextSignatureY > 250;
+                const signatureStartY = needsPageBreak ? 20 : nextSignatureY;
 
-            const renderSignatureSection = (imgData: string, label: string, owner: string, x: number) => {
-                doc.addImage(imgData, 'PNG', x, signatureStartY, 60, 30);
-                doc.line(x, signatureStartY + 30, x + 60, signatureStartY + 30);
-                doc.setFontSize(8);
-                doc.text(label, x, signatureStartY + 35);
-                doc.text(owner, x, signatureStartY + 40);
-            };
+                const renderSignatureSection = (imgData: string, label: string, owner: string, x: number) => {
+                    doc.addImage(imgData, 'PNG', x, signatureStartY, 60, 30);
+                    doc.line(x, signatureStartY + 30, x + 60, signatureStartY + 30);
+                    doc.setFontSize(8);
+                    doc.text(label, x, signatureStartY + 35);
+                    doc.text(owner, x, signatureStartY + 40);
+                };
 
-            if (needsPageBreak) {
-                doc.addPage();
-            }
+                if (needsPageBreak) {
+                    doc.addPage();
+                }
 
-            if (pharmacistSignature) {
-                renderSignatureSection(pharmacistSignature, 'Farmacêutico(a) responsável', report.pharmacist || '-', 20);
+                if (pharmacistSignature) {
+                    renderSignatureSection(pharmacistSignature, 'Farmacêutico(a) responsável', report.pharmacist || '-', 20);
+                }
+                if (managerSignature) {
+                    const offsetX = pharmacistSignature ? 110 : 20;
+                    renderSignatureSection(managerSignature, 'Gestor(a) responsável', report.manager || '-', offsetX);
+                }
             }
-            if (managerSignature) {
-                const offsetX = pharmacistSignature ? 110 : 20;
-                renderSignatureSection(managerSignature, 'Gestor(a) responsável', report.manager || '-', offsetX);
-            }
-        }
 
             const fileName = `conferencia_${(report.branch || 'sem_filial').replace(/\s+/g, '_')}_${createdAt.toISOString().slice(0, 10)}.pdf`;
             doc.save(fileName);
@@ -711,14 +749,14 @@ const StockConferenceReportViewer = ({ report, onClose, currentUser }: StockConf
                             {pharmacistSignature && (
                                 <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-center space-y-2">
                                     <p className="text-[10px] uppercase tracking-widest text-gray-400">Farmacêutico(a)</p>
-                                    <img src={pharmacistSignature} alt="Assinatura Farmacêutico" className="mx-auto h-28 object-contain" />
+                                    <img src={pharmacistSignature} alt="Assinatura Farmacêutico" className="mx-auto h-28 object-contain rounded" style={{ background: '#fff' }} />
                                     <p className="text-xs text-gray-500">{report.pharmacist || '-'}</p>
                                 </div>
                             )}
                             {managerSignature && (
                                 <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4 text-center space-y-2">
                                     <p className="text-[10px] uppercase tracking-widest text-gray-400">Gestor(a)</p>
-                                    <img src={managerSignature} alt="Assinatura Gestor" className="mx-auto h-28 object-contain" />
+                                    <img src={managerSignature} alt="Assinatura Gestor" className="mx-auto h-28 object-contain rounded" style={{ background: '#fff' }} />
                                     <p className="text-xs text-gray-500">{report.manager || '-'}</p>
                                 </div>
                             )}
@@ -1346,7 +1384,16 @@ const App: React.FC = () => {
 
     // History State
     const [reportHistory, setReportHistory] = useState<ReportHistoryItem[]>([]);
+    const [reportsPage, setReportsPage] = useState(0);
+    const [hasMoreReports, setHasMoreReports] = useState(true);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const REPORTS_PAGE_SIZE = 20;
+    const STOCK_PAGE_SIZE = 20;
     const [stockConferenceHistory, setStockConferenceHistory] = useState<StockConferenceHistoryItem[]>([]);
+    const [stockConferencePage, setStockConferencePage] = useState(0);
+    const [hasMoreStockConferences, setHasMoreStockConferences] = useState(true);
+    const [isLoadingMoreStock, setIsLoadingMoreStock] = useState(false);
+    const [lastHistoryCacheAt, setLastHistoryCacheAt] = useState<Date | null>(null);
     const [viewHistoryItem, setViewHistoryItem] = useState<ReportHistoryItem | null>(null);
     const [loadingReportId, setLoadingReportId] = useState<string | null>(null);
     const [loadingStockReportId, setLoadingStockReportId] = useState<string | null>(null);
@@ -1371,6 +1418,7 @@ const App: React.FC = () => {
     const [logsEventFilter, setLogsEventFilter] = useState<string>('all');
     const [logsGroupRepeats, setLogsGroupRepeats] = useState(true);
     const [logsDateRange, setLogsDateRange] = useState<'7d' | '30d' | 'all'>('30d');
+    const [eventsDisplayLimit, setEventsDisplayLimit] = useState(50); // paginação eventos
     const [globalBaseFiles, setGlobalBaseFiles] = useState<SupabaseService.DbGlobalBaseFile[]>([]);
     const [isLoadingGlobalBaseFiles, setIsLoadingGlobalBaseFiles] = useState(false);
     const [uploadingGlobalBaseKey, setUploadingGlobalBaseKey] = useState<string | null>(null);
@@ -1403,6 +1451,7 @@ const App: React.FC = () => {
     const [profilePhoneError, setProfilePhoneError] = useState('');
     const [syncStatus, setSyncStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
     const saveDraftAbortControllerRef = useRef<AbortController | null>(null);
+    const clientIdRef = useRef<string>(Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15));
 
     // User Activity
     const [lastUserActivity, setLastUserActivity] = useState<number>(Date.now());
@@ -1413,6 +1462,22 @@ const App: React.FC = () => {
 
     // Company Editing
     const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
+    const [isOnline, setIsOnline] = useState(navigator.onLine);
+    const [activeSessions, setActiveSessions] = useState<SupabaseService.DbActiveSession[]>([]);
+    const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+
+    useEffect(() => {
+        const handleOnline = () => setIsOnline(true);
+        const handleOffline = () => setIsOnline(false);
+
+        window.addEventListener('online', handleOnline);
+        window.addEventListener('offline', handleOffline);
+
+        return () => {
+            window.removeEventListener('online', handleOnline);
+            window.removeEventListener('offline', handleOffline);
+        };
+    }, []);
     const [editCompanyName, setEditCompanyName] = useState('');
     const [editCompanyCnpj, setEditCompanyCnpj] = useState('');
     const [editCompanyPhone, setEditCompanyPhone] = useState('');
@@ -1475,19 +1540,26 @@ const App: React.FC = () => {
         }
     };
 
-    const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceReport[]) => {
+    const handleStockReportsLoaded = (reports: SupabaseService.DbStockConferenceReport[], append = false) => {
         const sortedReports = [...reports].sort((a, b) => {
             const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
             const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
             return bTime - aTime;
         });
-        setStockConferenceHistory(mapStockConferenceReports(sortedReports));
-        setStockConferenceReportsRaw(sortedReports);
+        if (append) {
+            setStockConferenceHistory(prev => [...prev, ...mapStockConferenceReports(sortedReports)]);
+            setStockConferenceReportsRaw(prev => [...prev, ...sortedReports]);
+        } else {
+            setStockConferenceHistory(mapStockConferenceReports(sortedReports));
+            setStockConferenceReportsRaw(sortedReports);
+        }
     };
 
     const refreshStockConferenceReports = async () => {
-        const dbStockReports = await SupabaseService.fetchStockConferenceReportsSummaryAll();
+        const dbStockReports = await SupabaseService.fetchStockConferenceReportsSummaryPage(0, STOCK_PAGE_SIZE);
         handleStockReportsLoaded(dbStockReports as SupabaseService.DbStockConferenceReport[]);
+        setStockConferencePage(0);
+        setHasMoreStockConferences(dbStockReports.length === STOCK_PAGE_SIZE);
         return dbStockReports;
     };
 
@@ -1571,30 +1643,100 @@ const App: React.FC = () => {
         };
     }, [currentView]);
 
+    // Cache helpers
+    const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+    const CACHE_KEY_REPORTS = 'CACHE_REPORT_HISTORY';
+    const CACHE_KEY_STOCK = 'CACHE_STOCK_HISTORY';
+
+    const saveHistoryCache = (key: string, data: any[]) => {
+        try {
+            sessionStorage.setItem(key, JSON.stringify({ ts: Date.now(), data }));
+        } catch { /* sessionStorage may be full, ignore */ }
+    };
+
+    const loadHistoryCache = (key: string): any[] | null => {
+        try {
+            const raw = sessionStorage.getItem(key);
+            if (!raw) return null;
+            const { ts, data } = JSON.parse(raw);
+            if (Date.now() - ts > CACHE_TTL_MS) return null; // expired
+            return data;
+        } catch { return null; }
+    };
+
+    const clearHistoryCache = () => {
+        sessionStorage.removeItem(CACHE_KEY_REPORTS);
+        sessionStorage.removeItem(CACHE_KEY_STOCK);
+    };
+
     const handleReloadReports = async () => {
         setIsReloadingReports(true);
+        clearHistoryCache();
         try {
-            console.log('🔁 Recarregando relatórios...');
-            const previousReportIds = new Set(reportHistory.map(r => r.id));
-            const previousStockIds = new Set(stockConferenceHistory.map(r => r.id));
-            const dbReports = await SupabaseService.fetchReportsSummary(0, 50);
+            console.log('🔁 Recarregando relatórios do banco...');
+            setReportsPage(0);
+            setHasMoreReports(true);
+            setStockConferencePage(0);
+            setHasMoreStockConferences(true);
+            const [dbReports, dbStockReports] = await Promise.all([
+                SupabaseService.fetchReportsSummary(0, REPORTS_PAGE_SIZE),
+                SupabaseService.fetchStockConferenceReportsSummaryPage(0, STOCK_PAGE_SIZE)
+            ]);
             const formattedReports = dbReports.map(mapDbReportToHistoryItem);
             setReportHistory(formattedReports);
-            const dbStockReportsSummary = await SupabaseService.fetchStockConferenceReportsSummaryAll();
-            handleStockReportsLoaded(dbStockReportsSummary as SupabaseService.DbStockConferenceReport[]);
-            console.log('✅ Relatórios recarregados:', formattedReports.length, 'conferências:', dbStockReportsSummary.length);
-            const newReports = formattedReports.filter(r => !previousReportIds.has(r.id)).length;
-            const newStockReports = (dbStockReportsSummary || []).filter(r => r.id && !previousStockIds.has(r.id)).length;
-            if (newReports + newStockReports === 0) {
-                alert(`Atualização concluída. Nenhuma nova avaliação ou conferência. Totais: ${formattedReports.length} avaliação(ões) e ${dbStockReportsSummary.length} conferência(s).`);
-            } else {
-                alert(`Atualização concluída! ${formattedReports.length} avaliação(ões) carregada(s) (${newReports} nova(s)) e ${dbStockReportsSummary.length} conferência(s) carregada(s) (${newStockReports} nova(s)).`);
-            }
+            setHasMoreReports(dbReports.length === REPORTS_PAGE_SIZE);
+            handleStockReportsLoaded(dbStockReports as SupabaseService.DbStockConferenceReport[]);
+            setHasMoreStockConferences(dbStockReports.length === STOCK_PAGE_SIZE);
+            saveHistoryCache(CACHE_KEY_REPORTS, formattedReports);
+            saveHistoryCache(CACHE_KEY_STOCK, dbStockReports);
+            setLastHistoryCacheAt(new Date());
+            console.log('✅ Relatórios recarregados:', formattedReports.length, '| Conferências:', dbStockReports.length);
         } catch (error) {
             console.error('❌ Erro ao recarregar:', error);
             alert('Erro ao recarregar relatórios.');
         } finally {
             setIsReloadingReports(false);
+        }
+    };
+
+    const handleLoadMoreReports = async () => {
+        if (isLoadingMore || !hasMoreReports) return;
+        setIsLoadingMore(true);
+        try {
+            const nextPage = reportsPage + 1;
+            const dbReports = await SupabaseService.fetchReportsSummary(nextPage, REPORTS_PAGE_SIZE);
+            if (dbReports.length > 0) {
+                const formattedReports = dbReports.map(mapDbReportToHistoryItem);
+                setReportHistory(prev => [...prev, ...formattedReports]);
+                setReportsPage(nextPage);
+                setHasMoreReports(dbReports.length === REPORTS_PAGE_SIZE);
+            } else {
+                setHasMoreReports(false);
+            }
+        } catch (error) {
+            console.error('❌ Erro ao carregar mais relatórios:', error);
+        } finally {
+            setIsLoadingMore(false);
+        }
+    };
+
+    const handleLoadMoreStockConferences = async () => {
+        if (isLoadingMoreStock || !hasMoreStockConferences) return;
+        setIsLoadingMoreStock(true);
+        try {
+            const nextPage = stockConferencePage + 1;
+            const dbStockReports = await SupabaseService.fetchStockConferenceReportsSummaryPage(nextPage, STOCK_PAGE_SIZE);
+            if (dbStockReports.length > 0) {
+                handleStockReportsLoaded(dbStockReports as SupabaseService.DbStockConferenceReport[], true);
+                setStockConferencePage(nextPage);
+                setHasMoreStockConferences(dbStockReports.length === STOCK_PAGE_SIZE);
+            } else {
+                setHasMoreStockConferences(false);
+            }
+        } catch (error) {
+            console.error('❌ Erro ao carregar mais conferências:', error);
+        } finally {
+            setIsLoadingMoreStock(false);
         }
     };
 
@@ -1616,8 +1758,8 @@ const App: React.FC = () => {
                 ] = await Promise.all([
                     SupabaseService.fetchUsers(),
                     SupabaseService.fetchConfig(),
-                    SupabaseService.fetchReportsSummary(0, 30),
-                    SupabaseService.fetchStockConferenceReportsSummaryAll(),
+                    SupabaseService.fetchReportsSummary(0, REPORTS_PAGE_SIZE),
+                    SupabaseService.fetchStockConferenceReportsSummaryPage(0, STOCK_PAGE_SIZE),
                     SupabaseService.fetchCompanies(),
                     SupabaseService.fetchAccessMatrix(),
                     SupabaseService.fetchTickets()
@@ -1642,13 +1784,30 @@ const App: React.FC = () => {
                     if (localConfig) setConfig(JSON.parse(localConfig));
                 }
 
-                // 4. Process Reports
-                if (dbReportsSummary && dbReportsSummary.length > 0) {
-                    setReportHistory(dbReportsSummary.map(mapDbReportToHistoryItem));
+                // 4. Process Reports (with sessionStorage cache)
+                const cachedReports = loadHistoryCache(CACHE_KEY_REPORTS);
+                if (cachedReports && cachedReports.length > 0) {
+                    console.log('📦 Usando cache checklists:', cachedReports.length);
+                    setReportHistory(cachedReports);
+                    setHasMoreReports(true);
+                } else if (dbReportsSummary && dbReportsSummary.length > 0) {
+                    const formatted = dbReportsSummary.map(mapDbReportToHistoryItem);
+                    setReportHistory(formatted);
+                    setHasMoreReports(dbReportsSummary.length === REPORTS_PAGE_SIZE);
+                    saveHistoryCache(CACHE_KEY_REPORTS, formatted);
+                    setLastHistoryCacheAt(new Date());
                 }
 
-                if (dbStockReportsSummary) {
+                // 5. Process Stock Conference Reports (paginated)
+                const cachedStock = loadHistoryCache(CACHE_KEY_STOCK);
+                if (cachedStock && cachedStock.length > 0) {
+                    console.log('📦 Usando cache conferências:', cachedStock.length);
+                    handleStockReportsLoaded(cachedStock as SupabaseService.DbStockConferenceReport[]);
+                } else if (dbStockReportsSummary) {
                     handleStockReportsLoaded(dbStockReportsSummary as SupabaseService.DbStockConferenceReport[]);
+                    setHasMoreStockConferences(dbStockReportsSummary.length === STOCK_PAGE_SIZE);
+                    saveHistoryCache(CACHE_KEY_STOCK, dbStockReportsSummary);
+                    setLastHistoryCacheAt(new Date());
                 }
 
                 // 5. Process Companies
@@ -2391,6 +2550,58 @@ const App: React.FC = () => {
         setCurrentView('dashboard');
     };
 
+    // --- SESSION MANAGEMENT & HEARTBEAT ---
+    useEffect(() => {
+        if (!currentUser) return;
+
+        const performHeartbeat = async () => {
+            try {
+                await SupabaseService.upsertActiveSession({
+                    client_id: clientIdRef.current,
+                    user_email: currentUser.email,
+                    user_name: currentUser.name || null,
+                    branch: currentUser.filial || null,
+                    area: currentUser.area || null,
+                    current_view: mapViewToAppName(currentView),
+                    last_ping: new Date().toISOString()
+                });
+            } catch (err) {
+                console.error('Heartbeat error:', err);
+            }
+        };
+
+        performHeartbeat();
+        const interval = setInterval(performHeartbeat, 60000);
+
+        return () => {
+            clearInterval(interval);
+            SupabaseService.deleteActiveSession(clientIdRef.current).catch(() => { });
+        };
+    }, [currentUser?.email, currentView]);
+
+    useEffect(() => {
+        if (!currentUser) return;
+
+        const commandInterval = setInterval(async () => {
+            try {
+                const sessions = await SupabaseService.fetchActiveSessions();
+                const mySession = sessions.find(s => s.client_id === clientIdRef.current);
+
+                if (mySession?.command === 'FORCE_LOGOUT') {
+                    alert('⚠️ Sua sessão foi encerrada remotamente por um administrador.');
+                    handleLogout();
+                } else if (mySession?.command === 'RELOAD') {
+                    await SupabaseService.sendSessionCommand(clientIdRef.current, null);
+                    window.location.reload();
+                }
+            } catch (error) {
+                console.error('Error checking session commands:', error);
+            }
+        }, 15000);
+
+        return () => clearInterval(commandInterval);
+    }, [currentUser?.email, handleLogout]);
+
     const handleRegister = async (newUser: User) => {
         try {
             const created = await SupabaseService.createUser(newUser);
@@ -2913,153 +3124,46 @@ const App: React.FC = () => {
         }
     };
 
-    const handleImageUpload = (sectionId: string, e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            const file = e.target.files[0];
-
-            // Verificar limite de 2 imagens por seção
-            const currentImages = images[activeChecklistId]?.[sectionId] || [];
-            if (currentImages.length >= 2) {
-                alert('⚠️ Máximo de 2 imagens por seção atingido. Remova uma imagem antes de adicionar outra.');
-                e.target.value = '';
-                return;
-            }
-
-            // Validar tipo de arquivo
-            if (!file.type.startsWith('image/')) {
-                alert('⚠️ Por favor, selecione apenas arquivos de imagem.');
-                e.target.value = '';
-                return;
-            }
-
-            // Suportar até 15MB por imagem
-            if (file.size > 15 * 1024 * 1024) {
-                alert('⚠️ Imagem muito grande (máximo 15MB). Tente uma foto menor ou com menos zoom.');
-                e.target.value = '';
-                return;
-            }
-
-            try {
-                const reader = new FileReader();
-
-                reader.onerror = () => {
-                    alert('❌ Erro ao carregar a imagem. Tente novamente.');
-                    e.target.value = '';
+    const handleImageUpload = async (sectionId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (file.size > 10 * 1024 * 1024) {
+            alert('❌ Arquivo muito grande! O limite é 10MB.');
+            e.target.value = '';
+            return;
+        }
+        try {
+            const compressedBase64 = await ImageUtils.compressImage(file, { maxWidth: 1200, quality: 0.7 });
+            setImages(prev => {
+                const currentListImages = prev[activeChecklistId] || {};
+                const sectionImages = currentListImages[sectionId] || [];
+                return {
+                    ...prev,
+                    [activeChecklistId]: { ...currentListImages, [sectionId]: [...sectionImages, compressedBase64] }
                 };
-
-                reader.onloadend = () => {
-                    try {
-                        const img = new Image();
-
-                        img.onerror = () => {
-                            alert('❌ Erro ao processar a imagem. Tente outro formato (JPG/PNG).');
-                            e.target.value = '';
-                        };
-
-                        img.onload = () => {
-                            try {
-                                const canvas = document.createElement('canvas');
-                                let width = img.width;
-                                let height = img.height;
-
-                                // Redimensionar para máximo 1200px (alta qualidade, 800KB-1.5MB target)
-                                const maxDimension = 1200;
-                                if (width > height && width > maxDimension) {
-                                    height = (height * maxDimension) / width;
-                                    width = maxDimension;
-                                } else if (height > maxDimension) {
-                                    width = (width * maxDimension) / height;
-                                    height = maxDimension;
-                                }
-
-                                canvas.width = width;
-                                canvas.height = height;
-                                const ctx = canvas.getContext('2d');
-
-                                if (!ctx) {
-                                    alert('❌ Erro ao processar imagem. Tente novamente.');
-                                    e.target.value = '';
-                                    return;
-                                }
-
-                                ctx.drawImage(img, 0, 0, width, height);
-
-                                // Compressão balanceada: começar com 80% de qualidade e reduzir até 800KB
-                                let quality = 0.8;
-                                let compressedBase64 = canvas.toDataURL('image/jpeg', quality);
-                                const targetSize = 800 * 1024; // 800KB target
-
-                                while (compressedBase64.length > targetSize && quality > 0.3) {
-                                    quality -= 0.05;
-                                    compressedBase64 = canvas.toDataURL('image/jpeg', quality);
-                                }
-
-                                // Limite absoluto de 1.5MB após compressão
-                                if (compressedBase64.length > 1536 * 1024) {
-                                    alert('⚠️ Não foi possível comprimir a imagem o suficiente.\n\nDicas:\n• Tire a foto com menos zoom\n• Aproxime-se do objeto\n• Use menor resolução na câmera');
-                                    e.target.value = '';
-                                    return;
-                                }
-
-                                setImages(prev => {
-                                    const currentListImages = prev[activeChecklistId] || {};
-                                    const sectionImages = currentListImages[sectionId] || [];
-                                    const newImages = {
-                                        ...prev,
-                                        [activeChecklistId]: {
-                                            ...currentListImages,
-                                            [sectionId]: [...sectionImages, compressedBase64]
-                                        }
-                                    };
-
-                                    // Imagens salvas APENAS no Supabase via auto-save effect
-                                    // LocalStorage não armazena imagens para evitar QuotaExceededError
-
-                                    return newImages;
-                                });
-                                if (currentUser?.email) {
-                                    SupabaseService.insertAppEventLog({
-                                        company_id: currentUser.company_id || null,
-                                        branch: currentUser.filial || null,
-                                        area: currentUser.area || null,
-                                        user_email: currentUser.email,
-                                        user_name: currentUser.name,
-                                        app: 'checklists',
-                                        event_type: 'checklist_image_added',
-                                        entity_type: 'checklist_section',
-                                        entity_id: `${activeChecklistId || 'unknown'}:${sectionId}`,
-                                        status: 'success',
-                                        success: true,
-                                        source: 'web',
-                                        event_meta: { checklist_id: activeChecklistId, section_id: sectionId }
-                                    }).catch(() => { });
-                                }
-
-                                e.target.value = '';
-
-                            } catch (canvasError) {
-                                console.error('Erro no canvas:', canvasError);
-                                alert('❌ Erro ao processar a imagem. Tente novamente.');
-                                e.target.value = '';
-                            }
-                        };
-
-                        img.src = reader.result as string;
-
-                    } catch (imgError) {
-                        console.error('Erro ao criar Image:', imgError);
-                        alert('❌ Erro ao carregar a imagem. Tente novamente.');
-                        e.target.value = '';
-                    }
-                };
-
-                reader.readAsDataURL(file);
-
-            } catch (error) {
-                console.error('Erro geral no upload:', error);
-                alert('❌ Erro ao processar a imagem. Tente novamente.');
-                e.target.value = '';
+            });
+            if (currentUser?.email) {
+                SupabaseService.insertAppEventLog({
+                    company_id: currentUser.company_id || null,
+                    branch: currentUser.filial || null,
+                    area: currentUser.area || null,
+                    user_email: currentUser.email,
+                    user_name: currentUser.name,
+                    app: 'checklists',
+                    event_type: 'checklist_image_added',
+                    entity_type: 'checklist_section',
+                    entity_id: `${activeChecklistId || 'unknown'}:${sectionId}`,
+                    status: 'success',
+                    success: true,
+                    source: 'web',
+                    event_meta: { checklist_id: activeChecklistId, section_id: sectionId }
+                }).catch(() => { });
             }
+            e.target.value = '';
+        } catch (error) {
+            console.error('❌ Erro no upload:', error);
+            alert('❌ Erro ao processar a imagem.');
+            e.target.value = '';
         }
     };
 
@@ -3078,32 +3182,24 @@ const App: React.FC = () => {
         });
     };
 
-    const handleSignature = (role: string, dataUrl: string) => {
-        setSignatures(prev => {
-            const updated: Record<string, Record<string, string>> = {};
-
-            // Replicar assinatura para TODOS os checklists (como info básica)
-            checklists.forEach(cl => {
-                updated[cl.id] = {
-                    ...(prev[cl.id] || {}),
-                    [role]: dataUrl
-                };
+    const handleSignature = async (role: string, dataUrl: string) => {
+        try {
+            const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
+            setSignatures(prev => {
+                const updated = { ...prev };
+                checklists.forEach(cl => {
+                    updated[cl.id] = { ...(prev[cl.id] || {}), [role]: compressed };
+                });
+                if (currentUser) {
+                    const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
+                    allDrafts[currentUser.email] = { ...allDrafts[currentUser.email], signatures: updated };
+                    localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
+                }
+                return updated;
             });
-
-            // Salvar imediatamente no localStorage
-            if (currentUser) {
-                const allDrafts = JSON.parse(localStorage.getItem('APP_DRAFTS') || '{}');
-                allDrafts[currentUser.email] = {
-                    formData: formData,
-                    images: images,
-                    signatures: updated,
-                    ignoredChecklists: Array.from(ignoredChecklists)
-                };
-                localStorage.setItem('APP_DRAFTS', JSON.stringify(allDrafts));
-            }
-
-            return updated;
-        });
+        } catch (error) {
+            console.error('❌ Erro ao comprimir assinatura:', error);
+        }
     };
 
     // Helper to get data source (Draft or History Item)
@@ -3760,25 +3856,6 @@ const App: React.FC = () => {
     const handleResetStockBranchFilters = () => setStockBranchFilters([]);
 
     // --- LOGS & EVENTOS ---
-    const mapViewToAppName = (view: typeof currentView) => {
-        const map: Record<typeof currentView, string> = {
-            checklist: 'checklists',
-            summary: 'visao_geral',
-            dashboard: 'dashboard',
-            report: 'relatorio',
-            settings: 'configuracoes',
-            history: 'historico',
-            view_history: 'historico',
-            support: 'suporte',
-            stock: 'conferencia',
-            access: 'acessos',
-            pre: 'pre_vencidos',
-            audit: 'auditoria',
-            logs: 'metricas_gerenciais',
-            cadastros_globais: 'cadastros_globais'
-        };
-        return map[view] || view;
-    };
 
     useEffect(() => {
         if (!currentUser) return;
@@ -3874,12 +3951,33 @@ const App: React.FC = () => {
             .finally(() => setIsLoadingLogs(false));
     }, [currentView, currentUser?.company_id, currentUser?.filial, currentUser?.role, logsDateRange]);
 
+    useEffect(() => {
+        if (currentView !== 'logs' || currentUser?.role !== 'MASTER' || !currentUser?.company_id) return;
+
+        const fetchSessions = async () => {
+            setIsLoadingSessions(true);
+            try {
+                const sessions = await SupabaseService.fetchActiveSessions();
+                setActiveSessions(sessions);
+            } catch (error) {
+                console.error('Error fetching active sessions:', error);
+            } finally {
+                setIsLoadingSessions(false);
+            }
+        };
+
+        fetchSessions();
+        const interval = setInterval(fetchSessions, 20000); // 20 segundos
+
+        return () => clearInterval(interval);
+    }, [currentView, currentUser?.role, currentUser?.company_id]);
+
     const filteredEventLogs = useMemo(() => {
         let filtered = [...appEventLogs];
         if (logsBranchFilter !== 'all') {
+            const filterKey = normalizeBranchLabel(logsBranchFilter).toUpperCase();
             filtered = filtered.filter(l => {
-                const branchLabel = (l.branch && String(l.branch).trim()) ? l.branch : 'Sem Filial';
-                return branchLabel === logsBranchFilter;
+                return normalizeBranchLabel(l.branch).toUpperCase() === filterKey;
             });
         }
         if (logsAreaFilter !== 'all') {
@@ -3935,12 +4033,55 @@ const App: React.FC = () => {
         });
     }, [filteredEventLogs, logsGroupRepeats]);
 
+    // Paginação de eventos: exibe apenas os primeiros `eventsDisplayLimit` registros
+    const pagedEventLogs = useMemo(() => displayEventLogs.slice(0, eventsDisplayLimit), [displayEventLogs, eventsDisplayLimit]);
+
+    // Agrupa sessões ativas por usuário (um usuário pode ter múltiplas abas/módulos abertos)
+    const groupedActiveSessions = useMemo(() => {
+        const map = new Map<string, {
+            user_email: string;
+            user_name: string | null;
+            branch: string | null;
+            area: string | null;
+            modules: { client_id: string; current_view: string; last_ping: string }[];
+            last_ping: string;
+        }>();
+        activeSessions.forEach(session => {
+            const key = session.user_email;
+            const existing = map.get(key);
+            if (!existing) {
+                map.set(key, {
+                    user_email: session.user_email,
+                    user_name: session.user_name,
+                    branch: session.branch,
+                    area: session.area,
+                    modules: [{ client_id: session.client_id, current_view: session.current_view || '-', last_ping: session.last_ping }],
+                    last_ping: session.last_ping,
+                });
+            } else {
+                existing.modules.push({ client_id: session.client_id, current_view: session.current_view || '-', last_ping: session.last_ping });
+                // Keep the most recent ping
+                if (new Date(session.last_ping) > new Date(existing.last_ping)) {
+                    existing.last_ping = session.last_ping;
+                }
+            }
+        });
+        return Array.from(map.values()).sort((a, b) => new Date(b.last_ping).getTime() - new Date(a.last_ping).getTime());
+    }, [activeSessions]);
+
+    // Reset paginação de eventos ao mudar qualquer filtro
+    useEffect(() => {
+        setEventsDisplayLimit(50);
+    }, [logsBranchFilter, logsAreaFilter, logsAppFilter, logsUserFilter, logsEventFilter, logsGroupRepeats]);
+
     const logsBranches = useMemo(() => {
         const map = new Map<string, { branch: string; count: number; lastAt: number; users: Set<string> }>();
         filteredEventLogs.forEach(l => {
-            const key = (l.branch && String(l.branch).trim()) ? l.branch : 'Sem Filial';
+            // normalizeBranchLabel converte '8' → 'Filial 8', '14' → 'Filial 14', etc.
+            const label = normalizeBranchLabel(l.branch);
+            const key = label.toUpperCase();
             const ts = l.created_at ? new Date(l.created_at).getTime() : 0;
-            const current = map.get(key) || { branch: key, count: 0, lastAt: 0, users: new Set<string>() };
+            const current = map.get(key) || { branch: label, count: 0, lastAt: 0, users: new Set<string>() };
             current.count += 1;
             current.lastAt = Math.max(current.lastAt, ts);
             if (l.user_email) current.users.add(l.user_email);
@@ -3978,16 +4119,17 @@ const App: React.FC = () => {
         if (!currentUser) return [];
         const now = Date.now();
         const logs = appEventLogs.filter(l => !currentUser.company_id || l.company_id === currentUser.company_id);
-        const byUser = new Map<string, { lastAt: number; activeDays: Set<string>; durationMs: number }>();
+        const byUser = new Map<string, { lastAt: number; activeDays: Set<string>; durationMs: number; eventCount: number }>();
 
         logs.forEach(l => {
             if (!l.user_email) return;
             const ts = l.created_at ? new Date(l.created_at).getTime() : NaN;
             if (Number.isNaN(ts)) return;
             const dateKey = new Date(ts).toISOString().slice(0, 10);
-            const entry = byUser.get(l.user_email) || { lastAt: 0, activeDays: new Set<string>(), durationMs: 0 };
+            const entry = byUser.get(l.user_email) || { lastAt: 0, activeDays: new Set<string>(), durationMs: 0, eventCount: 0 };
             entry.lastAt = Math.max(entry.lastAt, ts);
             entry.activeDays.add(dateKey);
+            entry.eventCount += 1;
             if (typeof l.duration_ms === 'number' && l.duration_ms > 0) {
                 entry.durationMs += l.duration_ms;
             }
@@ -4010,13 +4152,16 @@ const App: React.FC = () => {
                 lastAt: lastAt || null,
                 daysInactive,
                 activeDays: stats?.activeDays.size || 0,
-                durationMs: stats?.durationMs || 0
+                durationMs: stats?.durationMs || 0,
+                eventCount: stats?.eventCount || 0
             };
         }).sort((a, b) => {
-            if (a.daysInactive === null && b.daysInactive === null) return 0;
-            if (a.daysInactive === null) return -1;
-            if (b.daysInactive === null) return 1;
-            return b.daysInactive - a.daysInactive;
+            // Mais ativos primeiro: menor daysInactive ou maior eventCount
+            if (a.daysInactive === null && b.daysInactive === null) return b.eventCount - a.eventCount;
+            if (a.daysInactive === null) return 1; // sem atividade vai pro final
+            if (b.daysInactive === null) return -1;
+            if (a.daysInactive !== b.daysInactive) return a.daysInactive - b.daysInactive;
+            return b.eventCount - a.eventCount;
         });
     }, [appEventLogs, users, currentUser]);
 
@@ -4093,22 +4238,100 @@ const App: React.FC = () => {
     }, [users, currentUser]);
 
     const logBranchOptions = useMemo(() => {
-        const set = new Set<string>();
+        // Usa Map normalizado para deduplicar variações: '8' e 'Filial 8' → 'Filial 8'
+        const normalized = new Map<string, string>(); // key=UPPERCASE, value=label canônico
         scopedUsers.forEach(u => {
-            if (u.filial) set.add(u.filial);
+            if (u.filial) {
+                const label = normalizeBranchLabel(u.filial);
+                const key = label.toUpperCase();
+                if (!normalized.has(key)) normalized.set(key, label);
+            }
         });
         scopedCompanies.forEach(c => {
             (c.areas || []).forEach((a: any) => {
-                (a.branches || []).forEach((b: string) => set.add(b));
+                (a.branches || []).forEach((b: string) => {
+                    const label = normalizeBranchLabel(b);
+                    const key = label.toUpperCase();
+                    if (!normalized.has(key)) normalized.set(key, label);
+                });
             });
         });
         appEventLogs
             .filter(l => !currentUser?.company_id || l.company_id === currentUser.company_id)
             .forEach(l => {
-                const branchLabel = (l.branch && String(l.branch).trim()) ? l.branch : 'Sem Filial';
-                set.add(branchLabel);
+                const label = normalizeBranchLabel(l.branch);
+                const key = label.toUpperCase();
+                if (!normalized.has(key)) normalized.set(key, label);
             });
-        return Array.from(set).sort();
+        return Array.from(normalized.values()).sort();
+    }, [scopedUsers, scopedCompanies, appEventLogs, currentUser?.company_id]);
+
+    /**
+     * Retorna filiais agrupadas por área, com filiais em ordem numérica (Filial 3 < Filial 8 < Filial 14).
+     * Usado no select de filtro com <optgroup>.
+     */
+    const logBranchGroupedOptions = useMemo(() => {
+        // Função de ordenação numérica para nomes como "Filial 8", "Filial 14"
+        const sortNumeric = (a: string, b: string) => {
+            const numA = parseInt(a.replace(/\D+/g, ''), 10);
+            const numB = parseInt(b.replace(/\D+/g, ''), 10);
+            if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+            return a.localeCompare(b, 'pt-BR');
+        };
+
+        // Mapa área → Set de labels normalizados
+        const areaMap = new Map<string, Set<string>>(); // area → branch labels
+        scopedCompanies.forEach(c => {
+            (c.areas || []).forEach((a: any) => {
+                const areaName: string = a.name || 'Sem Área';
+                (a.branches || []).forEach((b: string) => {
+                    const label = normalizeBranchLabel(b);
+                    const set = areaMap.get(areaName) || new Set<string>();
+                    set.add(label);
+                    areaMap.set(areaName, set);
+                });
+            });
+        });
+
+        // Adiciona filiais de users não mapeadas
+        scopedUsers.forEach(u => {
+            if (u.filial) {
+                const label = normalizeBranchLabel(u.filial);
+                const area = u.area || 'Sem Área';
+                const set = areaMap.get(area) || new Set<string>();
+                set.add(label);
+                areaMap.set(area, set);
+            }
+        });
+
+        // Adiciona filiais dos eventos não mapeadas
+        const allMapped = new Set(Array.from(areaMap.values()).flatMap(s => Array.from(s).map(v => v.toUpperCase())));
+        const unmappedSet = new Set<string>();
+        appEventLogs
+            .filter(l => !currentUser?.company_id || l.company_id === currentUser.company_id)
+            .forEach(l => {
+                const label = normalizeBranchLabel(l.branch);
+                if (!allMapped.has(label.toUpperCase())) unmappedSet.add(label);
+            });
+        if (unmappedSet.size > 0) {
+            const existing = areaMap.get('Sem Área') || new Set<string>();
+            unmappedSet.forEach(b => existing.add(b));
+            areaMap.set('Sem Área', existing);
+        }
+
+        // Monta array de grupos com filiais em ordem numérica
+        const groups: { area: string; branches: string[] }[] = [];
+        areaMap.forEach((branchSet, area) => {
+            const branches = Array.from(branchSet).sort(sortNumeric);
+            if (branches.length > 0) groups.push({ area, branches });
+        });
+        // Áreas em ordem alfabética; 'Sem Área' por último
+        groups.sort((a, b) => {
+            if (a.area === 'Sem Área') return 1;
+            if (b.area === 'Sem Área') return -1;
+            return a.area.localeCompare(b.area, 'pt-BR');
+        });
+        return groups;
     }, [scopedUsers, scopedCompanies, appEventLogs, currentUser?.company_id]);
 
     const logAreaOptions = useMemo(() => {
@@ -4324,8 +4547,25 @@ const App: React.FC = () => {
 
     const isImmersivePreView = currentView === 'pre';
 
+    const ConnectivityIndicator = () => {
+        if (isOnline) return null;
+        return (
+            <div className="fixed bottom-6 right-6 z-[9999] animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div className="bg-red-600/90 backdrop-blur-md text-white px-5 py-2.5 rounded-2xl shadow-[0_8px_32px_rgba(220,38,38,0.3)] border border-red-400/50 flex items-center gap-3">
+                    <div className="relative flex h-2 w-2">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-white"></span>
+                    </div>
+                    <span className="text-[10px] font-black uppercase tracking-[0.2em]">Modo Offline</span>
+                    <WifiOff size={14} className="opacity-80" />
+                </div>
+            </div>
+        );
+    };
+
     return (
-        <div className="min-h-screen bg-gray-50 flex font-sans text-gray-800">
+        <div className="min-h-screen bg-slate-50 font-sans text-slate-900 selection:bg-indigo-100 selection:text-indigo-900">
+            <ConnectivityIndicator />
             <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-gray-50/50 relative">
                 <Topbar
                     isSidebarOpen={isSidebarOpen}
@@ -5603,7 +5843,7 @@ const App: React.FC = () => {
                                                 : logsDateRange === '30d'
                                                     ? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
                                                     : null,
-                                            limit: 2000
+                                            limit: 200
                                         }).then(logs => setAppEventLogs(logs || []))
                                             .finally(() => setIsLoadingLogs(false));
                                     }}
@@ -5613,22 +5853,85 @@ const App: React.FC = () => {
                                 </button>
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                                <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Eventos (filtrados)</p>
-                                    <p className="text-3xl font-black text-slate-900 mt-2">{filteredEventLogs.length}</p>
+                            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                                {/* Card: Total Eventos — limpa todos os filtros */}
+                                <button
+                                    type="button"
+                                    onClick={() => { setLogsBranchFilter('all'); setLogsAreaFilter('all'); setLogsAppFilter('all'); setLogsUserFilter('all'); setLogsEventFilter('all'); }}
+                                    className={`p-4 rounded-2xl border-2 text-left transition-all hover:shadow-md active:scale-95 ${logsBranchFilter === 'all' && logsUserFilter === 'all' && logsAppFilter === 'all' && logsEventFilter === 'all'
+                                        ? 'border-slate-300 bg-slate-50'
+                                        : 'border-gray-100 bg-white hover:border-slate-200'
+                                        }`}
+                                    title="Clique para limpar todos os filtros"
+                                >
+                                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Eventos (filtro)</p>
+                                    <p className="text-2xl font-black text-slate-900 mt-1">{filteredEventLogs.length}</p>
+                                    <p className="text-[9px] text-gray-400 mt-0.5">de {appEventLogs.length} total</p>
+                                </button>
+
+                                {/* Card: Filiais Ativas — clique filtra pela mais ativa */}
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (logsBranchFilter !== 'all') { setLogsBranchFilter('all'); }
+                                        else if (logsBranches.length > 0) { setLogsBranchFilter(logsBranches[0].branch); }
+                                    }}
+                                    className={`p-4 rounded-2xl border-2 text-left transition-all hover:shadow-md active:scale-95 ${logsBranchFilter !== 'all' ? 'border-blue-300 bg-blue-50' : 'border-gray-100 bg-white hover:border-blue-200'
+                                        }`}
+                                    title={logsBranchFilter !== 'all' ? `Filial: ${logsBranchFilter} — clique para limpar` : 'Clique para filtrar pela filial mais ativa'}
+                                >
+                                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Filiais Ativas</p>
+                                    <p className="text-2xl font-black text-blue-600 mt-1">{logsBranches.length}</p>
+                                    <p className="text-[9px] text-blue-400 mt-0.5 truncate">{logsBranchFilter !== 'all' ? `▸ ${logsBranchFilter}` : 'clique p/ filtrar'}</p>
+                                </button>
+
+                                {/* Card: Usuários Ativos — clique filtra pelo mais ativo */}
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (logsUserFilter !== 'all') { setLogsUserFilter('all'); }
+                                        else if (logsUsers.length > 0) { setLogsUserFilter(logsUsers[0].user); }
+                                    }}
+                                    className={`p-4 rounded-2xl border-2 text-left transition-all hover:shadow-md active:scale-95 ${logsUserFilter !== 'all' ? 'border-emerald-300 bg-emerald-50' : 'border-gray-100 bg-white hover:border-emerald-200'
+                                        }`}
+                                    title={logsUserFilter !== 'all' ? `Usuário: ${logsUserFilter} — clique para limpar` : 'Clique para filtrar pelo usuário mais ativo'}
+                                >
+                                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Usuários Ativos</p>
+                                    <p className="text-2xl font-black text-emerald-600 mt-1">{logsUsers.length}</p>
+                                    <p className="text-[9px] text-emerald-400 mt-0.5 truncate">{logsUserFilter !== 'all' ? `▸ ${logsUserFilter.split('@')[0]}` : 'clique p/ filtrar'}</p>
+                                </button>
+
+                                {/* Card: Apps usados */}
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        if (logsAppFilter !== 'all') { setLogsAppFilter('all'); }
+                                        else if (logsApps.length > 0) { setLogsAppFilter(logsApps[0][0]); }
+                                    }}
+                                    className={`p-4 rounded-2xl border-2 text-left transition-all hover:shadow-md active:scale-95 ${logsAppFilter !== 'all' ? 'border-indigo-300 bg-indigo-50' : 'border-gray-100 bg-white hover:border-indigo-200'
+                                        }`}
+                                    title={logsAppFilter !== 'all' ? `App: ${logsAppFilter} — clique para limpar` : 'Clique para filtrar pelo app mais usado'}
+                                >
+                                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Apps Usados</p>
+                                    <p className="text-2xl font-black text-indigo-600 mt-1">{logsApps.length}</p>
+                                    <p className="text-[9px] text-indigo-400 mt-0.5 truncate">{logsAppFilter !== 'all' ? `▸ ${logsAppFilter}` : 'clique p/ filtrar'}</p>
+                                </button>
+
+                                {/* Card: Taxa de Erros */}
+                                <div className="p-4 rounded-2xl border-2 border-gray-100 bg-white">
+                                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Taxa de Erros</p>
+                                    <p className="text-2xl font-black text-red-500 mt-1">
+                                        {filteredEventLogs.length > 0
+                                            ? `${((filteredEventLogs.filter(l => l.success === false).length / filteredEventLogs.length) * 100).toFixed(1)}%`
+                                            : '—'}
+                                    </p>
+                                    <p className="text-[9px] text-gray-400 mt-0.5">{filteredEventLogs.filter(l => l.success === false).length} erro(s)</p>
                                 </div>
-                                <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Filiais Ativas</p>
-                                    <p className="text-3xl font-black text-blue-600 mt-2">{logsBranches.length}</p>
-                                </div>
-                                <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Usuários Ativos</p>
-                                    <p className="text-3xl font-black text-emerald-600 mt-2">{logsUsers.length}</p>
-                                </div>
-                                <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
-                                    <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Última Atividade</p>
-                                    <p className="text-sm font-black text-slate-700 mt-2">{logLastEventLabel}</p>
+
+                                {/* Card: Última Atividade */}
+                                <div className="p-4 rounded-2xl border-2 border-gray-100 bg-white">
+                                    <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Última Atividade</p>
+                                    <p className="text-sm font-black text-slate-700 mt-1 leading-tight">{logLastEventLabel}</p>
                                 </div>
                             </div>
 
@@ -5636,9 +5939,24 @@ const App: React.FC = () => {
                                 <div className="flex flex-wrap gap-3">
                                     <div className="flex flex-col">
                                         <label className="text-[9px] font-black uppercase tracking-widest text-gray-400">Filial</label>
-                                        <select value={logsBranchFilter} onChange={e => setLogsBranchFilter(e.target.value)} className="text-xs font-bold rounded-xl border border-gray-200 px-3 py-2 bg-white">
+                                        <select
+                                            value={logsBranchFilter}
+                                            onChange={e => setLogsBranchFilter(e.target.value)}
+                                            className="text-xs font-bold rounded-xl border border-gray-200 px-3 py-2 bg-white"
+                                        >
                                             <option value="all">Todas</option>
-                                            {logBranchOptions.map(b => <option key={b} value={b}>{b}</option>)}
+                                            {logBranchGroupedOptions.length > 0
+                                                ? logBranchGroupedOptions.map(group => (
+                                                    <optgroup key={group.area} label={group.area}>
+                                                        {group.branches.map(b => (
+                                                            <option key={b} value={b}>{b}</option>
+                                                        ))}
+                                                    </optgroup>
+                                                ))
+                                                : logBranchOptions.map(b => (
+                                                    <option key={b} value={b}>{b}</option>
+                                                ))
+                                            }
                                         </select>
                                     </div>
                                     <div className="flex flex-col">
@@ -5691,41 +6009,106 @@ const App: React.FC = () => {
                             </div>
 
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                                <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm">
-                                    <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Atividade por Filial</h3>
-                                    <div className="space-y-3">
-                                        {logsBranches.slice(0, 6).map(branch => {
-                                            const branchFilterValue = branch.branch;
-                                            const isActive = logsBranchFilter === branchFilterValue;
-                                            return (
-                                                <button
-                                                    key={branch.branch}
-                                                    type="button"
-                                                    onClick={() => setLogsBranchFilter(isActive ? 'all' : branchFilterValue)}
-                                                    className={`w-full flex items-center justify-between rounded-2xl border px-4 py-3 gap-3 text-left transition-all ${isActive ? 'border-blue-200 bg-blue-50' : 'border-gray-100 hover:bg-gray-50'}`}
-                                                    title="Clique para filtrar por filial"
-                                                >
-                                                    <div className="min-w-0">
-                                                        <p className="text-sm font-black text-gray-800 truncate">{branch.branch}</p>
-                                                        <p className="text-[10px] text-gray-400 font-bold truncate">{branch.users.size} usuário(s)</p>
-                                                    </div>
-                                                    <div className="text-right min-w-[96px]">
-                                                        <p className="text-sm font-black text-blue-600 whitespace-nowrap">{branch.count}</p>
-                                                        <p className="text-[9px] text-gray-400 font-bold whitespace-nowrap">{branch.lastAt ? new Date(branch.lastAt).toLocaleString('pt-BR', { hour12: false }) : '-'}</p>
-                                                    </div>
-                                                </button>
-                                            );
-                                        })}
+                                <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm flex flex-col">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h3 className="text-xs font-black uppercase tracking-widest text-gray-400">Atividade por Filial</h3>
+                                        <span className="text-[10px] font-bold text-gray-400">{logsBranches.length} filial(is)</span>
+                                    </div>
+                                    {/* Agrupa filiais por área quando disponível */}
+                                    <div className="space-y-1 overflow-y-auto" style={{ maxHeight: 320 }}>
+                                        {(() => {
+                                            // Constrói mapa área → lista de branches com dados
+                                            const areaMap = new Map<string, string[]>(); // area → branch labels
+                                            scopedCompanies.forEach(c => {
+                                                (c.areas || []).forEach((a: any) => {
+                                                    (a.branches || []).forEach((b: string) => {
+                                                        const label = normalizeBranchLabel(b);
+                                                        const key = a.name || 'Sem Área';
+                                                        const list = areaMap.get(key) || [];
+                                                        if (!list.includes(label)) list.push(label);
+                                                        areaMap.set(key, list);
+                                                    });
+                                                });
+                                            });
+
+                                            // Identifica filiais sem área mapeada
+                                            const mappedBranches = new Set(Array.from(areaMap.values()).flat().map(b => b.toUpperCase()));
+
+                                            // Renderiza por área; filiais sem área vão no grupo Sem Área
+                                            const groups: { area: string; branches: { branch: string; count: number; lastAt: number; users: Set<string> }[] }[] = [];
+                                            const usedKeys = new Set<string>();
+
+                                            areaMap.forEach((branchLabels, area) => {
+                                                const matched = logsBranches.filter(b => branchLabels.map(bl => bl.toUpperCase()).includes(b.branch.toUpperCase()));
+                                                matched.forEach(b => usedKeys.add(b.branch.toUpperCase()));
+                                                if (matched.length > 0) groups.push({ area, branches: matched });
+                                            });
+
+                                            // filiais que não foram mapeadas para nenhuma área
+                                            const unmapped = logsBranches.filter(b => !usedKeys.has(b.branch.toUpperCase()));
+                                            if (unmapped.length > 0) groups.push({ area: 'Sem Área', branches: unmapped });
+
+                                            // Fallback: se não há dados de empresa, mostra tudo plano
+                                            if (groups.length === 0) {
+                                                return logsBranches.map(branch => {
+                                                    const branchFilterValue = branch.branch;
+                                                    const isActive = normalizeBranchLabel(logsBranchFilter).toUpperCase() === branchFilterValue.toUpperCase();
+                                                    return (
+                                                        <button key={branch.branch} type="button"
+                                                            onClick={() => setLogsBranchFilter(isActive ? 'all' : branchFilterValue)}
+                                                            className={`w-full flex items-center justify-between rounded-2xl border px-4 py-2 gap-3 text-left transition-all ${isActive ? 'border-blue-200 bg-blue-50' : 'border-gray-100 hover:bg-gray-50'}`}
+                                                        >
+                                                            <div className="min-w-0">
+                                                                <p className="text-sm font-black text-gray-800 truncate">{branch.branch}</p>
+                                                                <p className="text-[10px] text-gray-400 font-bold">{branch.users.size} usuário(s)</p>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <p className="text-sm font-black text-blue-600">{branch.count}</p>
+                                                                <p className="text-[9px] text-gray-400">{branch.lastAt ? new Date(branch.lastAt).toLocaleString('pt-BR', { hour12: false }) : '-'}</p>
+                                                            </div>
+                                                        </button>
+                                                    );
+                                                });
+                                            }
+
+                                            return groups.map(({ area, branches }) => (
+                                                <div key={area}>
+                                                    <p className="text-[9px] font-black uppercase tracking-widest text-gray-300 px-1 pt-2 pb-1">{area}</p>
+                                                    {branches.map(branch => {
+                                                        const branchFilterValue = branch.branch;
+                                                        const isActive = normalizeBranchLabel(logsBranchFilter).toUpperCase() === branchFilterValue.toUpperCase();
+                                                        return (
+                                                            <button key={branch.branch} type="button"
+                                                                onClick={() => setLogsBranchFilter(isActive ? 'all' : branchFilterValue)}
+                                                                className={`w-full flex items-center justify-between rounded-2xl border px-4 py-2 gap-3 text-left transition-all mb-1 ${isActive ? 'border-blue-200 bg-blue-50' : 'border-gray-100 hover:bg-gray-50'}`}
+                                                            >
+                                                                <div className="min-w-0">
+                                                                    <p className="text-sm font-black text-gray-800 truncate">{branch.branch}</p>
+                                                                    <p className="text-[10px] text-gray-400 font-bold">{branch.users.size} usuário(s)</p>
+                                                                </div>
+                                                                <div className="text-right min-w-[80px]">
+                                                                    <p className="text-sm font-black text-blue-600">{branch.count}</p>
+                                                                    <p className="text-[9px] text-gray-400">{branch.lastAt ? new Date(branch.lastAt).toLocaleString('pt-BR', { hour12: false }) : '-'}</p>
+                                                                </div>
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            ));
+                                        })()}
                                         {logsBranches.length === 0 && (
                                             <div className="text-sm text-gray-400 font-semibold">Sem eventos ainda.</div>
                                         )}
                                     </div>
                                 </div>
 
-                                <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm">
-                                    <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Usuários mais ativos</h3>
-                                    <div className="space-y-3">
-                                        {logsUsers.slice(0, 6).map(user => {
+                                <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm flex flex-col">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h3 className="text-xs font-black uppercase tracking-widest text-gray-400">Usuários mais ativos</h3>
+                                        <span className="text-[10px] font-bold text-gray-400">{logsUsers.length} usuário(s)</span>
+                                    </div>
+                                    <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 320 }}>
+                                        {logsUsers.map(user => {
                                             const userFilterValue = user.user === 'Sem usuário' ? '-' : user.user;
                                             const isActive = logsUserFilter === userFilterValue;
                                             return (
@@ -5753,10 +6136,13 @@ const App: React.FC = () => {
                                     </div>
                                 </div>
 
-                                <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm">
-                                    <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-4">Apps mais usados</h3>
-                                    <div className="space-y-3">
-                                        {logsApps.slice(0, 6).map(app => {
+                                <div className="bg-white rounded-3xl border border-gray-100 p-5 shadow-sm flex flex-col">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h3 className="text-xs font-black uppercase tracking-widest text-gray-400">Apps mais usados</h3>
+                                        <span className="text-[10px] font-bold text-gray-400">{logsApps.length} app(s)</span>
+                                    </div>
+                                    <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 320 }}>
+                                        {logsApps.map(app => {
                                             const isActive = logsAppFilter === app[0];
                                             return (
                                                 <button
@@ -5778,14 +6164,128 @@ const App: React.FC = () => {
                                 </div>
                             </div>
 
-                            <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
-                                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
-                                    <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest">Eventos Detalhados</h3>
-                                    <span className="text-xs font-bold text-gray-400">{displayEventLogs.length} registros</span>
+                            {/* --- MONITORAMENTO DE SESSÕES ATIVAS --- */}
+                            <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden mt-8">
+                                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-slate-50/50">
+                                    <h3 className="text-sm font-black text-slate-800 uppercase tracking-widest flex items-center gap-2">
+                                        <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></div>
+                                        Sessões Ativas em Tempo Real
+                                    </h3>
+                                    <div className="flex items-center gap-4">
+                                        {isLoadingSessions && <div className="w-4 h-4 border-2 border-slate-200 border-t-slate-500 rounded-full animate-spin"></div>}
+                                        <span className="text-xs font-bold text-slate-400">{groupedActiveSessions.length} usuário(s) online · {activeSessions.length} sessão(ões)</span>
+                                    </div>
                                 </div>
                                 <div className="overflow-x-auto">
                                     <table className="min-w-full text-sm">
-                                        <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase tracking-widest">
+                                        <thead className="bg-white text-gray-400 text-[10px] uppercase tracking-widest border-b border-gray-100">
+                                            <tr>
+                                                <th className="px-6 py-3 text-left">Usuário</th>
+                                                <th className="px-6 py-3 text-left">Filial / Área</th>
+                                                <th className="px-6 py-3 text-left">Módulos Ativos</th>
+                                                <th className="px-6 py-3 text-left">Último Sinal</th>
+                                                <th className="px-6 py-3 text-right">Ações</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-gray-100">
+                                            {groupedActiveSessions.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan={5} className="px-6 py-12 text-center text-gray-400 font-medium italic">
+                                                        Nenhuma sessão ativa detectada no momento.
+                                                    </td>
+                                                </tr>
+                                            ) : (
+                                                groupedActiveSessions.map(user => (
+                                                    <tr key={user.user_email} className="hover:bg-blue-50/30 transition-colors">
+                                                        <td className="px-6 py-4">
+                                                            <div className="flex items-center gap-3">
+                                                                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-indigo-600 flex items-center justify-center text-white font-black text-xs shrink-0">
+                                                                    {(user.user_name || user.user_email).charAt(0).toUpperCase()}
+                                                                </div>
+                                                                <div>
+                                                                    <div className="font-bold text-gray-900">{user.user_name || user.user_email}</div>
+                                                                    <div className="text-[10px] text-gray-400">{user.user_email}</div>
+                                                                </div>
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="text-gray-700 font-medium">{user.branch || '-'}</div>
+                                                            <div className="text-[10px] text-gray-400">{user.area || '-'}</div>
+                                                        </td>
+                                                        <td className="px-6 py-4">
+                                                            <div className="flex flex-wrap gap-1.5">
+                                                                {user.modules.map((mod, idx) => (
+                                                                    <span key={idx} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wide bg-indigo-50 text-indigo-700 border border-indigo-100">
+                                                                        <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block"></span>
+                                                                        {mod.current_view}
+                                                                    </span>
+                                                                ))}
+                                                                {user.modules.length > 1 && (
+                                                                    <span className="text-[10px] text-gray-400 font-bold self-center">({user.modules.length} abas)</span>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                        <td className="px-6 py-4 text-xs font-bold text-gray-500">
+                                                            {new Date(user.last_ping).toLocaleTimeString('pt-BR')}
+                                                        </td>
+                                                        <td className="px-6 py-4 text-right space-x-2">
+                                                            <button
+                                                                onClick={async () => {
+                                                                    if (confirm(`Forçar logout de ${user.user_name || user.user_email}? (${user.modules.length} sessão(ões))`)) {
+                                                                        await Promise.all(user.modules.map(m => SupabaseService.sendSessionCommand(m.client_id, 'FORCE_LOGOUT')));
+                                                                        alert('Comando de logout enviado para todas as sessões!');
+                                                                    }
+                                                                }}
+                                                                className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-[10px] font-black hover:bg-red-100 transition-colors border border-red-100"
+                                                            >
+                                                                DERRUBAR
+                                                            </button>
+                                                            <button
+                                                                onClick={async () => {
+                                                                    await Promise.all(user.modules.map(m => SupabaseService.sendSessionCommand(m.client_id, 'RELOAD')));
+                                                                    alert('Reload enviado para todas as sessões!');
+                                                                }}
+                                                                className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-black hover:bg-blue-100 transition-colors border border-blue-100"
+                                                            >
+                                                                RELOAD
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden mt-8">
+                                <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                                    <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest">Eventos Detalhados</h3>
+                                    <div className="flex items-center gap-3">
+                                        <span className="text-xs font-bold text-gray-400">
+                                            exibindo {Math.min(eventsDisplayLimit, displayEventLogs.length)} de {displayEventLogs.length}
+                                        </span>
+                                        {eventsDisplayLimit < displayEventLogs.length && (
+                                            <span className="text-[9px] font-black text-orange-400 uppercase tracking-widest animate-pulse">↓ role para mais</span>
+                                        )}
+                                        {eventsDisplayLimit >= displayEventLogs.length && displayEventLogs.length > 0 && (
+                                            <span className="text-[9px] font-black text-gray-300 uppercase tracking-widest">fim</span>
+                                        )}
+                                    </div>
+                                </div>
+                                <div
+                                    className="overflow-auto"
+                                    style={{ maxHeight: 400 }}
+                                    onScroll={e => {
+                                        const el = e.currentTarget;
+                                        const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight * 0.9;
+                                        if (nearBottom && eventsDisplayLimit < Math.min(displayEventLogs.length, 200)) {
+                                            setEventsDisplayLimit(prev => Math.min(prev + 50, 200));
+                                        }
+                                    }}
+                                >
+                                    <table className="min-w-full text-sm">
+                                        <thead className="bg-gray-50 text-gray-400 text-[10px] uppercase tracking-widest sticky top-0 z-10">
                                             <tr>
                                                 <th className="px-6 py-3 text-left">Data/Hora</th>
                                                 <th className="px-6 py-3 text-left">App</th>
@@ -5798,7 +6298,7 @@ const App: React.FC = () => {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-100">
-                                            {displayEventLogs.map(log => (
+                                            {pagedEventLogs.map(log => (
                                                 <tr key={log.id} className="hover:bg-gray-50/50">
                                                     <td className="px-6 py-3 text-xs font-bold text-gray-600 whitespace-nowrap">{log.created_at ? new Date(log.created_at).toLocaleString('pt-BR', { hour12: false }) : '-'}</td>
                                                     <td className="px-6 py-3 font-bold text-gray-800 whitespace-nowrap">{log.app}</td>
@@ -5821,15 +6321,276 @@ const App: React.FC = () => {
                                                     </td>
                                                 </tr>
                                             )}
+                                            {eventsDisplayLimit >= 200 && displayEventLogs.length >= 200 && (
+                                                <tr>
+                                                    <td colSpan={8} className="px-4 py-3 text-center text-[10px] font-black text-gray-300 uppercase tracking-widest bg-gray-50">
+                                                        Limite de 200 registros — use filtros para refinar
+                                                    </td>
+                                                </tr>
+                                            )}
                                         </tbody>
                                     </table>
                                 </div>
                             </div>
 
+                            {/* ====== EVENTOS POR FILIAL E DIA ====== */}
+                            {(() => {
+                                const todayStr = new Date().toLocaleDateString('pt-BR');
+
+                                // byBranchDay: Map<branch, Map<day, {count, errors, users}>>
+                                type DayData = { count: number; errors: number; users: Set<string> };
+                                const byBranchDay = new Map<string, Map<string, DayData>>();
+                                const allDaysSet = new Set<string>();
+
+                                filteredEventLogs.forEach(log => {
+                                    if (!log.created_at) return;
+                                    const branch = normalizeBranchLabel(log.branch);
+                                    const day = new Date(log.created_at).toLocaleDateString('pt-BR');
+                                    allDaysSet.add(day);
+                                    if (!byBranchDay.has(branch)) byBranchDay.set(branch, new Map());
+                                    const dayMap = byBranchDay.get(branch)!;
+                                    const cur = dayMap.get(day) || { count: 0, errors: 0, users: new Set<string>() };
+                                    cur.count += 1;
+                                    if (log.success === false) cur.errors += 1;
+                                    if (log.user_email) cur.users.add(log.user_email);
+                                    dayMap.set(day, cur);
+                                });
+
+                                // Dias ordenados: hoje primeiro, depois mais recentes
+                                const allDays = Array.from(allDaysSet).sort((a, b) => {
+                                    if (a === todayStr) return -1;
+                                    if (b === todayStr) return 1;
+                                    const [da, ma, ya] = a.split('/').map(Number);
+                                    const [db, mb, yb] = b.split('/').map(Number);
+                                    return new Date(yb, mb - 1, db).getTime() - new Date(ya, ma - 1, da).getTime();
+                                }).slice(0, 7); // máximo 7 dias visíveis
+
+                                // Branches ordenadas por total de eventos
+                                const branches = Array.from(byBranchDay.entries())
+                                    .map(([br, dm]) => ({ branch: br, total: Array.from(dm.values()).reduce((s, d) => s + d.count, 0) }))
+                                    .sort((a, b) => b.total - a.total);
+
+                                const maxInDay = Math.max(
+                                    ...Array.from(byBranchDay.values()).flatMap(dm => Array.from(dm.values()).map(d => d.count)), 1
+                                );
+
+                                if (branches.length === 0) return null;
+                                return (
+                                    <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden mt-6">
+                                        <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
+                                            <div>
+                                                <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest">Eventos por Filial e Dia</h3>
+                                                <p className="text-[10px] text-gray-400 mt-0.5">Hoje aparece sempre primeiro · máximo 7 dias · clique na filial para filtrar</p>
+                                            </div>
+                                            <span className="text-xs font-bold text-gray-400">{allDays.length} dia(s)</span>
+                                        </div>
+                                        <div className="overflow-x-auto">
+                                            <table className="min-w-full text-xs">
+                                                <thead>
+                                                    <tr className="bg-gray-50">
+                                                        <th className="px-4 py-3 text-left font-black text-gray-400 uppercase tracking-widest whitespace-nowrap w-32">Filial</th>
+                                                        {allDays.map(day => (
+                                                            <th key={day} className={`px-3 py-3 text-center font-black uppercase tracking-widest whitespace-nowrap ${day === todayStr ? 'text-indigo-600 bg-indigo-50' : 'text-gray-400'}`}>
+                                                                {day === todayStr ? '📅 Hoje' : day}
+                                                            </th>
+                                                        ))}
+                                                        <th className="px-4 py-3 text-right font-black text-gray-400 uppercase tracking-widest">Total</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-gray-50">
+                                                    {branches.map(({ branch, total }) => {
+                                                        const dm = byBranchDay.get(branch)!;
+                                                        const isFiltered = normalizeBranchLabel(logsBranchFilter).toUpperCase() === branch.toUpperCase();
+                                                        return (
+                                                            <tr
+                                                                key={branch}
+                                                                className={`cursor-pointer transition-colors ${isFiltered ? 'bg-blue-50' : 'hover:bg-gray-50/50'}`}
+                                                                onClick={() => setLogsBranchFilter(isFiltered ? 'all' : branch)}
+                                                                title={`Clique para filtrar: ${branch}`}
+                                                            >
+                                                                <td className="px-4 py-3 font-black text-gray-800 whitespace-nowrap">
+                                                                    {isFiltered && <span className="text-blue-500 mr-1">▸</span>}{branch}
+                                                                </td>
+                                                                {allDays.map(day => {
+                                                                    const d = dm.get(day);
+                                                                    const intensity = d ? Math.max(0.08, d.count / maxInDay) : 0;
+                                                                    const isToday = day === todayStr;
+                                                                    return (
+                                                                        <td key={day} className={`px-3 py-3 text-center ${isToday ? 'bg-indigo-50/50' : ''}`}>
+                                                                            {d ? (
+                                                                                <div className="flex flex-col items-center gap-0.5">
+                                                                                    <span
+                                                                                        className="font-black rounded-lg px-2 py-0.5 text-white text-[11px]"
+                                                                                        style={{ background: d.errors > 0 ? `rgba(239,68,68,${intensity})` : `rgba(99,102,241,${intensity})`, color: intensity > 0.4 ? '#fff' : d.errors > 0 ? '#dc2626' : '#4f46e5' }}
+                                                                                    >
+                                                                                        {d.count}
+                                                                                    </span>
+                                                                                    {d.errors > 0 && (
+                                                                                        <span className="text-[8px] font-black text-red-500">{d.errors}⚠</span>
+                                                                                    )}
+                                                                                </div>
+                                                                            ) : (
+                                                                                <span className="text-gray-200 text-[10px]">—</span>
+                                                                            )}
+                                                                        </td>
+                                                                    );
+                                                                })}
+                                                                <td className="px-4 py-3 text-right font-black text-indigo-600">{total}</td>
+                                                            </tr>
+                                                        );
+                                                    })}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
+                            {/* ====== UPLOADS E DOWNLOADS POR DIA ====== */}
+                            {(() => {
+                                // Taxa de Erros: eventos com success=false / total de eventos.
+                                // Indica quando ações do usuário falharam no sistema.
+                                // Upload = envio de arquivo ao banco (planilhas de venda/estoque/base global)
+                                // Download/Export = exportação de dados (CSV, ranking, etc.)
+                                const UPLOAD_TYPES = new Set([
+                                    'pv_sales_upload_success', 'pv_sales_upload_error',
+                                    'pv_inventory_upload_success', 'pv_inventory_upload_error',
+                                    'global_base_uploaded',
+                                ]);
+                                const DOWNLOAD_TYPES = new Set([
+                                    'pv_dashboard_downloaded', 'stock_conference_export_csv',
+                                    'checklist_printed', 'audit_term_printed', 'audit_report_printed',
+                                    'pv_analysis_printed', 'pv_dashboard_printed', 'pv_registration_printed',
+                                    'stock_conference_printed',
+                                ]);
+
+                                type FileOp = { date: string; uploads: number; uploadErrors: number; downloads: number; users: Set<string>; branches: Set<string> };
+                                const byDay = new Map<string, FileOp>();
+                                const todayStr = new Date().toLocaleDateString('pt-BR');
+
+                                // Varre TODOS os eventos (sem filtro de branch) para mostrar movimentação global
+                                appEventLogs.forEach(log => {
+                                    if (!log.created_at || !log.event_type) return;
+                                    const isUpload = UPLOAD_TYPES.has(log.event_type);
+                                    const isDownload = DOWNLOAD_TYPES.has(log.event_type);
+                                    if (!isUpload && !isDownload) return;
+                                    const day = new Date(log.created_at).toLocaleDateString('pt-BR');
+                                    const cur = byDay.get(day) || { date: day, uploads: 0, uploadErrors: 0, downloads: 0, users: new Set<string>(), branches: new Set<string>() };
+                                    if (isUpload) {
+                                        cur.uploads += 1;
+                                        if (log.success === false || log.event_type.includes('_error')) cur.uploadErrors += 1;
+                                    }
+                                    if (isDownload) cur.downloads += 1;
+                                    if (log.user_email) cur.users.add(log.user_email);
+                                    if (log.branch) cur.branches.add(normalizeBranchLabel(log.branch));
+                                    byDay.set(day, cur);
+                                });
+
+                                const days = Array.from(byDay.values()).sort((a, b) => {
+                                    if (a.date === todayStr) return -1;
+                                    if (b.date === todayStr) return 1;
+                                    const [da, ma, ya] = a.date.split('/').map(Number);
+                                    const [db, mb, yb] = b.date.split('/').map(Number);
+                                    return new Date(yb, mb - 1, db).getTime() - new Date(ya, ma - 1, da).getTime();
+                                });
+
+                                if (days.length === 0) return null;
+                                const maxUploads = Math.max(...days.map(d => d.uploads), 1);
+                                const maxDownloads = Math.max(...days.map(d => d.downloads), 1);
+
+                                // ── GASTO DE DADOS COM SERVIDOR (SUPABASE) ─────────────────────────
+                                // Leitura: tamanho real do JSON dos event_logs carregados nesta sessão
+                                const dbReadBytes = (() => {
+                                    try { return new Blob([JSON.stringify(appEventLogs)]).size; }
+                                    catch { return appEventLogs.length * 600; }
+                                })();
+                                // Escrita: soma do tamanho serializado de cada evento individualmente
+                                const dbWriteBytes = appEventLogs.reduce((acc, log) => {
+                                    try { return acc + new Blob([JSON.stringify(log)]).size; }
+                                    catch { return acc + 512; }
+                                }, 0);
+                                // Arquivos: bytes reais registrados em event_meta.file_size no momento do upload
+                                const fileUploadBytes = appEventLogs.reduce((acc, log) => {
+                                    if (!UPLOAD_TYPES.has(log.event_type || '')) return acc;
+                                    const meta = log.event_meta as Record<string, unknown> | null;
+                                    const sz = meta?.file_size ?? meta?.fileSize ?? meta?.size;
+                                    return acc + (typeof sz === 'number' && sz > 0 ? sz : 0);
+                                }, 0);
+
+                                return (
+                                    <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden mt-6">
+                                        <div className="px-6 py-4 border-b border-gray-100">
+                                            <div className="flex items-center justify-between">
+                                                <div>
+                                                    <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest">Uploads e Exportações por Dia</h3>
+                                                    <p className="text-[10px] text-gray-400 mt-0.5">
+                                                        <span className="text-emerald-600 font-bold">↑ Upload</span> = planilhas enviadas ao sistema (vendas, estoque, base global) ·&nbsp;
+                                                        <span className="text-indigo-600 font-bold">↓ Export</span> = relatórios gerados/impressos/exportados
+                                                    </p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-[9px] text-gray-400 font-bold">Total período</p>
+                                                    <p className="text-xs font-black text-emerald-600">{days.reduce((s, d) => s + d.uploads, 0)} uploads · <span className="text-indigo-600">{days.reduce((s, d) => s + d.downloads, 0)} exports</span></p>
+                                                </div>
+                                            </div>
+                                            {/* ── Cards de Gasto de Dados ── */}
+                                            <div className="grid grid-cols-3 gap-3 mt-4">
+                                                <div className="bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3">
+                                                    <p className="text-[9px] font-black uppercase tracking-widest text-blue-400 mb-1">📥 Leitura do BD</p>
+                                                    <p className="text-xl font-black text-blue-700">{formatFileSize(dbReadBytes)}</p>
+                                                    <p className="text-[9px] text-blue-400 font-semibold mt-0.5">{appEventLogs.length} registros carregados</p>
+                                                </div>
+                                                <div className="bg-amber-50 border border-amber-100 rounded-2xl px-4 py-3">
+                                                    <p className="text-[9px] font-black uppercase tracking-widest text-amber-500 mb-1">📤 Escrita no BD</p>
+                                                    <p className="text-xl font-black text-amber-700">{formatFileSize(dbWriteBytes)}</p>
+                                                    <p className="text-[9px] text-amber-400 font-semibold mt-0.5">estimativa por evento gravado</p>
+                                                </div>
+                                                <div className="bg-emerald-50 border border-emerald-100 rounded-2xl px-4 py-3">
+                                                    <p className="text-[9px] font-black uppercase tracking-widest text-emerald-500 mb-1">🗂 Arquivos Enviados</p>
+                                                    <p className="text-xl font-black text-emerald-700">{fileUploadBytes > 0 ? formatFileSize(fileUploadBytes) : '—'}</p>
+                                                    <p className="text-[9px] text-emerald-400 font-semibold mt-0.5">{fileUploadBytes > 0 ? 'tamanho real dos uploads' : 'sem meta de tamanho'}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="p-5 space-y-2 overflow-y-auto" style={{ maxHeight: 320 }}>
+                                            {days.map(day => (
+                                                <div key={day.date} className={`rounded-xl border px-4 py-3 ${day.date === todayStr ? 'border-indigo-100 bg-indigo-50/40' : 'border-gray-100'}`}>
+                                                    <div className="flex items-center justify-between mb-2">
+                                                        <div className="flex items-center gap-2">
+                                                            <span className={`text-[11px] font-black ${day.date === todayStr ? 'text-indigo-600' : 'text-gray-600'}`}>
+                                                                {day.date === todayStr ? '📅 Hoje' : day.date}
+                                                            </span>
+                                                            <span className="text-[9px] text-gray-400">{day.users.size} usr · {day.branches.size} filial(is)</span>
+                                                        </div>
+                                                        <div className="flex items-center gap-3">
+                                                            <span className="text-[11px] font-black text-emerald-600">↑ {day.uploads}</span>
+                                                            {day.uploadErrors > 0 && <span className="text-[9px] font-black text-red-500 bg-red-50 px-1.5 py-0.5 rounded">{day.uploadErrors} falha(s)</span>}
+                                                            <span className="text-[11px] font-black text-indigo-600">↓ {day.downloads}</span>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex gap-1.5">
+                                                        <div className="flex-1">
+                                                            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                                                                <div className="h-full rounded-full bg-emerald-400 transition-all" style={{ width: `${(day.uploads / maxUploads) * 100}%` }} />
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex-1">
+                                                            <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                                                                <div className="h-full rounded-full bg-indigo-400 transition-all" style={{ width: `${(day.downloads / maxDownloads) * 100}%` }} />
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                );
+                            })()}
+
                             <div className="bg-white rounded-3xl border border-gray-100 shadow-sm overflow-hidden">
                                 <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between">
                                     <h3 className="text-sm font-black text-gray-800 uppercase tracking-widest">Atividade por Usuário</h3>
-                                    <span className="text-xs font-bold text-gray-400">{userActivityStats.length} usuários</span>
+                                    <span className="text-xs font-bold text-gray-400">{userActivityStats.length} usuários · mais ativos primeiro</span>
                                 </div>
                                 <div className="overflow-x-auto">
                                     <table className="min-w-full text-sm">
@@ -5837,6 +6598,7 @@ const App: React.FC = () => {
                                             <tr>
                                                 <th className="px-6 py-3 text-left">Usuário</th>
                                                 <th className="px-6 py-3 text-left">Filial</th>
+                                                <th className="px-4 py-3 text-right">Eventos</th>
                                                 <th className="px-6 py-3 text-left">Dias Ativos (30d)</th>
                                                 <th className="px-6 py-3 text-left">Tempo Ativo</th>
                                                 <th className="px-6 py-3 text-left">Última Atividade</th>
@@ -5844,15 +6606,19 @@ const App: React.FC = () => {
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-100">
-                                            {userActivityStats.map(user => (
-                                                <tr key={user.email} className="hover:bg-gray-50/50">
+                                            {userActivityStats.map((user, idx) => (
+                                                <tr key={user.email} className={`hover:bg-gray-50/50 ${idx === 0 ? 'bg-emerald-50/30' : ''}`}>
                                                     <td className="px-6 py-3">
-                                                        <div className="flex flex-col">
-                                                            <span className="font-bold text-gray-800 whitespace-nowrap">{user.name}</span>
-                                                            <span className="text-[10px] text-gray-400 font-bold whitespace-nowrap">{user.email}</span>
+                                                        <div className="flex items-center gap-2">
+                                                            {idx === 0 && <span className="text-[10px] text-emerald-600 font-black bg-emerald-100 px-1.5 py-0.5 rounded-md">🏆</span>}
+                                                            <div className="flex flex-col">
+                                                                <span className="font-bold text-gray-800 whitespace-nowrap">{user.name}</span>
+                                                                <span className="text-[10px] text-gray-400 font-bold whitespace-nowrap">{user.email}</span>
+                                                            </div>
                                                         </div>
                                                     </td>
                                                     <td className="px-6 py-3 text-gray-600 whitespace-nowrap">{user.filial}</td>
+                                                    <td className="px-4 py-3 text-right font-black text-indigo-600">{user.eventCount || 0}</td>
                                                     <td className="px-6 py-3 font-bold text-slate-700 whitespace-nowrap">{user.activeDays}</td>
                                                     <td className="px-6 py-3 text-gray-600 whitespace-nowrap">{formatDurationMs(user.durationMs) || '00:00'}</td>
                                                     <td className="px-6 py-3 text-gray-600 whitespace-nowrap">
@@ -7404,7 +8170,14 @@ const App: React.FC = () => {
                     {/* --- HISTORY LIST VIEW --- */}
                     {currentView === 'history' && (
                         <div className="max-w-6xl mx-auto flex flex-col gap-10 animate-fade-in pb-24">
-                            <div className="flex justify-end">
+                            <div className="flex items-center gap-3 justify-end">
+                                {lastHistoryCacheAt && !isReloadingReports && (
+                                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                                        sincronizado {Math.floor((Date.now() - lastHistoryCacheAt.getTime()) / 60000) === 0
+                                            ? 'agora mesmo'
+                                            : `há ${Math.floor((Date.now() - lastHistoryCacheAt.getTime()) / 60000)} min`}
+                                    </span>
+                                )}
                                 <button
                                     onClick={handleReloadReports}
                                     disabled={isReloadingReports}
@@ -7418,7 +8191,7 @@ const App: React.FC = () => {
                                     ) : (
                                         <RefreshCw size={20} className="group-hover:rotate-180 transition-transform duration-700" />
                                     )}
-                                    <span className="relative z-10">{isReloadingReports ? 'SINCRONIZANDO...' : 'ATUALIZAR DADOS'}</span>
+                                    <span className="relative z-10">{isReloadingReports ? 'VERIFICANDO...' : 'VERIFICAR ATUALIZAÇÕES'}</span>
                                     {!isReloadingReports && (
                                         <div className="absolute inset-0 bg-gradient-to-r from-blue-500/5 to-purple-500/5 opacity-0 group-hover:opacity-100 transition-opacity" />
                                     )}
@@ -7467,7 +8240,7 @@ const App: React.FC = () => {
                                                         onChange={(e) => setHistoryAreaFilter(e.target.value)}
                                                         className="w-full bg-white border border-gray-200 rounded-2xl pl-12 pr-10 py-4 outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all font-bold text-gray-700 flex appearance-none cursor-pointer shadow-sm"
                                                     >
-                                                    <option value="all">Todas as Áreas / Setores</option>
+                                                        <option value="all">Todas as Áreas / Setores</option>
                                                         {Array.from(new Set(reportHistory.map(r => r.area))).filter(Boolean).sort().map(area => (
                                                             <option key={area} value={area}>{area}</option>
                                                         ))}
@@ -7624,6 +8397,40 @@ const App: React.FC = () => {
                                                 </tbody>
                                             </table>
                                         </div>
+
+                                        <div className="mt-12 flex flex-col items-center gap-4 border-t border-gray-100/50 pt-12 pb-6">
+                                            {hasMoreReports ? (
+                                                <button
+                                                    onClick={handleLoadMoreReports}
+                                                    disabled={isLoadingMore}
+                                                    className={`group relative flex items-center justify-center gap-4 px-12 py-4.5 rounded-[22px] font-black text-white transition-all active:scale-95 shadow-xl hover:shadow-2xl overflow-hidden ${isLoadingMore ? 'bg-gray-400 cursor-wait' : 'bg-gradient-to-br from-indigo-600 via-blue-600 to-indigo-700 hover:scale-[1.02] active:brightness-90'
+                                                        }`}
+                                                >
+                                                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:animate-[shimmer_2s_infinite] pointer-events-none" />
+                                                    {isLoadingMore ? (
+                                                        <Loader2 size={20} className="animate-spin" />
+                                                    ) : (
+                                                        <ChevronDown size={20} className="group-hover:translate-y-1 transition-transform" />
+                                                    )}
+                                                    <span className="tracking-widest uppercase text-xs">
+                                                        {isLoadingMore ? 'Carregando...' : 'Carregar Mais Avaliações'}
+                                                    </span>
+                                                </button>
+                                            ) : (
+                                                reportHistory.length > 0 && (
+                                                    <div className="flex flex-col items-center gap-2 text-gray-400 group">
+                                                        <div className="w-8 h-0.5 bg-gray-100 rounded-full group-hover:w-16 transition-all duration-700" />
+                                                        <span className="font-black text-[9px] uppercase tracking-[0.3em]">Fim do Histórico</span>
+                                                    </div>
+                                                )
+                                            )}
+
+                                            {reportHistory.length > 0 && (
+                                                <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest opacity-60">
+                                                    Mostrando {reportHistory.length} avaliações
+                                                </p>
+                                            )}
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -7631,129 +8438,148 @@ const App: React.FC = () => {
                             <div className="order-1 bg-white/90 backdrop-blur-xl rounded-[40px] shadow-card border border-white/60 overflow-hidden">
                                 <div className={`h-1.5 w-full bg-gradient-to-r ${currentTheme.bgGradient}`} />
                                 <div className="p-8">
-                                <div className="flex items-center justify-between mb-6">
-                                    <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">
-                                        <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
-                                            <Package size={24} className={currentTheme.text} />
-                                        </div>
-                                        Histórico de Conferências de Estoque
-                                    </h2>
-                                </div>
-                                {stockConferenceHistory.length === 0 ? (
-                                    <div className="text-center py-12 text-sm text-gray-500">
-                                        Nenhuma conferência de estoque registrada ainda.
+                                    <div className="flex items-center justify-between mb-6">
+                                        <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">
+                                            <div className={`p-2 rounded-lg ${currentTheme.lightBg}`}>
+                                                <Package size={24} className={currentTheme.text} />
+                                            </div>
+                                            Histórico de Conferências de Estoque
+                                        </h2>
                                     </div>
-                                ) : (
-                                    <div className="space-y-4">
-                                        <div className="space-y-4 border-b border-gray-100 pb-4">
-                                            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-                                                <div className="flex items-center gap-2 text-sm text-gray-600">
-                                                    <Filter size={16} className="text-gray-400" />
-                                                    <span className="font-semibold text-gray-700">Filtrar conferências</span>
-                                                </div>
-                                                <div className="text-xs text-gray-500">
-                                                    Mostrando {filteredStockConferenceHistory.length} de {stockConferenceHistory.length} conferência(s)
-                                                </div>
-                                            </div>
-                                            <div className="space-y-2">
-                                                <div className="text-[10px] uppercase tracking-widest text-gray-400">Filiais</div>
-                                                <div className="flex flex-wrap gap-2">
-                                                    {stockConferenceBranchOptions.map(option => (
-                                                        <button
-                                                            key={option.key}
-                                                            type="button"
-                                                            onClick={() => toggleStockBranchFilter(option.key)}
-                                                            className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${stockBranchFilters.includes(option.key) ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-gray-50 border-gray-200 text-gray-600'}`}
-                                                        >
-                                                            {option.label}
-                                                        </button>
-                                                    ))}
-                                                    {stockBranchFilters.length > 0 && (
-                                                        <button
-                                                            type="button"
-                                                            onClick={handleResetStockBranchFilters}
-                                                            className="px-3 py-1.5 rounded-full border border-gray-200 bg-white text-xs text-gray-500 hover:bg-gray-50 transition"
-                                                        >
-                                                            Limpar
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                                                <span className="text-[10px] uppercase tracking-widest text-gray-400">Área</span>
-                                                <select
-                                                    value={stockAreaFilter}
-                                                    onChange={(e) => handleStockAreaFilterChange(e.target.value)}
-                                                    className="ml-0 w-full max-w-xs text-sm rounded-xl border border-gray-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                                                >
-                                                    <option value="all">Todas as Áreas</option>
-                                                    {stockConferenceAreaOptions.map(option => (
-                                                        <option key={option.key} value={option.key}>{option.label}</option>
-                                                    ))}
-                                                </select>
-                                            </div>
+                                    {stockConferenceHistory.length === 0 ? (
+                                        <div className="text-center py-12 text-sm text-gray-500">
+                                            Nenhuma conferência de estoque registrada ainda.
                                         </div>
-                                        {filteredStockConferenceHistory.length === 0 ? (
-                                            <div className="text-center py-12 text-sm text-gray-500">
-                                                Nenhuma conferência de estoque encontrada com os filtros aplicados.
-                                            </div>
-                                        ) : (
-                                            <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white">
-                                                <div className="max-h-[780px] overflow-auto">
-                                                    <table className="w-full min-w-[980px] text-left">
-                                                        <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-100">
-                                                            <tr>
-                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Data/Hora</th>
-                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Filial</th>
-                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Área</th>
-                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400 text-center">Total</th>
-                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-green-600 text-center">Corretos</th>
-                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-red-500 text-center">Diverg.</th>
-                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Responsável</th>
-                                                                <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400 text-right">Ação</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody className="divide-y divide-gray-100">
-                                                            {filteredStockConferenceHistory.map(item => {
-                                                                const createdDate = new Date(item.createdAt);
-                                                                return (
-                                                                    <tr key={item.id} className="hover:bg-blue-50/30 transition-colors">
-                                                                        <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
-                                                                            {createdDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })} {createdDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
-                                                                        </td>
-                                                                        <td className="px-4 py-3 text-sm font-bold text-gray-800 whitespace-nowrap">{item.branch}</td>
-                                                                        <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{item.area}</td>
-                                                                        <td className="px-4 py-3 text-sm font-bold text-gray-700 text-center">{item.total}</td>
-                                                                        <td className="px-4 py-3 text-sm font-bold text-green-700 text-center">{item.matched}</td>
-                                                                        <td className="px-4 py-3 text-sm font-bold text-red-600 text-center">{item.divergent}</td>
-                                                                        <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{item.userName}</td>
-                                                                        <td className="px-4 py-3 text-right">
-                                                                            <button
-                                                                                onClick={() => handleViewStockConferenceReport(item.id)}
-                                                                                disabled={loadingStockReportId === item.id}
-                                                                                className="inline-flex items-center gap-2 rounded-xl px-3 py-2 bg-blue-600 text-white text-xs font-bold shadow hover:bg-blue-700 transition disabled:opacity-50 whitespace-nowrap"
-                                                                            >
-                                                                                {loadingStockReportId === item.id ? (
-                                                                                    <Loader2 size={14} className="animate-spin" />
-                                                                                ) : (
-                                                                                    <FileText size={14} />
-                                                                                )}
-                                                                                {loadingStockReportId === item.id ? 'Carregando...' : 'Ver Conferência'}
-                                                                            </button>
-                                                                        </td>
-                                                                    </tr>
-                                                                );
-                                                            })}
-                                                        </tbody>
-                                                    </table>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            <div className="space-y-4 border-b border-gray-100 pb-4">
+                                                <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+                                                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                                                        <Filter size={16} className="text-gray-400" />
+                                                        <span className="font-semibold text-gray-700">Filtrar conferências</span>
+                                                    </div>
+                                                    <div className="text-xs text-gray-500">
+                                                        Mostrando {filteredStockConferenceHistory.length} de {stockConferenceHistory.length} conferência(s)
+                                                    </div>
                                                 </div>
-                                                <div className="px-4 py-2 border-t border-gray-100 text-[11px] text-gray-500 bg-gray-50">
-                                                    Exibindo até 15+ por rolagem interna.
+                                                <div className="space-y-2">
+                                                    <div className="text-[10px] uppercase tracking-widest text-gray-400">Filiais</div>
+                                                    <div className="flex flex-wrap gap-2">
+                                                        {stockConferenceBranchOptions.map(option => (
+                                                            <button
+                                                                key={option.key}
+                                                                type="button"
+                                                                onClick={() => toggleStockBranchFilter(option.key)}
+                                                                className={`px-3 py-1.5 rounded-full text-xs font-semibold border transition ${stockBranchFilters.includes(option.key) ? 'bg-blue-50 border-blue-200 text-blue-700' : 'bg-gray-50 border-gray-200 text-gray-600'}`}
+                                                            >
+                                                                {option.label}
+                                                            </button>
+                                                        ))}
+                                                        {stockBranchFilters.length > 0 && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={handleResetStockBranchFilters}
+                                                                className="px-3 py-1.5 rounded-full border border-gray-200 bg-white text-xs text-gray-500 hover:bg-gray-50 transition"
+                                                            >
+                                                                Limpar
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                                    <span className="text-[10px] uppercase tracking-widest text-gray-400">Área</span>
+                                                    <select
+                                                        value={stockAreaFilter}
+                                                        onChange={(e) => handleStockAreaFilterChange(e.target.value)}
+                                                        className="ml-0 w-full max-w-xs text-sm rounded-xl border border-gray-200 bg-white px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                    >
+                                                        <option value="all">Todas as Áreas</option>
+                                                        {stockConferenceAreaOptions.map(option => (
+                                                            <option key={option.key} value={option.key}>{option.label}</option>
+                                                        ))}
+                                                    </select>
                                                 </div>
                                             </div>
-                                        )}
-                                    </div>
-                                )}
+                                            {filteredStockConferenceHistory.length === 0 ? (
+                                                <div className="text-center py-12 text-sm text-gray-500">
+                                                    Nenhuma conferência de estoque encontrada com os filtros aplicados.
+                                                </div>
+                                            ) : (
+                                                <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white">
+                                                    <div className="max-h-[780px] overflow-auto">
+                                                        <table className="w-full min-w-[980px] text-left">
+                                                            <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-100">
+                                                                <tr>
+                                                                    <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Data/Hora</th>
+                                                                    <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Filial</th>
+                                                                    <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Área</th>
+                                                                    <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400 text-center">Total</th>
+                                                                    <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-green-600 text-center">Corretos</th>
+                                                                    <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-red-500 text-center">Diverg.</th>
+                                                                    <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400">Responsável</th>
+                                                                    <th className="px-4 py-3 text-[10px] font-black uppercase tracking-widest text-gray-400 text-right">Ação</th>
+                                                                </tr>
+                                                            </thead>
+                                                            <tbody className="divide-y divide-gray-100">
+                                                                {filteredStockConferenceHistory.map(item => {
+                                                                    const createdDate = new Date(item.createdAt);
+                                                                    return (
+                                                                        <tr key={item.id} className="hover:bg-blue-50/30 transition-colors">
+                                                                            <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
+                                                                                {createdDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })} {createdDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                                            </td>
+                                                                            <td className="px-4 py-3 text-sm font-bold text-gray-800 whitespace-nowrap">{item.branch}</td>
+                                                                            <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{item.area}</td>
+                                                                            <td className="px-4 py-3 text-sm font-bold text-gray-700 text-center">{item.total}</td>
+                                                                            <td className="px-4 py-3 text-sm font-bold text-green-700 text-center">{item.matched}</td>
+                                                                            <td className="px-4 py-3 text-sm font-bold text-red-600 text-center">{item.divergent}</td>
+                                                                            <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">{item.userName}</td>
+                                                                            <td className="px-4 py-3 text-right">
+                                                                                <button
+                                                                                    onClick={() => handleViewStockConferenceReport(item.id)}
+                                                                                    disabled={loadingStockReportId === item.id}
+                                                                                    className="inline-flex items-center gap-2 rounded-xl px-3 py-2 bg-blue-600 text-white text-xs font-bold shadow hover:bg-blue-700 transition disabled:opacity-50 whitespace-nowrap"
+                                                                                >
+                                                                                    {loadingStockReportId === item.id ? (
+                                                                                        <Loader2 size={14} className="animate-spin" />
+                                                                                    ) : (
+                                                                                        <FileText size={14} />
+                                                                                    )}
+                                                                                    {loadingStockReportId === item.id ? 'Carregando...' : 'Ver Conferência'}
+                                                                                </button>
+                                                                            </td>
+                                                                        </tr>
+                                                                    );
+                                                                })}
+                                                            </tbody>
+                                                        </table>
+                                                    </div>
+                                                    <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 flex items-center justify-between">
+                                                        <span className="text-[11px] text-gray-500">
+                                                            {stockConferenceHistory.length} conferência(s) carregada(s)
+                                                        </span>
+                                                        {hasMoreStockConferences && (
+                                                            <button
+                                                                onClick={handleLoadMoreStockConferences}
+                                                                disabled={isLoadingMoreStock}
+                                                                className="flex items-center gap-2 px-5 py-2.5 rounded-xl font-black text-xs text-white transition-all active:scale-95 disabled:opacity-50 shadow-md"
+                                                                style={{ background: 'linear-gradient(135deg, #f97316, #ef4444)' }}
+                                                            >
+                                                                {isLoadingMoreStock ? (
+                                                                    <><Loader2 size={14} className="animate-spin" /> Carregando...</>
+                                                                ) : (
+                                                                    <><ChevronDown size={14} /> CARREGAR MAIS</>
+                                                                )}
+                                                            </button>
+                                                        )}
+                                                        {!hasMoreStockConferences && stockConferenceHistory.length > 0 && (
+                                                            <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">Fim do histórico</span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         </div>

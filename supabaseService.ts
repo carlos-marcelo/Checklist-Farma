@@ -141,6 +141,18 @@ export interface DbPVSalesHistory {
   finalized_at?: string;
 }
 
+export interface DbActiveSession {
+  client_id: string;
+  user_email: string;
+  user_name: string | null;
+  branch: string | null;
+  area: string | null;
+  current_view: string | null;
+  last_ping: string;
+  command: 'FORCE_LOGOUT' | 'RELOAD' | null;
+  updated_at: string;
+}
+
 export type DbPVSalesUpload = SalesUploadRecord;
 
 export interface DbPVInventoryReport {
@@ -312,6 +324,7 @@ export interface DbDraft {
   ignored_checklists?: any;
   updated_at?: string;
 }
+
 
 // ==================== USERS ====================
 
@@ -575,6 +588,7 @@ export async function fetchReportsSummary(page: number = 0, pageSize: number = 2
     const { data, error } = await supabase
       .from('reports')
       .select('id, user_email, user_name, pharmacy_name, score, created_at, form_data')
+      .order('created_at', { ascending: false })
       .range(from, to);
 
     if (error) throw error;
@@ -688,6 +702,24 @@ export async function fetchStockConferenceReportsSummaryAll(pageSize: number = 2
   } catch (error) {
     console.error('Error fetching stock conference reports summary (all):', error);
     return all;
+  }
+}
+
+// Paginated version: load page by page (lighter)
+export async function fetchStockConferenceReportsSummaryPage(page: number = 0, pageSize: number = 20): Promise<Partial<DbStockConferenceReport>[]> {
+  try {
+    const from = page * pageSize;
+    const to = from + pageSize - 1;
+    const { data, error } = await supabase
+      .from('stock_conference_reports')
+      .select('id, user_email, user_name, branch, area, created_at, pharmacist, manager, summary')
+      .order('created_at', { ascending: false })
+      .range(from, to);
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching stock conference reports summary page:', error);
+    return [];
   }
 }
 
@@ -2307,4 +2339,69 @@ export function exportLocalStorageBackup() {
   a.download = `backup-checklist-${new Date().toISOString().split('T')[0]}.json`;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// --- ACTIVE SESSIONS & COMMANDS ---
+
+export async function upsertActiveSession(session: Partial<DbActiveSession>): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('active_sessions')
+      .upsert([session], { onConflict: 'client_id' });
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error upserting active session:', error);
+    return false;
+  }
+}
+
+export async function fetchActiveSessions(): Promise<DbActiveSession[]> {
+  try {
+    // Buscar sessões que deram ping nos últimos 5 minutos
+    const fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+
+    const { data, error } = await supabase
+      .from('active_sessions')
+      .select('*')
+      .gt('last_ping', fiveMinutesAgo)
+      .order('last_ping', { ascending: false });
+
+    if (error) throw error;
+    return data || [];
+  } catch (error) {
+    console.error('Error fetching active sessions:', error);
+    return [];
+  }
+}
+
+export async function sendSessionCommand(clientId: string, command: 'FORCE_LOGOUT' | 'RELOAD' | null): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('active_sessions')
+      .update({ command, updated_at: new Date().toISOString() })
+      .eq('client_id', clientId);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error sending session command:', error);
+    return false;
+  }
+}
+
+export async function deleteActiveSession(clientId: string): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('active_sessions')
+      .delete()
+      .eq('client_id', clientId);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error deleting active session:', error);
+    return false;
+  }
 }
