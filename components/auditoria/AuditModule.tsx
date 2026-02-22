@@ -13,9 +13,9 @@ import {
 import {
     fetchLatestAudit,
     upsertAuditSession,
-    insertAppEventLog,
-    fetchGlobalBaseFiles
+    insertAppEventLog
 } from '../../supabaseService';
+import { CadastrosBaseService } from '../../src/cadastrosBase/cadastrosBaseService';
 import type { DbGlobalBaseFile } from '../../supabaseService';
 import ProgressBar from './ProgressBar';
 import Breadcrumbs from './Breadcrumbs';
@@ -85,6 +85,8 @@ const createInitialGroupMeta = (): Record<GroupUploadId, DbGlobalBaseFile | null
 });
 
 const decodeGlobalFileToBrowserFile = (file: DbGlobalBaseFile): File | null => {
+    if ((file as any)._parsedFile) return (file as any)._parsedFile;
+
     const raw = String(file?.file_data_base64 || '').trim();
     if (!raw) return null;
 
@@ -546,10 +548,23 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const loadGlobalAuditBases = async () => {
             setIsLoadingGlobalBases(true);
             try {
-                const files = await fetchGlobalBaseFiles(companyId);
+                const keysToFetch = [
+                    ...GROUP_UPLOAD_IDS.map(groupId => GROUP_GLOBAL_BASE_KEYS[groupId]),
+                    AUDIT_DEPT_IDS_GLOBAL_KEY,
+                    AUDIT_CAT_IDS_GLOBAL_KEY
+                ];
+                const files = [];
+                for (const key of keysToFetch) {
+                    if (cancelled) break;
+                    const file = await CadastrosBaseService.getGlobalBaseFileCached(companyId, key);
+                    files.push(file);
+                }
                 if (cancelled) return;
 
-                const byKey = new Map(files.map(file => [file.module_key, file]));
+                const byKey = new Map();
+                files.forEach(file => {
+                    if (file) byKey.set(file.module_key, file);
+                });
                 const nextGroupFiles = createInitialGroupFiles();
                 const nextGroupMeta = createInitialGroupMeta();
 

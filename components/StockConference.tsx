@@ -1,12 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
-  Upload,
-  FileText,
-  Barcode,
   CheckCircle,
   AlertTriangle,
-  ArrowRight,
-  Package,
+  Play,
   RotateCcw,
   Download,
   Search,
@@ -29,10 +25,19 @@ import {
   Building,
   PenTool,
   X,
-  Pill
+  Pill,
+  ArrowRight,
+  Save,
+  LayoutDashboard,
+  Clock,
+  FileText,
+  ChevronRight,
+  Barcode,
+  Package
 } from 'lucide-react';
 import SignaturePad from './SignaturePad';
 import * as SupabaseService from '../supabaseService';
+import { CadastrosBaseService } from '../src/cadastrosBase/cadastrosBaseService';
 
 const LOCAL_STOCK_SESSION_PREFIX = 'STOCK_SESSION_';
 const buildLocalSessionKey = (email: string) => `${LOCAL_STOCK_SESSION_PREFIX}${email}`;
@@ -157,6 +162,8 @@ type StockSummaryPayload = {
 const GLOBAL_CADASTRO_MODULE_KEY = 'shared_cadastro_produtos';
 
 const decodeGlobalFileToBrowserFile = (file: SupabaseService.DbGlobalBaseFile): File | null => {
+  if ((file as any)._parsedFile) return (file as any)._parsedFile;
+
   const raw = String(file?.file_data_base64 || '').trim();
   if (!raw) return null;
 
@@ -1236,21 +1243,21 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     const durationMs = sessionStartTime ? Math.max(0, finalizedAt.getTime() - sessionStartTime) : 0;
 
     const summary = {
-        total: allItems.length,
-        matched,
-        divergent,
-        pending,
-        percent: stats.percent,
-        duration_ms: durationMs,
-        durationMs,
-        started_at: startTimestamp,
-        startedAt: startTimestamp,
-        ended_at: endTimestamp,
-        endedAt: endTimestamp,
-        signatures: {
-          pharmacist: pharmSignature,
-          manager: managerSignature
-        }
+      total: allItems.length,
+      matched,
+      divergent,
+      pending,
+      percent: stats.percent,
+      duration_ms: durationMs,
+      durationMs,
+      started_at: startTimestamp,
+      startedAt: startTimestamp,
+      ended_at: endTimestamp,
+      endedAt: endTimestamp,
+      signatures: {
+        pharmacist: pharmSignature,
+        manager: managerSignature
+      }
     };
 
     const inventorySnapshot = allItems.map(item => {
@@ -1279,33 +1286,33 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     };
 
     setIsSavingStockReport(true);
-      try {
-        const saved = await SupabaseService.createStockConferenceReport(payload);
-        if (saved) {
-          setLastSavedReportId(saved.id || null);
-          setLastSavedSummary(summary);
-          if (onReportSaved) {
-            await onReportSaved();
-          }
-          if (userEmail) {
-            SupabaseService.insertAppEventLog({
-              company_id: selectedCompanyId || null,
-              branch: branch || null,
-              area: selectedAreaName || null,
-              user_email: userEmail,
-              user_name: userName || null,
-              app: 'conferencia',
-              event_type: 'stock_conference_finished',
-              entity_type: 'stock_report',
-              entity_id: saved.id || null,
-              status: 'success',
-              success: true,
-              source: 'web',
-              event_meta: { total: summary.total, matched: summary.matched, divergent: summary.divergent }
-            }).catch(() => { });
-          }
+    try {
+      const saved = await SupabaseService.createStockConferenceReport(payload);
+      if (saved) {
+        setLastSavedReportId(saved.id || null);
+        setLastSavedSummary(summary);
+        if (onReportSaved) {
+          await onReportSaved();
         }
-      } catch (error) {
+        if (userEmail) {
+          SupabaseService.insertAppEventLog({
+            company_id: selectedCompanyId || null,
+            branch: branch || null,
+            area: selectedAreaName || null,
+            user_email: userEmail,
+            user_name: userName || null,
+            app: 'conferencia',
+            event_type: 'stock_conference_finished',
+            entity_type: 'stock_report',
+            entity_id: saved.id || null,
+            status: 'success',
+            success: true,
+            source: 'web',
+            event_meta: { total: summary.total, matched: summary.matched, divergent: summary.divergent }
+          }).catch(() => { });
+        }
+      }
+    } catch (error) {
       console.error('Erro ao salvar conferência de estoque:', error);
       alert('Não foi possível salvar o relatório no Supabase. O resultado será exibido localmente.');
     } finally {
@@ -1368,9 +1375,8 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     const loadGlobalCadastro = async () => {
       setIsLoadingGlobalProduct(true);
       try {
-        const files = await SupabaseService.fetchGlobalBaseFiles(selectedCompanyId);
+        const globalCadastro = await CadastrosBaseService.getGlobalBaseFileCached(selectedCompanyId, GLOBAL_CADASTRO_MODULE_KEY);
         if (cancelled) return;
-        const globalCadastro = files.find(file => file.module_key === GLOBAL_CADASTRO_MODULE_KEY) || null;
         setGlobalProductMeta(globalCadastro);
         if (globalCadastro) {
           const decoded = decodeGlobalFileToBrowserFile(globalCadastro);
@@ -1412,63 +1418,63 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
         <p className="text-gray-500">Informe os dados e importe os arquivos para iniciar.</p>
       </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 w-full mb-8">
-          <h3 className="font-semibold text-gray-700 mb-4 flex items-center border-b pb-2">
-            <User className="w-5 h-5 mr-2 text-blue-500" />
-            Responsáveis pela Conferência
-          </h3>
-          <div className="space-y-4">
+      <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 w-full mb-8">
+        <h3 className="font-semibold text-gray-700 mb-4 flex items-center border-b pb-2">
+          <User className="w-5 h-5 mr-2 text-blue-500" />
+          Responsáveis pela Conferência
+        </h3>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Empresa</label>
+            <select
+              value={selectedCompanyId}
+              onChange={(e) => {
+                const companyId = e.target.value;
+                setSelectedCompanyId(companyId);
+                setProductFile(null);
+                setBranch('');
+                setSelectedAreaName('');
+              }}
+              className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring focus:ring-blue-100 outline-none bg-white text-gray-900 transition-all"
+            >
+              <option value="">-- Selecione uma empresa --</option>
+              {companies.map(company => (
+                <option key={company.id} value={company.id}>{company.name}</option>
+              ))}
+            </select>
+            <p className="text-xs text-gray-400 mt-1">Selecione a empresa para carregar as filiais cadastradas.</p>
+          </div>
+          {selectedCompanyId && branchOptions.length > 0 && (
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Empresa</label>
+              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Filial</label>
               <select
-                value={selectedCompanyId}
-                onChange={(e) => {
-                  const companyId = e.target.value;
-                  setSelectedCompanyId(companyId);
-                  setProductFile(null);
-                  setBranch('');
-                  setSelectedAreaName('');
-                }}
+                value={branchOptions.some(opt => opt.branch === branch) ? branch : ''}
+                onChange={(e) => handleBranchValueChange(e.target.value)}
                 className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring focus:ring-blue-100 outline-none bg-white text-gray-900 transition-all"
               >
-                <option value="">-- Selecione uma empresa --</option>
-                {companies.map(company => (
-                  <option key={company.id} value={company.id}>{company.name}</option>
+                <option value="">-- Escolha uma filial --</option>
+                {branchOptions.map(option => (
+                  <option key={option.branch} value={option.branch}>
+                    {option.branch}
+                  </option>
                 ))}
               </select>
-              <p className="text-xs text-gray-400 mt-1">Selecione a empresa para carregar as filiais cadastradas.</p>
             </div>
-            {selectedCompanyId && branchOptions.length > 0 && (
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Filial</label>
-                <select
-                  value={branchOptions.some(opt => opt.branch === branch) ? branch : ''}
-                  onChange={(e) => handleBranchValueChange(e.target.value)}
-                  className="w-full border border-gray-300 rounded-lg p-3 text-sm focus:ring focus:ring-blue-100 outline-none bg-white text-gray-900 transition-all"
-                >
-                  <option value="">-- Escolha uma filial --</option>
-                  {branchOptions.map(option => (
-                    <option key={option.branch} value={option.branch}>
-                      {option.branch}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+          )}
+          <div>
+            <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Área</label>
+            <input
+              type="text"
+              value={selectedAreaName}
+              disabled
+              placeholder="Selecione uma filial para preencher a área automaticamente"
+              className="w-full border border-gray-300 rounded-lg p-3 text-sm bg-gray-100 text-gray-500 cursor-not-allowed"
+            />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Área</label>
-              <input
-                type="text"
-                value={selectedAreaName}
-                disabled
-                placeholder="Selecione uma filial para preencher a área automaticamente"
-                className="w-full border border-gray-300 rounded-lg p-3 text-sm bg-gray-100 text-gray-500 cursor-not-allowed"
-              />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Farmacêutico(a)</label>
-                <div className="relative">
+              <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Farmacêutico(a)</label>
+              <div className="relative">
                 <User className="absolute left-3 top-3 text-gray-400 w-5 h-5" />
                 <input
                   type="text"

@@ -1663,6 +1663,38 @@ export async function fetchGlobalBaseFiles(companyId: string): Promise<DbGlobalB
   }
 }
 
+export async function fetchGlobalBaseFileMeta(companyId: string, moduleKey: string): Promise<Partial<DbGlobalBaseFile> | null> {
+  try {
+    const { data, error } = await supabase
+      .from('global_base_files')
+      .select('id, company_id, module_key, file_name, file_size, uploaded_by, uploaded_at, updated_at')
+      .eq('company_id', companyId)
+      .eq('module_key', moduleKey)
+      .single();
+    if (error && error.code !== 'PGRST116') throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error fetching global base file metadata:', error);
+    return null;
+  }
+}
+
+export async function fetchGlobalBaseFileFull(companyId: string, moduleKey: string): Promise<DbGlobalBaseFile | null> {
+  try {
+    const { data, error } = await supabase
+      .from('global_base_files')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('module_key', moduleKey)
+      .single();
+    if (error && error.code !== 'PGRST116') throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error fetching global base file full:', error);
+    return null;
+  }
+}
+
 export async function upsertGlobalBaseFile(file: DbGlobalBaseFile): Promise<DbGlobalBaseFile | null> {
   try {
     const payload = {

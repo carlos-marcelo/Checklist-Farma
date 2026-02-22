@@ -51,9 +51,9 @@ import {
   insertPVBranchRecordEvent,
   insertAppEventLog,
   fetchPVInventoryReport,
-  upsertPVInventoryReport,
-  fetchGlobalBaseFiles
+  upsertPVInventoryReport
 } from '../../supabaseService';
+import { CadastrosBaseService } from '../../src/cadastrosBase/cadastrosBaseService';
 import {
   loadLocalPVSession,
   saveLocalPVSession,
@@ -193,6 +193,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   const [isLoadingAnalysisReports, setIsLoadingAnalysisReports] = useState(false);
   const [isLoadingInventoryReport, setIsLoadingInventoryReport] = useState(false);
   const [hasInitialHydrationCompleted, setHasInitialHydrationCompleted] = useState(false);
+  const [hydrationDelayDone, setHydrationDelayDone] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const [salesUploads, setSalesUploads] = useState<DbPVSalesUpload[]>([]);
   const [analysisReports, setAnalysisReports] = useState<Record<string, AnalysisReportPayload>>({});
@@ -332,11 +333,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   }, [mapDbRecordsToPV]);
 
   const decodeGlobalFileToBrowserFile = useCallback((file: {
-    file_data_base64?: string | null;
-    file_name?: string | null;
-    mime_type?: string | null;
-    module_key?: string | null;
-  }) => {
+    file_name: string;
+    file_data_base64: string | null;
+    mime_type: string | null;
+    module_key?: string;
+    _parsedFile?: File;
+  }): File | null => {
+    if (file._parsedFile) return file._parsedFile;
+
     const raw = String(file?.file_data_base64 || '').trim();
     if (!raw) return null;
 
@@ -555,15 +559,18 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   useEffect(() => {
     if (!userEmail) return;
-    const currentViewLabel =
-      currentView === AppView.DASHBOARD
-        ? 'dashboard'
-        : currentView === AppView.REGISTRATION
-          ? 'registration'
-          : currentView === AppView.ANALYSIS
-            ? 'analysis'
-            : 'setup';
     const existing = loadLocalPVSession(userEmail);
+    const existingViewLabel = (existing?.session_data?.currentView || '').trim();
+
+    let currentViewLabel = 'dashboard';
+    switch (currentView) {
+      case AppView.REGISTRATION: currentViewLabel = 'registration'; break;
+      case AppView.ANALYSIS: currentViewLabel = 'analysis'; break;
+      case AppView.SETUP: currentViewLabel = 'setup'; break;
+    }
+
+    if (existingViewLabel === currentViewLabel) return; // Prevent unnecessary disk writes and renders
+
     const payload: DbPVSession = {
       ...(existing || { user_email: userEmail }),
       user_email: userEmail,
@@ -581,13 +588,30 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
     const syncReports = async () => {
       try {
-        setReportsSyncStatus('loading');
-        setReportsReady(false);
         // 1. Tentar carregar localmente primeiro para velocidade
         const storedReports = await loadLocalPVReports(userEmail);
         if (cancelled) return;
 
-        // 2. Se não houver local, ou para garantir sincronia, buscar do Supabase
+        const localSystem = storedReports?.systemProducts || [];
+        const localDcb = storedReports?.dcbProducts || [];
+
+        // [Otimização] Offline-first: se temos cache local, já liberamos a UI imediatamente!
+        if (localSystem.length > 0 || localDcb.length > 0) {
+          if (localSystem.length > 0) setSystemProducts(localSystem);
+          if (localDcb.length > 0) setDcbBaseProducts(localDcb);
+
+          if (localSystem.length > 0 && localDcb.length > 0) {
+            setReportsReady(true);
+            setReportsSyncStatus('ready');
+            setIsInitialSyncDone(true);
+          }
+        } else {
+          // Only show blocking loading state if we actually don't have local cache and need to wait
+          setReportsSyncStatus('loading');
+          setReportsReady(false);
+        }
+
+        // 2. Continua buscando do Supabase em background para garantir sincronia
         console.log('🔄 [PV Sync] Buscando relatórios do Supabase para:', userEmail);
         const reportLookupCompanyId = setupDraftInfo?.companyId || sessionInfo?.companyId || null;
         const reportLookupBranch = setupDraftInfo?.filial || sessionInfo?.filial || null;
@@ -600,8 +624,6 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         const systemReport = dbReports.find(r => r.report_type === 'system');
         const dcbReport = dbReports.find(r => r.report_type === 'dcb');
 
-        const localSystem = storedReports?.systemProducts || [];
-        const localDcb = storedReports?.dcbProducts || [];
         let finalSystem = Array.isArray(systemReport?.products) && systemReport.products.length > 0
           ? systemReport.products
           : localSystem;
@@ -621,74 +643,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         }
 
         const systemMissingLab = finalSystem.some(item => !String((item as any)?.lab || '').trim());
-        // Fallback/enriquecimento global por empresa (carregado no módulo Cadastros Base).
-        // Também usa o arquivo global para preencher laboratório ausente no system já salvo em DB.
-        if (
-          reportLookupCompanyId &&
-          (finalSystem.length === 0 || finalDcb.length === 0 || systemMissingLab)
-        ) {
-          try {
-            const globalFiles = await fetchGlobalBaseFiles(reportLookupCompanyId);
-            if (!cancelled && globalFiles.length > 0) {
-              const fileByKey = new Map(globalFiles.map(file => [file.module_key, file]));
-              const systemGlobal = fileByKey.get('shared_cadastro_produtos');
-              const dcbGlobal = fileByKey.get('pre_dcb_base');
+        const hasMissingCacheForLab = systemMissingLab && !(storedReports as any)?.enrichedLabs;
 
-              if ((finalSystem.length === 0 || systemMissingLab) && systemGlobal?.file_data_base64) {
-                const file = decodeGlobalFileToBrowserFile(systemGlobal);
-                if (file) {
-                  const parsed = await parseSystemProductsXLSX(file);
-                  if (!cancelled && parsed.length > 0) {
-                    if (finalSystem.length === 0) {
-                      finalSystem = parsed;
-                    } else {
-                      const parsedByReduced = new Map<string, Product>();
-                      parsed.forEach(item => {
-                        const reduced = normalizeReducedCode(item.reducedCode);
-                        if (!reduced) return;
-                        if (!parsedByReduced.has(reduced)) parsedByReduced.set(reduced, item);
-                      });
-                      finalSystem = finalSystem.map(item => {
-                        const reduced = normalizeReducedCode(item.reducedCode);
-                        if (!reduced) return item;
-                        const fromGlobal = parsedByReduced.get(reduced);
-                        if (!fromGlobal) return item;
-                        return {
-                          ...item,
-                          lab: item.lab || fromGlobal.lab || item.lab,
-                          barcode: item.barcode || fromGlobal.barcode || item.barcode,
-                          name: item.name || fromGlobal.name || item.name
-                        };
-                      });
-                    }
-                    loadedSystemFromGlobal = true;
-                    setReportSyncedAt(prev => ({
-                      ...prev,
-                      system: systemGlobal.updated_at || systemGlobal.uploaded_at || prev.system
-                    }));
-                  }
-                }
-              }
-
-              if (finalDcb.length === 0 && dcbGlobal?.file_data_base64) {
-                const file = decodeGlobalFileToBrowserFile(dcbGlobal);
-                if (file) {
-                  const parsed = await parseDCBProductsXLSX(file);
-                  if (!cancelled && parsed.length > 0) {
-                    finalDcb = parsed;
-                    loadedDcbFromGlobal = true;
-                    setReportSyncedAt(prev => ({
-                      ...prev,
-                      dcb: dcbGlobal.updated_at || dcbGlobal.uploaded_at || prev.dcb
-                    }));
-                  }
-                }
-              }
-            }
-          } catch (globalError) {
-            console.error('Erro ao carregar cadastros globais para PV:', globalError);
-          }
-        }
+        // [Otimização] Fallback global desabilitado temporariamente para debugar lentidão na inicialização
 
         if (finalSystem.length) setSystemProducts(finalSystem);
         if (finalDcb.length) setDcbBaseProducts(finalDcb);
@@ -698,16 +655,20 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           dcb: false
         });
 
-        if (dbReports.length > 0 || finalSystem.length > 0 || finalDcb.length > 0) {
-          console.log(`✅ [PV Sync] Carregados do DB: ${finalSystem.length} sistem, ${finalDcb.length} dcb`);
-          saveLocalPVReports(userEmail, {
-            systemProducts: finalSystem,
-            dcbProducts: finalDcb
-          });
-        }
-
         const hasDbSystem = dbReports.some(r => r.report_type === 'system' && Array.isArray(r.products) && r.products.length > 0);
         const hasDbDcb = dbReports.some(r => r.report_type === 'dcb' && Array.isArray(r.products) && r.products.length > 0);
+
+        // [Otimização] Só salva no cache local se realmente baixou algo NOVO do banco de dados remoto
+        // Se `finalSystem` for apenas o `localSystem` reaproveitado, reescrever 100 mil itens no IndexedDB causa travamento/OOM (tela branca)
+        if (hasDbSystem || hasDbDcb) {
+          console.log(`✅ [PV Sync] Cacheando relatórios baixados do DB: ${finalSystem.length} sistem, ${finalDcb.length} dcb`);
+          saveLocalPVReports(userEmail, {
+            systemProducts: finalSystem,
+            dcbProducts: finalDcb,
+            ...(systemMissingLab ? { enrichedLabs: true } : {})
+          } as any);
+        }
+
         const hasEffectiveSystem = finalSystem.length > 0;
         const hasEffectiveDcb = finalDcb.length > 0;
         const ready = (hasDbSystem && hasDbDcb) || (hasEffectiveSystem && hasEffectiveDcb);
@@ -812,7 +773,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     const localCurrentView = (localSession?.session_data?.currentView || '').trim();
     if (localSession) {
       applySessionFromData(localSession);
-      setIsLoadingSession(false); // Assume local is fast
+      // Otimização: Se tem cache local, libera o loading imediatamente para não travar a UI!
+      setIsLoadingSession(false);
+    }
+
+    // Libera a UI de imediato caso não ache cache e o Fetch demore.
+    if (!localSession) {
+      // O Fetch a seguir tira o delay depois se precisar de restore.
+      setIsLoadingSession(false);
     }
 
     fetchPVSession(userEmail)
@@ -885,11 +853,15 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       const merged: Product[] = [];
       const systemByNormalized = new Map<string, Product>();
       const dcbByNormalized = new Map<string, Product>();
+      const labByNormalized = new Map<string, string>();
 
       systemProducts.forEach((p) => {
         const normalized = normalizeReducedCode(p.reducedCode);
         if (!normalized) return;
         if (!systemByNormalized.has(normalized)) systemByNormalized.set(normalized, p);
+        if (!labByNormalized.has(normalized) && p.lab && p.lab.trim()) {
+          labByNormalized.set(normalized, p.lab.trim());
+        }
       });
       dcbBaseProducts.forEach((p) => {
         const normalized = normalizeReducedCode(p.reducedCode);
@@ -906,7 +878,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         if (!code) return;
         const sysProd = systemByNormalized.get(code);
         const dcbProd = dcbByNormalized.get(code);
-        const sysLab = systemProducts.find(p => normalizeReducedCode(p.reducedCode) === code && !!(p.lab || '').trim())?.lab;
+        const sysLab = labByNormalized.get(code);
+
         merged.push({
           id: sysProd?.id || dcbProd?.id || `merge-${code}`,
           name: sysProd?.name || dcbProd?.name || 'Produto identificado via DCB',
@@ -924,16 +897,18 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   useEffect(() => {
     if (!userEmail || !isInitialSyncDone) return;
 
-    // Salvar localmente sempre que houver mudança para restauração rápida
-    if (systemProducts.length > 0 || dcbBaseProducts.length > 0) {
+    // Evita escrita pesada no Supabase quando os dados vieram do próprio banco ou não sofreram nova alteração local
+    const hasPendingNetworkSync = pendingReportPersist.system || pendingReportPersist.dcb;
+
+    // Salvar localmente apenas quando houve upload/modificações locais reais, evitando freeze em F5
+    if (hasPendingNetworkSync && (systemProducts.length > 0 || dcbBaseProducts.length > 0)) {
       saveLocalPVReports(userEmail, {
         systemProducts,
         dcbProducts: dcbBaseProducts
-      }).catch(error => console.error('Erro ao salvar relatórios PV locais:', error));
+      }).catch(error => console.error('Erro ao salvar relatórios PV locais (Upload):', error));
     }
 
-    // Evita escrita pesada no Supabase quando os dados vieram do próprio banco
-    if (!pendingReportPersist.system && !pendingReportPersist.dcb) return;
+    if (!hasPendingNetworkSync) return;
 
     if (systemProducts.length === 0 && dcbBaseProducts.length === 0) {
       clearLocalPVReports(userEmail).catch(() => { });
@@ -3017,10 +2992,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   const initialHydrationReady = useMemo(() => {
     if (!userEmail) return true;
     if (isLoadingSession) return false;
+
+    // Check if report syncing is still a blocker
     if (!isInitialSyncDone || reportsSyncStatus === 'loading') return false;
+
+    // Setup Draft needs its branch prefetch
     if (shouldWaitSetupPrefetch && isBranchPrefetching) return false;
-    // Do not block initial render waiting for branch auxiliary datasets.
-    // These can continue loading in background for better perceived performance.
+
     return true;
   }, [
     userEmail,
@@ -3033,10 +3011,20 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   useEffect(() => {
     if (hasInitialHydrationCompleted) return;
+    let timeout: ReturnType<typeof setTimeout>;
+
     if (initialHydrationReady) {
-      setHasInitialHydrationCompleted(true);
+      if (!hydrationDelayDone) {
+        timeout = setTimeout(() => setHydrationDelayDone(true), 1200); // 1.2s guarantee to let tables mount
+      } else {
+        setHasInitialHydrationCompleted(true);
+      }
     }
-  }, [hasInitialHydrationCompleted, initialHydrationReady]);
+
+    return () => {
+      if (timeout) clearTimeout(timeout);
+    };
+  }, [hasInitialHydrationCompleted, initialHydrationReady, hydrationDelayDone]);
 
   if (!hasInitialHydrationCompleted) {
     return (
