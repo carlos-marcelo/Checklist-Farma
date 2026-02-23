@@ -1800,6 +1800,45 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             let diffCostSum = 0;
             const items: any[] = [];
 
+            // --- Universal Registry: fallback scan of ALL group cadastro files ---
+            const universalRegistry = new Map<string, { groupName: string, deptName: string, catName: string }>();
+
+            const loadUniversalRegistry = async () => {
+                const allGroupFiles = { ...globalGroupFiles, ...groupFiles };
+                for (const groupId of GROUP_UPLOAD_IDS) {
+                    const file = allGroupFiles[groupId];
+                    if (!file) continue;
+
+                    try {
+                        const rows = await readExcel(file);
+                        const groupName = GROUP_CONFIG_DEFAULTS[groupId] || `Grupo ${groupId}`;
+
+                        rows.forEach((row: any[]) => {
+                            if (!row || row.length < 4) return;
+
+                            const deptRaw = String(row[18] ?? '').trim(); // Col S = departamento
+                            const catRaw = String(row[22] ?? '').trim(); // Col W = categoria
+                            if (!deptRaw && !catRaw) return;
+
+                            const deptName = parseHierarchyCell(deptRaw, 'DIVERSOS (SEM DEPARTAMENTO)').name;
+                            const catName = parseHierarchyCell(catRaw, 'DIVERSOS (SEM CATEGORIA)').name;
+
+                            const codes = [normalizeBarcode(row[1]), normalizeBarcode(row[2])].filter(Boolean);
+                            codes.forEach(code => {
+                                if (code && !universalRegistry.has(code)) {
+                                    universalRegistry.set(code, { groupName, deptName, catName });
+                                }
+                            });
+                        });
+                    } catch (err) {
+                        console.warn(`[UniversalRegistry] Error reading group ${groupId}:`, err);
+                    }
+                }
+                console.log(`[UniversalRegistry] Total entries: ${universalRegistry.size}`);
+            };
+
+            await loadUniversalRegistry();
+
             // Pre-build hierarchy lookup for fast cross-referencing Col B (código reduzido)
             // Indexed by normalizeBarcode(reducedCode || code) — same normalization applied when looking up
             const productLookup = new Map<string, { groupName: string, deptName: string, catName: string }>();
@@ -1868,13 +1907,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             }
                         });
 
-                        // Debug: verify specific missing codes
-                        const debugCodes = ['49522', '49525', '78269', '78670', '81547', '84011', '84345', '84856', '85186'];
-                        debugCodes.forEach(c => {
-                            const found = cadastroLookup.get(c);
-                            console.log(`[CadastroLookup] Código ${c}: ${found ? `ACHADO → ${found.deptName} / ${found.catName}` : 'NÃO ENCONTRADO'}`);
-                        });
-
                         console.log(`[CadastroLookup] Total de entradas no lookup: ${cadastroLookup.size}`);
                     } catch (err) {
                         console.warn('[CadastroLookup] Erro ao ler cadastro:', err);
@@ -1883,6 +1915,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     console.warn(`[CadastroLookup] Nenhum arquivo de cadastro encontrado para grupo ${groupIdKey}`);
                 }
             }
+
+            // Debug target codes
+            const debugTargetCodes = ['49522', '49525', '78269', '78670', '81547', '84011', '84345', '84856', '85186'];
+            debugTargetCodes.forEach(c => {
+                const inProduct = productLookup.get(c);
+                const inCadastro = cadastroLookup.get(c);
+                const inUniversal = universalRegistry.get(c);
+                console.log(`[DebugClassification] Código ${c}:
+                    Stock: ${inProduct ? 'OK' : 'FAIL'}
+                    Local: ${inCadastro ? 'OK' : 'FAIL'}
+                    Global: ${inUniversal ? 'OK (' + inUniversal.groupName + ')' : 'FAIL'}`);
+            });
 
 
             const groupedMap: Record<string, { groupName: string, deptName: string, catName: string, diffCost: number, diffQty: number }> = {};
@@ -1938,21 +1982,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 // Normaliza o código da coluna B para o mesmo formato do lookup
                 const normalizedCode = normalizeBarcode(code);
                 const registryEntry = productLookup.get(normalizedCode);
-
-                // Usar dept/cat do cadastro SOMENTE se o produto pertence ao MESMO grupo do termo
-                const sameGroup = registryEntry && registryEntry.groupName?.toLowerCase() === termGroupName?.toLowerCase();
-
-                // Fallback: try the cadastro file lookup (Col C → S/W) for items not in stock (not in data.groups)
-                const cadastroEntry = !sameGroup ? cadastroLookup.get(normalizedCode) : null;
+                const cadastroEntry = !registryEntry ? cadastroLookup.get(normalizedCode) : null;
+                const universalEntry = (!registryEntry && !cadastroEntry) ? universalRegistry.get(normalizedCode) : null;
 
                 const hierarchy = {
-                    groupName: termGroupName,
-                    deptName: sameGroup
-                        ? registryEntry!.deptName
-                        : (cadastroEntry?.deptName || 'DIVERSOS (SEM DEPARTAMENTO)'),
-                    catName: sameGroup
-                        ? registryEntry!.catName
-                        : (cadastroEntry?.catName || 'DIVERSOS (SEM CATEGORIA)')
+                    groupName: registryEntry?.groupName || universalEntry?.groupName || termGroupName,
+                    deptName: registryEntry?.deptName || cadastroEntry?.deptName || universalEntry?.deptName || 'DIVERSOS (SEM DEPARTAMENTO)',
+                    catName: registryEntry?.catName || cadastroEntry?.catName || universalEntry?.catName || 'DIVERSOS (SEM CATEGORIA)'
                 };
 
                 const groupKey = `${hierarchy.groupName}|${hierarchy.deptName}|${hierarchy.catName}`;
@@ -4535,39 +4571,50 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         </div>
 
                                         {/* Quadrinho de Resumo por Categoria */}
-                                        {termComparisonMetrics.groupedDifferences && termComparisonMetrics.groupedDifferences.length > 0 && (
-                                            <div className="mt-4 pt-4 border-t border-indigo-100">
-                                                <h6 className="text-[10px] font-black text-indigo-800 uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                                                    <Boxes className="w-3.5 h-3.5" />
-                                                    Resumo de Prejuízo por Categoria
-                                                </h6>
-                                                <div className="space-y-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
-                                                    {(() => {
-                                                        const groupsMap = new Map();
-                                                        termComparisonMetrics.groupedDifferences.forEach((diff: any) => {
-                                                            if (!groupsMap.has(diff.groupName)) {
-                                                                groupsMap.set(diff.groupName, { name: diff.groupName, diffQty: 0, diffCost: 0, departments: new Map() });
-                                                            }
-                                                            const g = groupsMap.get(diff.groupName);
-                                                            g.diffQty += diff.diffQty;
-                                                            g.diffCost += diff.diffCost;
+                                        {(() => {
+                                            if (!termComparisonMetrics.groupedDifferences || termComparisonMetrics.groupedDifferences.length === 0) return null;
 
-                                                            if (!g.departments.has(diff.deptName)) {
-                                                                g.departments.set(diff.deptName, { name: diff.deptName, diffQty: 0, diffCost: 0, categories: [] });
-                                                            }
-                                                            const d = g.departments.get(diff.deptName);
-                                                            d.diffQty += diff.diffQty;
-                                                            d.diffCost += diff.diffCost;
+                                            const groupsMap = new Map();
+                                            termComparisonMetrics.groupedDifferences.forEach((diff: any) => {
+                                                if (!groupsMap.has(diff.groupName)) {
+                                                    groupsMap.set(diff.groupName, { name: diff.groupName, diffQty: 0, diffCost: 0, departments: new Map() });
+                                                }
+                                                const g = groupsMap.get(diff.groupName);
+                                                g.diffQty += diff.diffQty;
+                                                g.diffCost += diff.diffCost;
 
-                                                            d.categories.push({ name: diff.catName, diffQty: diff.diffQty, diffCost: diff.diffCost });
-                                                        });
+                                                if (!g.departments.has(diff.deptName)) {
+                                                    g.departments.set(diff.deptName, { name: diff.deptName, diffQty: 0, diffCost: 0, categories: [] });
+                                                }
+                                                const d = g.departments.get(diff.deptName);
+                                                d.diffQty += diff.diffQty;
+                                                d.diffCost += diff.diffCost;
 
-                                                        const nested = Array.from(groupsMap.values()).map(g => ({
-                                                            ...g,
-                                                            departments: Array.from(g.departments.values())
-                                                        }));
+                                                d.categories.push({ name: diff.catName, diffQty: diff.diffQty, diffCost: diff.diffCost });
+                                            });
 
-                                                        return nested.map((group: any, gIdx: number) => (
+                                            const nested = Array.from(groupsMap.values()).map(g => ({
+                                                ...g,
+                                                departments: Array.from(g.departments.values())
+                                                    .map((d: any) => ({
+                                                        ...d,
+                                                        categories: d.categories.filter((c: any) =>
+                                                            Math.abs(c.diffQty) > 0.01 || Math.abs(c.diffCost) > 0.01
+                                                        )
+                                                    }))
+                                                    .filter((d: any) => d.categories.length > 0)
+                                            })).filter(g => g.departments.length > 0);
+
+                                            if (nested.length === 0) return null;
+
+                                            return (
+                                                <div className="mt-4 pt-4 border-t border-indigo-100">
+                                                    <h6 className="text-[10px] font-black text-indigo-800 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                                                        <Boxes className="w-3.5 h-3.5" />
+                                                        Resumo de Prejuízo por Categoria
+                                                    </h6>
+                                                    <div className="space-y-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
+                                                        {nested.map((group: any, gIdx: number) => (
                                                             <div key={gIdx} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2">
                                                                 {/* GROUP HEADER */}
                                                                 <div className="p-3 bg-indigo-50/50 border-b border-indigo-100 flex items-center justify-between">
@@ -4704,7 +4751,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                                             {/* Lista de códigos reduzidos para DIVERSOS */}
                                                                             {dept.name === 'DIVERSOS (SEM DEPARTAMENTO)' && (() => {
                                                                                 const diversosItems = (termComparisonMetrics?.items || []).filter(
-                                                                                    (item: any) => item.deptName === 'DIVERSOS (SEM DEPARTAMENTO)'
+                                                                                    (item: any) =>
+                                                                                        item.deptName === 'DIVERSOS (SEM DEPARTAMENTO)' &&
+                                                                                        (Math.abs(item.diffQty) > 0.01 || Math.abs(item.diffCost) > 0.01)
                                                                                 );
                                                                                 if (diversosItems.length === 0) return null;
                                                                                 return (
@@ -4727,11 +4776,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                                     ))}
                                                                 </div>
                                                             </div>
-                                                        ));
-                                                    })()}
+                                                        ))
+                                                        }
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        )}
+                                            )
+                                        })()}
                                     </div>
                                 )}
                             </div>
