@@ -1058,6 +1058,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const productsByReduced: Record<string, ProductScope[]> = {};
             const productsByName: Record<string, ProductScope[]> = {};
             const catReportByReduced: Record<string, { catId: string; catName: string; deptName: string }> = {};
+            const deptReportByReduced: Record<string, { deptId: string; deptName: string }> = {};
             const deptIdByDescription: Record<string, string> = {};
             const catIdByDescription: Record<string, string> = {};
             const deptDescEntries: Array<{ key: string; id: string }> = [];
@@ -1102,6 +1103,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             if (effectiveDeptIdsFile) {
                 const rowsDept = await readExcel(effectiveDeptIdsFile);
                 fillIdByDescription(rowsDept, deptIdByDescription, deptDescEntries);
+                let lastDeptId = "";
+                let lastDeptName = "";
+                rowsDept.forEach(row => {
+                    if (!row) return;
+                    const deptIdNow = parseSheetNumericCode(row[5]); // F
+                    if (deptIdNow !== null) lastDeptId = String(deptIdNow);
+                    const deptNameNowRaw = String(row[7] ?? '').trim(); // H
+                    if (deptNameNowRaw) lastDeptName = deptNameNowRaw.replace(/^\s*[-:/.]+\s*/, '').trim();
+                    const reduced = normalizeBarcode(row[2]); // C
+                    if (!reduced) return;
+                    deptReportByReduced[reduced] = {
+                        deptId: lastDeptId,
+                        deptName: lastDeptName
+                    };
+                });
             }
 
             if (effectiveCatIdsFile) {
@@ -1225,7 +1241,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 }
                 if (!chosenScope) return;
                 const resolvedScope: ProductScope = { ...chosenScope };
+                const deptByReduced = deptReportByReduced[reduced];
                 const catByReduced = catReportByReduced[reduced];
+                if (deptByReduced) {
+                    if (!resolvedScope.deptId && deptByReduced.deptId) {
+                        resolvedScope.deptId = deptByReduced.deptId;
+                    }
+                    if ((!resolvedScope.deptName || resolvedScope.deptName === 'OUTROS') && deptByReduced.deptName) {
+                        resolvedScope.deptName = deptByReduced.deptName;
+                    }
+                }
                 if (catByReduced) {
                     if (!resolvedScope.catId && catByReduced.catId) {
                         resolvedScope.catId = catByReduced.catId;
