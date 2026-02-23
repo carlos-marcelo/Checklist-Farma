@@ -356,6 +356,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         items: any[];
         groupedDifferences?: any[];
     } | null>(null);
+    const [expandedCatKey, setExpandedCatKey] = useState<string | null>(null);
     const [auditLookup, setAuditLookup] = useState('');
     const [auditLookupOpen, setAuditLookupOpen] = useState(false);
     const auditLookupInputRef = useRef<HTMLInputElement | null>(null);
@@ -1654,11 +1655,79 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             : createDefaultTermForm();
         setTermModal(scope);
         setTermForm(nextForm);
-        setTermComparisonMetrics(draft?.excelMetrics || null);
+        const nextMetrics = draft?.excelMetrics ? { ...draft.excelMetrics } : null;
+        // Corrigir apenas groupName e tentar upgrade de DIVERSOS via data.groups
+        // NÃO re-classifica itens que já têm dept/cat válidos — apenas corrige o grupo
+        if (nextMetrics && scope.groupId) {
+            const termGroupName = GROUP_CONFIG_DEFAULTS[scope.groupId] || `Grupo ${scope.groupId}`;
 
-        if (draft && nextForm !== draft) {
-            setTermDrafts(current => ({ ...current, [key]: nextForm }));
+            // Build localLookup only to TRY to upgrade DIVERSOS items that might now be in data.groups
+            const localLookup = new Map<string, { deptName: string; catName: string }>();
+            if (data?.groups) {
+                const groupObj = data.groups.find(g => String(g.id) === String(scope.groupId));
+                if (groupObj) {
+                    groupObj.departments.forEach(d => {
+                        d.categories.forEach(c => {
+                            c.products.forEach(p => {
+                                const key = normalizeBarcode(p.reducedCode || p.code);
+                                if (key) localLookup.set(key, { deptName: d.name, catName: c.name });
+                                const altKey = normalizeBarcode(p.code);
+                                if (altKey && altKey !== key && !localLookup.has(altKey)) {
+                                    localLookup.set(altKey, { deptName: d.name, catName: c.name });
+                                }
+                            });
+                        });
+                    });
+                }
+            }
+
+            // Fix items: correct groupName, and ONLY upgrade from DIVERSOS if localLookup has a match
+            if (nextMetrics.items) {
+                nextMetrics.items = nextMetrics.items.map((item: any) => {
+                    // Always fix groupName to match current term scope
+                    const fixedGroupName = termGroupName;
+
+                    const alreadyClassified =
+                        item.deptName && item.deptName !== 'DIVERSOS (SEM DEPARTAMENTO)' &&
+                        item.catName && item.catName !== 'DIVERSOS (SEM CATEGORIA)';
+
+                    if (alreadyClassified) {
+                        // Keep existing dept/cat — they were correctly classified by the upload
+                        return { ...item, groupName: fixedGroupName };
+                    }
+
+                    // Item is still in DIVERSOS — try to upgrade via localLookup
+                    const match = localLookup.get(normalizeBarcode(item.code));
+                    return {
+                        ...item,
+                        groupName: fixedGroupName,
+                        deptName: match ? match.deptName : 'DIVERSOS (SEM DEPARTAMENTO)',
+                        catName: match ? match.catName : 'DIVERSOS (SEM CATEGORIA)'
+                    };
+                });
+            }
+
+            // Re-aggregate groupedDifferences from corrected items
+            if (nextMetrics.items) {
+                const gMap: Record<string, { groupName: string; deptName: string; catName: string; diffCost: number; diffQty: number }> = {};
+                nextMetrics.items.forEach((item: any) => {
+                    const key = `${item.groupName}|${item.deptName}|${item.catName}`;
+                    if (!gMap[key]) {
+                        gMap[key] = { groupName: item.groupName, deptName: item.deptName, catName: item.catName, diffCost: 0, diffQty: 0 };
+                    }
+                    gMap[key].diffCost += (item.diffCost || 0);
+                    gMap[key].diffQty += (item.diffQty || 0);
+                });
+                nextMetrics.groupedDifferences = Object.values(gMap).sort((a, b) => a.diffCost - b.diffCost);
+            }
         }
+        setTermComparisonMetrics(nextMetrics);
+
+        // Persist re-classified metrics & form to termDrafts always (not conditional on reference equality)
+        const formToSave = nextMetrics
+            ? { ...nextForm, excelMetrics: nextMetrics }
+            : nextForm;
+        setTermDrafts(current => ({ ...current, [key]: formToSave }));
     };
 
     const updateTermForm = (updater: (prev: TermForm) => TermForm) => {
@@ -1731,23 +1800,90 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             let diffCostSum = 0;
             const items: any[] = [];
 
-            // Pre-build hierarchy lookup for fast cross-referencing Col B (reduced code)
+            // Pre-build hierarchy lookup for fast cross-referencing Col B (código reduzido)
+            // Indexed by normalizeBarcode(reducedCode || code) — same normalization applied when looking up
             const productLookup = new Map<string, { groupName: string, deptName: string, catName: string }>();
             if (data?.groups) {
                 data.groups.forEach(g => {
                     g.departments.forEach(d => {
                         d.categories.forEach(c => {
                             c.products.forEach(p => {
-                                productLookup.set(String(p.code).trim(), {
-                                    groupName: g.name,
-                                    deptName: d.name,
-                                    catName: c.name
-                                });
+                                // Index by reduced code (código reduzido) which is what Col B contains
+                                const key = normalizeBarcode(p.reducedCode || p.code);
+                                if (key) {
+                                    productLookup.set(key, {
+                                        groupName: g.name,
+                                        deptName: d.name,
+                                        catName: c.name
+                                    });
+                                }
+                                // Also index by full code as fallback
+                                const altKey = normalizeBarcode(p.code);
+                                if (altKey && altKey !== key && !productLookup.has(altKey)) {
+                                    productLookup.set(altKey, {
+                                        groupName: g.name,
+                                        deptName: d.name,
+                                        catName: c.name
+                                    });
+                                }
                             });
                         });
                     });
                 });
             }
+
+            // --- Secondary lookup: read cadastro file directly for this group ---
+            // Pega itens com estoque zero (não em data.groups) via Col B e Col C (código reduzido)
+            const cadastroLookup = new Map<string, { deptName: string; catName: string }>();
+            if (termModal?.groupId) {
+                const groupIdKey = termModal.groupId as typeof GROUP_UPLOAD_IDS[number];
+                const cadastroFile = groupFiles[groupIdKey] || globalGroupFiles[groupIdKey];
+                if (cadastroFile) {
+                    try {
+                        const cadastroRows = await readExcel(cadastroFile);
+                        // Debug: log total rows found
+                        console.log(`[CadastroLookup] Arquivo do grupo ${groupIdKey}: ${cadastroRows.length} linhas`);
+
+                        cadastroRows.forEach((row: any[]) => {
+                            if (!row || row.length < 4) return;
+
+                            const deptRaw = String(row[18] ?? '').trim(); // Col S = departamento
+                            const catRaw = String(row[22] ?? '').trim(); // Col W = categoria
+
+                            // Skip rows where both dept and cat are empty (header/blank rows)
+                            if (!deptRaw && !catRaw) return;
+
+                            const deptName = parseHierarchyCell(deptRaw, 'DIVERSOS (SEM DEPARTAMENTO)').name;
+                            const catName = parseHierarchyCell(catRaw, 'DIVERSOS (SEM CATEGORIA)').name;
+
+                            // Index by BOTH Col B (row[1]) AND Col C (row[2]) — same reduced code in different files
+                            const codeB = normalizeBarcode(row[1]); // Col B
+                            const codeC = normalizeBarcode(row[2]); // Col C
+
+                            if (codeB && !cadastroLookup.has(codeB)) {
+                                cadastroLookup.set(codeB, { deptName, catName });
+                            }
+                            if (codeC && codeC !== codeB && !cadastroLookup.has(codeC)) {
+                                cadastroLookup.set(codeC, { deptName, catName });
+                            }
+                        });
+
+                        // Debug: verify specific missing codes
+                        const debugCodes = ['49522', '49525', '78269', '78670', '81547', '84011', '84345', '84856', '85186'];
+                        debugCodes.forEach(c => {
+                            const found = cadastroLookup.get(c);
+                            console.log(`[CadastroLookup] Código ${c}: ${found ? `ACHADO → ${found.deptName} / ${found.catName}` : 'NÃO ENCONTRADO'}`);
+                        });
+
+                        console.log(`[CadastroLookup] Total de entradas no lookup: ${cadastroLookup.size}`);
+                    } catch (err) {
+                        console.warn('[CadastroLookup] Erro ao ler cadastro:', err);
+                    }
+                } else {
+                    console.warn(`[CadastroLookup] Nenhum arquivo de cadastro encontrado para grupo ${groupIdKey}`);
+                }
+            }
+
 
             const groupedMap: Record<string, { groupName: string, deptName: string, catName: string, diffCost: number, diffQty: number }> = {};
 
@@ -1794,10 +1930,29 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 diffCostSum += costDiff;
 
                 // Identifica a Hierarquia cruzando com memory database
-                const hierarchy = productLookup.get(code) || {
-                    groupName: 'CONVENIÊNCIA',
-                    deptName: 'DIVERSOS (SEM DEPARTAMENTO)',
-                    catName: 'DIVERSOS (SEM CATEGORIA)'
+                // O grupo do termo é o grupo que define o escopo do Excel — todos itens pertencem a ele.
+                const termGroupName = termModal?.groupId
+                    ? (GROUP_CONFIG_DEFAULTS[termModal.groupId] || `Grupo ${termModal.groupId}`)
+                    : 'Conveniência';
+
+                // Normaliza o código da coluna B para o mesmo formato do lookup
+                const normalizedCode = normalizeBarcode(code);
+                const registryEntry = productLookup.get(normalizedCode);
+
+                // Usar dept/cat do cadastro SOMENTE se o produto pertence ao MESMO grupo do termo
+                const sameGroup = registryEntry && registryEntry.groupName?.toLowerCase() === termGroupName?.toLowerCase();
+
+                // Fallback: try the cadastro file lookup (Col C → S/W) for items not in stock (not in data.groups)
+                const cadastroEntry = !sameGroup ? cadastroLookup.get(normalizedCode) : null;
+
+                const hierarchy = {
+                    groupName: termGroupName,
+                    deptName: sameGroup
+                        ? registryEntry!.deptName
+                        : (cadastroEntry?.deptName || 'DIVERSOS (SEM DEPARTAMENTO)'),
+                    catName: sameGroup
+                        ? registryEntry!.catName
+                        : (cadastroEntry?.catName || 'DIVERSOS (SEM CATEGORIA)')
                 };
 
                 const groupKey = `${hierarchy.groupName}|${hierarchy.deptName}|${hierarchy.catName}`;
@@ -3713,35 +3868,49 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         </div>
                                     </div>
 
-                                    {/* Injeção do Dashboard de Excel (Geral) */}
+                                    {/* Injeção do Dashboard de Excel (Geral) — usa os TOTAIS das excelMetrics */}
                                     {(() => {
                                         const tk = buildTermKey({ type: 'group', groupId: group.id });
                                         const metrics = termDrafts[tk]?.excelMetrics;
-                                        if (!metrics || !metrics.groupedDifferences) return null;
-
-                                        const gDiffs = metrics.groupedDifferences.filter((d: any) => d.groupName === group.name);
-                                        if (gDiffs.length === 0) return null;
-
-                                        const totGDiffQty = gDiffs.reduce((acc, curr) => acc + curr.diffQty, 0);
-                                        const totGDiffCost = gDiffs.reduce((acc, curr) => acc + curr.diffCost, 0);
+                                        if (!metrics || typeof metrics.diffQty !== 'number') return null;
 
                                         return (
                                             <div className="mt-4 pt-4 border-t border-indigo-100/50">
-                                                <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest">
+                                                <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest mb-3">
                                                     <span className="text-indigo-800 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> Planilha de Conflito</span>
                                                 </div>
-                                                <div className="grid grid-cols-2 gap-3 mt-3">
-                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2.5">
-                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Dif. Qtde Total</span>
-                                                        <span className={`text-[11px] font-black ${totGDiffQty < 0 ? 'text-red-600' : totGDiffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
-                                                            {totGDiffQty > 0 ? '+' : ''}{Math.round(totGDiffQty).toLocaleString('pt-BR')} un.
+                                                <div className="grid grid-cols-3 gap-2">
+                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Est. Sist (Qtde)</span>
+                                                        <span className="text-[11px] font-black text-slate-600">{Math.round(metrics.sysQty).toLocaleString('pt-BR')} un.</span>
+                                                    </div>
+                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Est. Físico (Qtde)</span>
+                                                        <span className="text-[11px] font-black text-slate-600">{Math.round(metrics.countedQty).toLocaleString('pt-BR')} un.</span>
+                                                    </div>
+                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Diferença (Qtde)</span>
+                                                        <span className={`text-[11px] font-black ${metrics.diffQty < 0 ? 'text-red-600' : metrics.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                            {metrics.diffQty > 0 ? '+' : ''}{Math.round(metrics.diffQty).toLocaleString('pt-BR')} un.
                                                         </span>
                                                     </div>
-                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2.5">
-                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Resultado Financeiro</span>
-                                                        <span className={`text-[11px] font-black ${totGDiffCost < 0 ? 'text-red-700' : totGDiffCost > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
-                                                            {totGDiffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                </div>
+                                                <div className="grid grid-cols-3 gap-2 mt-2">
+                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Custo Sist</span>
+                                                        <span className="text-[11px] font-black text-slate-600">{metrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                                                    </div>
+                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Custo Físico</span>
+                                                        <span className="text-[11px] font-black text-slate-600">{metrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                                                    </div>
+                                                    <div className={`border rounded-lg p-2 ${metrics.diffCost < 0 ? 'bg-red-50 border-red-200' : metrics.diffCost > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-100'}`}>
+                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Resultado Fin.</span>
+                                                        <span className={`text-[11px] font-black ${metrics.diffCost < 0 ? 'text-red-700' : metrics.diffCost > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
+                                                            {metrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                                         </span>
+                                                        {metrics.diffCost < 0 && <span className="text-[7px] font-black text-red-500 uppercase block">Prejuízo</span>}
+                                                        {metrics.diffCost > 0 && <span className="text-[7px] font-black text-emerald-600 uppercase block">Sobra</span>}
                                                     </div>
                                                 </div>
                                             </div>
@@ -3823,7 +3992,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         const metrics = termDrafts[tk]?.excelMetrics;
                                         if (!metrics || !metrics.groupedDifferences) return null;
 
-                                        const dDiffs = metrics.groupedDifferences.filter((d: any) => d.deptName === dept.name && d.groupName === selectedGroup!.name);
+                                        const dDiffs = metrics.groupedDifferences.filter((d: any) =>
+                                            d.deptName?.toLowerCase() === dept.name?.toLowerCase() &&
+                                            d.groupName?.toLowerCase() === selectedGroup!.name?.toLowerCase()
+                                        );
                                         if (dDiffs.length === 0) return null;
 
                                         const totDDiffQty = dDiffs.reduce((acc, curr) => acc + curr.diffQty, 0);
@@ -3889,9 +4061,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             if (!metrics || !metrics.groupedDifferences) return null;
 
                                             const cDiff = metrics.groupedDifferences.find((d: any) =>
-                                                d.catName === cat.name &&
-                                                d.deptName === selectedDept!.name &&
-                                                d.groupName === selectedGroup!.name
+                                                d.catName?.toLowerCase() === cat.name?.toLowerCase() &&
+                                                d.deptName?.toLowerCase() === selectedDept!.name?.toLowerCase() &&
+                                                d.groupName?.toLowerCase() === selectedGroup!.name?.toLowerCase()
                                             );
                                             if (!cDiff) return null;
 
@@ -4448,29 +4620,109 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                                                                             {/* CATEGORIES */}
                                                                             <div className="p-2 bg-[#f8fafc] grid grid-cols-1 gap-1.5">
-                                                                                {dept.categories.map((cat: any, cIdx: number) => (
-                                                                                    <div key={cIdx} className="bg-[#F0FDF4] border border-[#dcfce7] rounded-lg p-2 flex items-center justify-between transition-colors">
-                                                                                        <div className="flex items-center gap-2">
-                                                                                            <Activity className="w-3 h-3 text-[#059669]" />
-                                                                                            <div>
-                                                                                                <span className="text-[9px] font-black text-[#065f46] uppercase italic tracking-widest block">{cat.name}</span>
-                                                                                            </div>
+                                                                                {dept.categories.map((cat: any, cIdx: number) => {
+                                                                                    const catItems = (termComparisonMetrics?.items || []).filter(
+                                                                                        (item: any) =>
+                                                                                            item.catName?.toLowerCase() === cat.name?.toLowerCase() &&
+                                                                                            item.deptName?.toLowerCase() === dept.name?.toLowerCase()
+                                                                                    ).sort((a: any, b: any) => a.diffCost - b.diffCost);
+                                                                                    const catKey = `${dept.name}|${cat.name}`;
+                                                                                    return (
+                                                                                        <div key={cIdx} className="rounded-lg overflow-hidden border border-[#dcfce7]">
+                                                                                            {/* Category header - clickable */}
+                                                                                            <button
+                                                                                                onClick={() => setExpandedCatKey(prev => prev === catKey ? null : catKey)}
+                                                                                                className="w-full bg-[#F0FDF4] p-2 flex items-center justify-between transition-colors hover:bg-[#dcfce7] cursor-pointer"
+                                                                                            >
+                                                                                                <div className="flex items-center gap-2">
+                                                                                                    <Activity className="w-3 h-3 text-[#059669]" />
+                                                                                                    <span className="text-[9px] font-black text-[#065f46] uppercase italic tracking-widest">{cat.name}</span>
+                                                                                                    {catItems.length > 0 && (
+                                                                                                        <span className="bg-indigo-100 text-indigo-600 text-[7px] font-black px-1 py-0.5 rounded-full">
+                                                                                                            {catItems.length}
+                                                                                                        </span>
+                                                                                                    )}
+                                                                                                </div>
+                                                                                                <div className="flex items-center gap-3 text-right">
+                                                                                                    <div className="min-w-[45px]">
+                                                                                                        <span className={`text-[9px] font-bold ${cat.diffQty < 0 ? 'text-red-600' : cat.diffQty > 0 ? 'text-[#16a34a]' : 'text-[#166534]/70'}`}>
+                                                                                                            {cat.diffQty > 0 ? '+' : ''}{Math.round(cat.diffQty).toLocaleString('pt-BR')} un.
+                                                                                                        </span>
+                                                                                                    </div>
+                                                                                                    <div className="min-w-[65px]">
+                                                                                                        <span className={`text-[10px] font-black ${cat.diffCost < 0 ? 'text-red-600' : cat.diffCost > 0 ? 'text-[#16a34a]' : 'text-[#166534]/80'}`}>
+                                                                                                            {cat.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                                                        </span>
+                                                                                                    </div>
+                                                                                                    <ChevronRight className={`w-3 h-3 text-slate-400 transition-transform ${expandedCatKey === catKey ? 'rotate-90' : ''}`} />
+                                                                                                </div>
+                                                                                            </button>
+
+                                                                                            {/* Expanded item list */}
+                                                                                            {expandedCatKey === catKey && catItems.length > 0 && (
+                                                                                                <div className="bg-white border-t border-[#dcfce7]">
+                                                                                                    <table className="w-full text-[8px]">
+                                                                                                        <thead>
+                                                                                                            <tr className="bg-slate-50 border-b border-slate-100">
+                                                                                                                <th className="text-left p-1.5 font-black text-slate-500 uppercase tracking-widest">Cód</th>
+                                                                                                                <th className="text-left p-1.5 font-black text-slate-500 uppercase tracking-widest">Descrição</th>
+                                                                                                                <th className="text-right p-1.5 font-black text-slate-500 uppercase">Sist.</th>
+                                                                                                                <th className="text-right p-1.5 font-black text-slate-500 uppercase">Fís.</th>
+                                                                                                                <th className="text-right p-1.5 font-black text-slate-500 uppercase">Dif.</th>
+                                                                                                                <th className="text-right p-1.5 font-black text-slate-500 uppercase">R$</th>
+                                                                                                            </tr>
+                                                                                                        </thead>
+                                                                                                        <tbody>
+                                                                                                            {catItems.map((item: any, iIdx: number) => (
+                                                                                                                <tr key={iIdx} className={`border-b border-slate-50 ${item.diffQty < 0 ? 'bg-red-50/40' : item.diffQty > 0 ? 'bg-green-50/40' : ''}`}>
+                                                                                                                    <td className="p-1.5 font-black text-slate-600 tabular-nums">{item.code}</td>
+                                                                                                                    <td className="p-1.5 text-slate-700 max-w-[120px] truncate" title={item.description}>{item.description}</td>
+                                                                                                                    <td className="p-1.5 text-right text-slate-500 tabular-nums">{Math.round(item.sysQty)}</td>
+                                                                                                                    <td className="p-1.5 text-right text-slate-500 tabular-nums">{Math.round(item.countedQty)}</td>
+                                                                                                                    <td className={`p-1.5 text-right font-black tabular-nums ${item.diffQty < 0 ? 'text-red-600' : item.diffQty > 0 ? 'text-green-600' : 'text-slate-400'}`}>
+                                                                                                                        {item.diffQty > 0 ? '+' : ''}{Math.round(item.diffQty)}
+                                                                                                                    </td>
+                                                                                                                    <td className={`p-1.5 text-right font-black tabular-nums ${item.diffCost < 0 ? 'text-red-600' : item.diffCost > 0 ? 'text-green-600' : 'text-slate-400'}`}>
+                                                                                                                        {item.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                                                                    </td>
+                                                                                                                </tr>
+                                                                                                            ))}
+                                                                                                        </tbody>
+                                                                                                    </table>
+                                                                                                </div>
+                                                                                            )}
+                                                                                            {expandedCatKey === catKey && catItems.length === 0 && (
+                                                                                                <div className="p-2 bg-slate-50 text-center text-[8px] text-slate-400 font-bold">
+                                                                                                    Nenhum item encontrado nesta categoria
+                                                                                                </div>
+                                                                                            )}
                                                                                         </div>
-                                                                                        <div className="flex items-center gap-3 text-right">
-                                                                                            <div className="min-w-[45px]">
-                                                                                                <span className={`text-[9px] font-bold ${cat.diffQty < 0 ? 'text-red-600' : cat.diffQty > 0 ? 'text-[#16a34a]' : 'text-[#166534]/70'}`}>
-                                                                                                    {cat.diffQty > 0 ? '+' : ''}{Math.round(cat.diffQty).toLocaleString('pt-BR')} un.
+                                                                                    );
+                                                                                })}
+
+                                                                            </div>
+                                                                            {/* Lista de códigos reduzidos para DIVERSOS */}
+                                                                            {dept.name === 'DIVERSOS (SEM DEPARTAMENTO)' && (() => {
+                                                                                const diversosItems = (termComparisonMetrics?.items || []).filter(
+                                                                                    (item: any) => item.deptName === 'DIVERSOS (SEM DEPARTAMENTO)'
+                                                                                );
+                                                                                if (diversosItems.length === 0) return null;
+                                                                                return (
+                                                                                    <div className="p-2 border-t border-amber-100 bg-amber-50">
+                                                                                        <p className="text-[8px] font-black text-amber-700 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                                                                                            <Search className="w-2.5 h-2.5" />
+                                                                                            Itens sem categoria vinculada (Cód. Reduzido)
+                                                                                        </p>
+                                                                                        <div className="flex flex-wrap gap-1">
+                                                                                            {diversosItems.map((item: any, idx: number) => (
+                                                                                                <span key={idx} className="bg-white border border-amber-200 text-amber-800 text-[8px] font-black px-1.5 py-0.5 rounded-md shadow-sm" title={item.description}>
+                                                                                                    {item.code}
                                                                                                 </span>
-                                                                                            </div>
-                                                                                            <div className="min-w-[65px]">
-                                                                                                <span className={`text-[10px] font-black ${cat.diffCost < 0 ? 'text-red-600' : cat.diffCost > 0 ? 'text-[#16a34a]' : 'text-[#166534]/80'}`}>
-                                                                                                    {cat.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                                                                                </span>
-                                                                                            </div>
+                                                                                            ))}
                                                                                         </div>
                                                                                     </div>
-                                                                                ))}
-                                                                            </div>
+                                                                                );
+                                                                            })()}
                                                                         </div>
                                                                     ))}
                                                                 </div>
