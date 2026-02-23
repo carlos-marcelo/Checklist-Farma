@@ -1058,9 +1058,55 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const productsByReduced: Record<string, ProductScope[]> = {};
             const productsByName: Record<string, ProductScope[]> = {};
             const catReportByReduced: Record<string, { catId: string; catName: string; deptName: string }> = {};
+            const deptIdByDescription: Record<string, string> = {};
+            const catIdByDescription: Record<string, string> = {};
+            const deptDescEntries: Array<{ key: string; id: string }> = [];
+            const catDescEntries: Array<{ key: string; id: string }> = [];
+
+            const normalizeDescriptionKey = (value: unknown) =>
+                normalizeLookupText(cleanDescription(String(value ?? '')));
+
+            const fillIdByDescription = (
+                rows: any[][],
+                output: Record<string, string>,
+                entries: Array<{ key: string; id: string }>
+            ) => {
+                rows.forEach(row => {
+                    if (!row) return;
+                    const idNum = parseSheetNumericCode(row[5]); // F = numero
+                    const descKey = normalizeDescriptionKey(row[7]); // H = descricao
+                    if (idNum === null || !descKey) return;
+                    if (!output[descKey]) output[descKey] = String(idNum);
+                    entries.push({ key: descKey, id: String(idNum) });
+                });
+            };
+
+            const resolveIdByDescription = (
+                rawDesc: unknown,
+                map: Record<string, string>,
+                entries: Array<{ key: string; id: string }>
+            ) => {
+                const key = normalizeDescriptionKey(rawDesc);
+                if (!key) return '';
+                if (map[key]) return map[key];
+                // Fallback tolerante para descricoes com sufixos/prefixos nos relatorios.
+                const candidates = entries.filter(e =>
+                    e.key === key ||
+                    e.key.includes(key) ||
+                    key.includes(e.key)
+                );
+                if (candidates.length === 1) return candidates[0].id;
+                return '';
+            };
+
+            if (effectiveDeptIdsFile) {
+                const rowsDept = await readExcel(effectiveDeptIdsFile);
+                fillIdByDescription(rowsDept, deptIdByDescription, deptDescEntries);
+            }
 
             if (effectiveCatIdsFile) {
                 const rowsCat = await readExcel(effectiveCatIdsFile);
+                fillIdByDescription(rowsCat, catIdByDescription, catDescEntries);
                 let lastCatId = "";
                 let lastCatName = "";
                 rowsCat.forEach(row => {
@@ -1114,13 +1160,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                     const deptCell = parseHierarchyCell(row[18], "OUTROS");
                     const catCell = parseHierarchyCell(row[22], "GERAL");
+                    const deptResolvedId = deptCell.numericId || resolveIdByDescription(row[18], deptIdByDescription, deptDescEntries);
+                    const catResolvedId = catCell.numericId || resolveIdByDescription(row[22], catIdByDescription, catDescEntries);
 
                     const scope: ProductScope = {
                         groupId,
                         groupName,
-                        deptId: deptCell.numericId,
+                        deptId: deptResolvedId,
                         deptName: deptCell.name,
-                        catId: catCell.numericId,
+                        catId: catResolvedId,
                         catName: catCell.name
                     };
 
@@ -1190,6 +1238,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         categories: []
                     };
                     groupsMap[finalGroupId].departments.push(dept);
+                } else if (!dept.numericId && chosenScope.deptId) {
+                    dept.numericId = chosenScope.deptId;
                 }
 
                 const catIdentity = chosenScope.catId || chosenScope.catName;
@@ -1207,6 +1257,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         products: []
                     };
                     dept.categories.push(cat);
+                } else if (!cat.numericId && chosenScope.catId) {
+                    cat.numericId = chosenScope.catId;
                 }
 
                 cat.itemsCount++;
