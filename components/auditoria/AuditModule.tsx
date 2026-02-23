@@ -1224,32 +1224,55 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     }
                 }
                 if (!chosenScope) return;
-                const finalGroupId = chosenScope.groupId;
-                const finalGroupName = chosenScope.groupName;
+                const resolvedScope: ProductScope = { ...chosenScope };
+                const catByReduced = catReportByReduced[reduced];
+                if (catByReduced) {
+                    if (!resolvedScope.catId && catByReduced.catId) {
+                        resolvedScope.catId = catByReduced.catId;
+                    }
+                    if ((!resolvedScope.catName || resolvedScope.catName === 'GERAL') && catByReduced.catName) {
+                        resolvedScope.catName = catByReduced.catName;
+                    }
+                    if (catByReduced.deptName) {
+                        if (!resolvedScope.deptId) {
+                            resolvedScope.deptId = resolveIdByDescription(catByReduced.deptName, deptIdByDescription, deptDescEntries);
+                        }
+                        if ((!resolvedScope.deptName || resolvedScope.deptName === 'OUTROS')) {
+                            const deptParsed = parseHierarchyCell(catByReduced.deptName, "OUTROS");
+                            resolvedScope.deptName = deptParsed.name || resolvedScope.deptName;
+                            if (!resolvedScope.deptId && deptParsed.numericId) {
+                                resolvedScope.deptId = deptParsed.numericId;
+                            }
+                        }
+                    }
+                }
+
+                const finalGroupId = resolvedScope.groupId;
+                const finalGroupName = resolvedScope.groupName;
                 if (!groupsMap[finalGroupId]) groupsMap[finalGroupId] = { id: finalGroupId, name: finalGroupName, departments: [] };
 
-                const deptIdentity = chosenScope.deptId || chosenScope.deptName;
-                let dept = groupsMap[finalGroupId].departments.find(d => d.id === deptIdentity || d.name === chosenScope.deptName);
+                const deptIdentity = resolvedScope.deptId || resolvedScope.deptName;
+                let dept = groupsMap[finalGroupId].departments.find(d => d.id === deptIdentity || d.name === resolvedScope.deptName);
                 if (!dept) {
                     dept = {
                         id: deptIdentity,
-                        numericId: chosenScope.deptId || undefined,
-                        name: chosenScope.deptName,
+                        numericId: resolvedScope.deptId || undefined,
+                        name: resolvedScope.deptName,
                         categories: []
                     };
                     groupsMap[finalGroupId].departments.push(dept);
-                } else if (!dept.numericId && chosenScope.deptId) {
-                    dept.numericId = chosenScope.deptId;
+                } else if (!dept.numericId && resolvedScope.deptId) {
+                    dept.numericId = resolvedScope.deptId;
                 }
 
-                const catIdentity = chosenScope.catId || chosenScope.catName;
+                const catIdentity = resolvedScope.catId || resolvedScope.catName;
                 const catNodeId = `${finalGroupId}-${deptIdentity}-${catIdentity}`;
-                let cat = dept.categories.find(c => c.id === catNodeId || c.name === chosenScope.catName);
+                let cat = dept.categories.find(c => c.id === catNodeId || c.name === resolvedScope.catName);
                 if (!cat) {
                     cat = {
                         id: catNodeId,
-                        numericId: chosenScope.catId || undefined,
-                        name: chosenScope.catName,
+                        numericId: resolvedScope.catId || undefined,
+                        name: resolvedScope.catName,
                         itemsCount: 0,
                         totalQuantity: 0,
                         totalCost: 0,
@@ -1257,8 +1280,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         products: []
                     };
                     dept.categories.push(cat);
-                } else if (!cat.numericId && chosenScope.catId) {
-                    cat.numericId = chosenScope.catId;
+                } else if (!cat.numericId && resolvedScope.catId) {
+                    cat.numericId = resolvedScope.catId;
                 }
 
                 cat.itemsCount++;
