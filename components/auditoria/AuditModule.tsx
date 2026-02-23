@@ -1047,7 +1047,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     ]
                 };
                 const preservedTermDrafts = ((data as any).termDrafts || termDrafts || {}) as Record<string, any>;
-                const persistedData = { ...newData, termDrafts: preservedTermDrafts, sourceFiles: nextSourceFiles } as any;
+                const basePersistedData = { ...newData, termDrafts: preservedTermDrafts, sourceFiles: nextSourceFiles } as any;
+                const persistedData = applyPartialScopes(basePersistedData, (data as AuditData).partialStarts || []);
                 const progress = calculateProgress(persistedData as AuditData);
                 const savedSession = await upsertAuditSession({
                     id: dbSessionId,
@@ -1361,11 +1362,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const finalTermDrafts = (shouldReclassifyOpen && data)
                 ? (((data as any).termDrafts || termDrafts || {}) as Record<string, any>)
                 : {};
-            const persistedData = {
+            const basePersistedData = {
                 ...finalData,
                 termDrafts: finalTermDrafts,
                 sourceFiles: buildStructureSourceMeta()
             } as any;
+            const persistedData = applyPartialScopes(basePersistedData, (data as AuditData).partialStarts || []);
             const progress = calculateProgress(finalData);
             const savedSession = await upsertAuditSession({
                 id: dbSessionId,
@@ -1655,7 +1657,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             : createDefaultTermForm();
         setTermModal(scope);
         setTermForm(nextForm);
-        const nextMetrics = draft?.excelMetrics ? { ...draft.excelMetrics } : null;
+        const nextMetrics = draft?.excelMetrics
+            ? { ...draft.excelMetrics }
+            : (data?.sharedExcelMetrics ? { ...data.sharedExcelMetrics } : null);
         // Corrigir apenas groupName e tentar upgrade de DIVERSOS via data.groups
         // NÃO re-classifica itens que já têm dept/cat válidos — apenas corrige o grupo
         if (nextMetrics && scope.groupId) {
@@ -2033,6 +2037,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             };
 
             setTermComparisonMetrics(payload);
+
+            // Salvamento Global para compartilhamento entre outros termos
+            if (data) {
+                const nextData = { ...data, sharedExcelMetrics: payload };
+                setData(nextData);
+                upsertAuditSession({
+                    id: dbSessionId,
+                    branch: selectedFilial,
+                    audit_number: nextAuditNumber,
+                    status: 'open',
+                    data: nextData,
+                    progress: calculateProgress(nextData),
+                    user_email: userEmail
+                }).catch(err => console.error("Error saving shared excel metrics:", err));
+            }
 
             // Auto-Save do Excel no Termo Draft corrente
             if (termModal && termForm) {
@@ -4250,6 +4269,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest flex items-center gap-2">
                                 <FileSignature className="w-4 h-4 text-indigo-500" />
                                 Termo de Auditoria - {termModal.type === 'custom' ? 'Personalizado' : termModal.type === 'group' ? 'Grupo' : termModal.type === 'department' ? 'Departamento' : 'Categoria'}
+                                {(termModal.type === 'group') && termScopeInfo.group.id && ` (ID: ${termScopeInfo.group.id})`}
+                                {(termModal.type === 'department') && termScopeInfo.departments[0]?.numericId && ` (ID: ${termScopeInfo.departments[0].numericId})`}
+                                {(termModal.type === 'category') && termScopeInfo.categories[0]?.numericId && ` (ID: ${termScopeInfo.categories[0].numericId})`}
                             </h3>
                             <button onClick={closeTermModal} className="text-slate-400 hover:text-red-500 transition-colors">
                                 <X className="w-5 h-5" />
@@ -4268,6 +4290,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             {termModal.type === 'custom'
                                                 ? `${(termScopeInfo as any).groupLabelText || termScopeInfo.group.name} (personalizado)`
                                                 : termScopeInfo.group.name}
+                                            {termScopeInfo.group.id && ` (ID: ${termScopeInfo.group.id})`}
                                         </p>
                                     </div>
                                     <div>
@@ -4278,11 +4301,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
                                         <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Departamentos</p>
-                                        <p className="font-semibold">{termScopeInfo.departments.map(d => d.name).join(', ') || '-'}</p>
+                                        <p className="font-semibold">{termScopeInfo.departments.map(d => `${d.name}${d.numericId ? ` (ID: ${d.numericId})` : ''}`).join(', ') || '-'}</p>
                                     </div>
                                     <div>
                                         <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Categorias</p>
-                                        <p className="font-semibold">{termScopeInfo.categories.map(c => c.name).join(', ') || '-'}</p>
+                                        <p className="font-semibold">{termScopeInfo.categories.map(c => `${c.name}${c.numericId ? ` (ID: ${c.numericId})` : ''}`).join(', ') || '-'}</p>
                                     </div>
                                 </div>
                             </div>

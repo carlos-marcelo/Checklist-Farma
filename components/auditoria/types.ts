@@ -58,6 +58,7 @@ export interface AuditData {
         catId?: string;
     }>;
     lastPartialBatchId?: string;
+    sharedExcelMetrics?: any;
 }
 
 export interface ViewState {
