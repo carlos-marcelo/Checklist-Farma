@@ -1034,7 +1034,23 @@ export async function fetchLatestAudit(branch: string): Promise<DbAuditSession |
 
 export async function upsertAuditSession(session: DbAuditSession): Promise<DbAuditSession | null> {
   try {
-    const safeData = session.data;
+    let safeData = session.data ? JSON.parse(JSON.stringify(session.data)) : null;
+
+    // Mitigação de Error 500 (Statement Timeout 57014) no Supabase JSONB:
+    // Sempre remove assinaturas pesadas em Base64 dos rascunhos para garantir que o pacote JSON fique o mais leve possível
+    // e o banco de dados free tier não congele durante a inserção ou timeout de statement.
+    if (safeData && safeData.termDrafts) {
+      Object.keys(safeData.termDrafts).forEach(key => {
+        const draft = safeData.termDrafts[key];
+        if (draft.managerSignature) delete draft.managerSignature;
+        if (draft.managerSignature2) delete draft.managerSignature2;
+        if (draft.collaborators && Array.isArray(draft.collaborators)) {
+          draft.collaborators.forEach((c: any) => {
+            if (c.signature) delete c.signature;
+          });
+        }
+      });
+    }
 
     const payload: any = {
       branch: String(session.branch), // Ensure string

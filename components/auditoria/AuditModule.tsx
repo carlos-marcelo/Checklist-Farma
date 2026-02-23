@@ -36,7 +36,8 @@ import {
     Activity,
     Search,
     RefreshCw,
-    X
+    X,
+    Upload
 } from 'lucide-react';
 
 const GROUP_UPLOAD_IDS = ['2000', '3000', '4000', '8000', '10000', '66', '67'] as const;
@@ -335,6 +336,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [termModal, setTermModal] = useState<TermScope | null>(null);
     const [termForm, setTermForm] = useState<TermForm | null>(null);
     const [termDrafts, setTermDrafts] = useState<Record<string, TermForm>>({});
+    const [termComparisonMetrics, setTermComparisonMetrics] = useState<{
+        sysQty: number;
+        sysCost: number;
+        countedQty: number;
+        countedCost: number;
+        diffQty: number;
+        diffCost: number;
+        items: any[];
+    } | null>(null);
     const [auditLookup, setAuditLookup] = useState('');
     const [auditLookupOpen, setAuditLookupOpen] = useState(false);
     const auditLookupInputRef = useRef<HTMLInputElement | null>(null);
@@ -485,21 +495,25 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     setInitialDoneUnits(done);
                 }
             } else {
-                setNextAuditNumber(latest ? latest.audit_number + 1 : 1);
-                setDbSessionId(undefined);
-                if (!silent) {
-                    setData(null);
-                } else if (data) {
-                    // Evita limpar sessão local ainda não sincronizada.
-                    if (dbSessionId) {
-                        alert("Esta auditoria foi concluída ou removida por outro usuário.");
+                // Se a API retornou null e estamos em polling, só fechamos a auditoria se tivermos certeza.
+                // Mas como o fetchLatestAudit pode retornar null em erros de rede (500), vamos ser menos agressivos:
+                // Só alertar se não houver erro. O `latest` ser null aqui pode ser um falso negativo de conexão caída.
+                if (latest !== undefined) {
+                    setNextAuditNumber(latest ? latest.audit_number + 1 : 1);
+                    setDbSessionId(undefined);
+                    if (!silent) {
                         setData(null);
-                        setView({ level: 'groups' });
+                    } else if (data) {
+                        // Evita limpar sessão local se foi só um erro 500 passageiro.
+                        // Só desloga se explicitamente a session de fechamento for retornada ou sumiu.
+                        // Mas por segurança, como não temos como distinguir no payload atual entre "Nao tem" e "Deu erro 500"
+                        // se o fetch silencia erros, deixamos o usuário trabalhar offline localmente até salvar.
                     }
                 }
             }
         } catch (error) {
             console.error('Error loading audit info:', error);
+            // Em caso de erro de conexão, NÃO expulsa o usuário.
         }
     }, [selectedFilial, dbSessionId, isMaster, data]);
 
@@ -880,6 +894,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const mergePreservingDone = (baseData: AuditData, rebuiltData: AuditData): AuditData => {
             const merged: AuditData = {
                 ...rebuiltData,
+                termDrafts: baseData.termDrafts,
+                partialStarts: baseData.partialStarts,
+                partialCompleted: baseData.partialCompleted,
+                lastPartialBatchId: baseData.lastPartialBatchId,
                 groups: rebuiltData.groups.map(g => ({
                     ...g,
                     departments: g.departments.map(d => ({ ...d, categories: [...d.categories] }))
@@ -1679,7 +1697,102 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }
         setTermModal(null);
         setTermForm(null);
+        setTermComparisonMetrics(null);
     }, [termModal, termForm, isMaster, data, termDrafts, dbSessionId, selectedFilial, nextAuditNumber, userEmail]);
+
+    const handleProcessTermComparisonExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        if (!file) {
+            setTermComparisonMetrics(null);
+            return;
+        }
+
+        try {
+            const rows = await readExcel(file);
+            let sysQty = 0;
+            let sysCost = 0;
+            let countedQty = 0;
+            let countedCost = 0;
+            let diffQtySum = 0;
+            let diffCostSum = 0;
+            const items: any[] = [];
+
+            // Skip header (row 0), process data rows
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                if (!row) continue;
+
+                // Se houver "Total Geral", ignorar
+                const desc = String(row[1] || '').trim().toLowerCase();
+                const colG = String(row[6] || '').trim().toLowerCase();
+                if (desc.includes('total geral') || colG.includes('total geral')) {
+                    continue;
+                }
+
+                // Índices informados:
+                // C (2): Descrição
+                // K (10): Estoque Sistema
+                // M (12): Custo Sistema (Valores M)
+                // N (13): Diferença (Qtd)
+                // O (14): Estoque Físico
+                // Q (16): Custo Físico (Valores Q - Diferença financeira seria Q - M)
+
+                const sq = parseStockNumber(row[10]); // K
+                const sc = parseStockNumber(row[12]); // M
+                const cq = parseStockNumber(row[14]); // O
+                const cc = parseStockNumber(row[16]); // Q
+
+                // A diferença QTD agora é calculada matematicamente (Físico - Sistema) em vez de ler a coluna N, 
+                // pois a soma literal de N estava gerando valores incorretos (+71.488 un).
+                const dq = cq - sq;
+
+                // Captura os dados básicos da linha para imprimir no termo depois
+                const code = String(row[1] || '').trim(); // B: Cód Reduzido
+                const description = String(row[2] || '').trim(); // C: Descrição
+                const lab = String(row[3] || '').trim();
+
+                sysQty += sq;
+                sysCost += sc;
+                countedQty += cq;
+                countedCost += cc;
+                diffQtySum += dq;
+                diffCostSum += (cc - sc);
+
+                items.push({
+                    code,
+                    description,
+                    lab,
+                    sysQty: sq,
+                    sysCost: sc,
+                    countedQty: cq,
+                    countedCost: cc,
+                    diffQty: dq, // Passando a diferença cravada da coluna N
+                    diffCost: cc - sc // Valores: Coluna Q - Coluna M
+                });
+            }
+
+            setTermComparisonMetrics({
+                sysQty,
+                sysCost,
+                countedQty,
+                countedCost,
+                diffQty: diffQtySum,
+                diffCost: diffCostSum,
+                items
+            });
+        } catch (err) {
+            console.error("Erro ao processar Excel do Termo:", err);
+            alert("Erro ao ler o arquivo Excel.");
+            setTermComparisonMetrics(null);
+        }
+
+        // Reset input value to allow uploading the same file again if needed
+        e.target.value = '';
+    };
+
+    const removeTermComparisonExcel = () => {
+        setTermComparisonMetrics(null);
+    };
 
     useEffect(() => {
         if (!termModal || typeof window === 'undefined' || typeof document === 'undefined') return;
@@ -1965,7 +2078,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         // @ts-ignore
         const afterSignY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 6 : y + 20;
 
-        const productRows = scopeInfo.products.map(p => [
+        // 1. Tabela Base: Produtos Conferidos no Sistema
+        const productHead = [['Grupo', 'Departamento', 'Categoria', 'Código', 'Produto', 'Qtd', 'Custo Unit', 'Custo Total']];
+        const productBody = scopeInfo.products.map(p => [
             p.groupName,
             p.deptName,
             p.catName,
@@ -1975,23 +2090,124 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             `R$ ${(p.cost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
             `R$ ${((p.cost || 0) * p.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
         ]);
+        const productFoot = [[
+            { content: 'TOTAIS DOS ITENS CONFERIDOS', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } },
+            Math.round(scopeInfo.products.reduce((acc, p) => acc + p.quantity, 0)).toLocaleString(),
+            '',
+            `R$ ${scopeInfo.products.reduce((acc, p) => acc + (p.quantity * (p.cost || 0)), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        ]];
 
         // @ts-ignore
         doc.autoTable({
             startY: afterSignY,
-            head: [['Grupo', 'Departamento', 'Categoria', 'Código', 'Produto', 'Qtd', 'Custo Unit', 'Custo Total']],
-            body: productRows,
-            foot: [[
-                { content: 'TOTAIS DOS ITENS CONFERIDOS', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } },
-                Math.round(scopeInfo.products.reduce((acc, p) => acc + p.quantity, 0)).toLocaleString(),
-                '',
-                `R$ ${scopeInfo.products.reduce((acc, p) => acc + (p.quantity * (p.cost || 0)), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-            ]],
+            head: productHead,
+            body: productBody,
+            foot: productFoot,
             theme: 'striped',
             styles: { fontSize: 7, cellPadding: 1.5 },
             headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] },
             footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' }
         });
+
+        // @ts-ignore
+        let afterProductTableY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : afterSignY + 50;
+
+        // 2. Tabela Opcional: Divergências Financeiras (Planilha Upload)
+        if (termComparisonMetrics && termComparisonMetrics.items && termComparisonMetrics.items.length > 0) {
+
+            // Quebra de página se tabelão de produtos ocupou muito espaço e não cabe nem o cabeçalho novo
+            if (afterProductTableY > 240) {
+                doc.addPage();
+                afterProductTableY = 20;
+            }
+
+            doc.setFontSize(11);
+            doc.setTextColor(15, 23, 42);
+            doc.text('DIVERGÊNCIAS (PLANILHA DE CONFRONTO)', 14, afterProductTableY);
+
+            const divHead = [['Cód', 'Descrição', 'Lab', 'Est Sist', 'Est Fis', 'Dif Qtd', 'Custo Físico', 'Dif R$']];
+            const divBody = termComparisonMetrics.items.map(p => [
+                p.code,
+                p.description,
+                p.lab,
+                Math.round(p.sysQty).toLocaleString(),
+                Math.round(p.countedQty).toLocaleString(),
+                Math.round(p.diffQty).toLocaleString(),
+                `R$ ${(p.countedCost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                `R$ ${(p.diffCost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            ]);
+            const divFoot = [[
+                { content: 'TOTAIS DAS DIVERGÊNCIAS', colSpan: 3, styles: { halign: 'right', fontStyle: 'bold' } },
+                Math.round(termComparisonMetrics.sysQty).toLocaleString(),
+                Math.round(termComparisonMetrics.countedQty).toLocaleString(),
+                Math.round(termComparisonMetrics.diffQty).toLocaleString(),
+                `R$ ${termComparisonMetrics.countedCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                `R$ ${termComparisonMetrics.diffCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            ]];
+
+            // @ts-ignore
+            doc.autoTable({
+                startY: afterProductTableY + 6,
+                head: divHead,
+                body: divBody,
+                foot: divFoot,
+                theme: 'striped',
+                styles: { fontSize: 7, cellPadding: 1.5 },
+                headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255] },
+                footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' }
+            });
+
+            // @ts-ignore
+            afterProductTableY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : afterProductTableY + 50;
+        }
+
+        let finalY = afterProductTableY;
+
+        if (termComparisonMetrics) {
+            // Check if we need a new page for the summary
+            if (finalY > 250) {
+                doc.addPage();
+                finalY = 20;
+            }
+
+            doc.setFontSize(11);
+            doc.setTextColor(15, 23, 42);
+            doc.text('RESUMO FINANCEIRO DA CONFERÊNCIA', 14, finalY);
+            finalY += 6;
+
+            const diffType = termComparisonMetrics.diffCost < 0 ? 'Prejuízo (Falta)' : termComparisonMetrics.diffCost > 0 ? 'Sobra (Excesso)' : 'Zero';
+
+            const summaryRows = [
+                ['Estoque Sistema (Qtde)', Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')],
+                ['Custo Total Sistema', termComparisonMetrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })],
+                ['Estoque Físico (Qtde)', Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')],
+                ['Custo Total Físico', termComparisonMetrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })],
+                ['Diferença de Estoque (Qtde)', termComparisonMetrics.diffQty.toLocaleString('pt-BR')],
+                ['Resultado Financeiro', termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) + ` (${diffType})`]
+            ];
+
+            // @ts-ignore
+            doc.autoTable({
+                startY: finalY,
+                body: summaryRows,
+                theme: 'grid',
+                styles: { fontSize: 9, cellPadding: 2 },
+                columnStyles: {
+                    0: { cellWidth: 80, fontStyle: 'bold', fillColor: [248, 250, 252] },
+                    1: { cellWidth: 60, halign: 'right' }
+                },
+                didParseCell: (hookData: any) => {
+                    if (hookData.row.index === 5 && hookData.column.index === 1) { // Resultado Financeiro value cell
+                        hookData.cell.styles.fontStyle = 'bold';
+                        if (termComparisonMetrics.diffCost < 0) {
+                            hookData.cell.styles.textColor = [220, 38, 38]; // Red
+                        } else if (termComparisonMetrics.diffCost > 0) {
+                            hookData.cell.styles.textColor = [22, 163, 74]; // Green
+                        }
+                    }
+                }
+            });
+        }
 
         const safeName = scopeInfo.group.name.replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 30);
         const termTypeFile = termModal.type === 'custom' ? 'personalizado' : termModal.type;
@@ -3832,6 +4048,88 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">A assinatura deve ser igual ao documento.</p>
                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Todos colaboradores da Filial devem assinar.</p>
                             </div>
+
+                            {/* Excel Comparativo do Termo */}
+                            <div className="space-y-4 pt-4 border-t border-slate-100">
+                                <div className="flex items-center justify-between">
+                                    <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
+                                        <Upload className="w-4 h-4 text-indigo-500" />
+                                        Planilha de Divergências (Opcional)
+                                    </h4>
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Gera resumo financeiro no PDF</span>
+                                </div>
+                                <div className="bg-white border-2 border-dashed border-slate-200 rounded-xl p-4 text-center relative hover:bg-slate-50 transition-colors">
+                                    <input
+                                        type="file"
+                                        accept=".xlsx, .xls"
+                                        onChange={handleProcessTermComparisonExcel}
+                                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                        title="Carregar Excel de Divergências"
+                                    />
+                                    <div className="flex flex-col items-center gap-2">
+                                        <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500">
+                                            <Upload className="w-5 h-5" />
+                                        </div>
+                                        <p className="text-sm font-bold text-slate-700">Carregar Excel de Divergências</p>
+                                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Clique ou arraste o arquivo aqui</p>
+                                    </div>
+                                </div>
+
+                                {termComparisonMetrics && (
+                                    <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 relative animate-in fade-in slide-in-from-top-2">
+                                        <button
+                                            onClick={removeTermComparisonExcel}
+                                            className="absolute top-3 right-3 text-indigo-400 hover:text-red-500 transition-colors"
+                                            title="Remover planilha"
+                                        >
+                                            <X className="w-4 h-4" />
+                                        </button>
+                                        <h5 className="text-[10px] font-black text-indigo-800 uppercase tracking-widest mb-3">Resumo Identificado</h5>
+                                        <div className="grid grid-cols-2 lg:grid-cols-2 gap-4">
+                                            {/* Row 1: Quantities */}
+                                            <div className="flex justify-between items-center bg-white p-3 rounded border border-slate-100">
+                                                <div>
+                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Sist (Qtde)</p>
+                                                    <p className="font-bold text-slate-700">{Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')} un.</p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Físico (Qtde)</p>
+                                                    <p className="font-bold text-slate-700">{Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')} un.</p>
+                                                </div>
+                                                <div className="text-right pl-4 border-l border-slate-100">
+                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Diferença (Qtde)</p>
+                                                    <p className={`font-black text-base ${termComparisonMetrics.diffQty < 0 ? 'text-red-500' : termComparisonMetrics.diffQty > 0 ? 'text-green-500' : 'text-slate-600'}`}>
+                                                        {termComparisonMetrics.diffQty > 0 ? '+' : ''}{Math.round(termComparisonMetrics.diffQty).toLocaleString('pt-BR')} un.
+                                                    </p>
+                                                </div>
+                                            </div>
+
+                                            {/* Row 2: Finances */}
+                                            <div className="flex justify-between items-center bg-white p-3 rounded border border-slate-100">
+                                                <div>
+                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Sist</p>
+                                                    <p className="font-bold text-slate-700">{termComparisonMetrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Físico</p>
+                                                    <p className="font-bold text-slate-700">{termComparisonMetrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                                                </div>
+                                                <div className="text-right pl-4 border-l border-slate-100">
+                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Resultado Fin.</p>
+                                                    <div className="flex flex-col items-end">
+                                                        <span className={`font-black text-base ${termComparisonMetrics.diffCost < 0 ? 'text-red-600' : termComparisonMetrics.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>
+                                                            {termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                        </span>
+                                                        <span className={`text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${termComparisonMetrics.diffCost < 0 ? 'bg-red-100 text-red-600' : termComparisonMetrics.diffCost > 0 ? 'bg-green-100 text-green-600' : 'bg-slate-200 text-slate-600'}`}>
+                                                            {termComparisonMetrics.diffCost < 0 ? 'Prejuízo' : termComparisonMetrics.diffCost > 0 ? 'Sobra' : 'Zero'}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
                         </div>
                         <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
                             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
@@ -3847,7 +4145,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     </div>
                 </div>,
                 document.body
-            )}
+            )
+            }
 
             <style>{`
         .custom-scrollbar::-webkit-scrollbar { width: 10px; }
@@ -3855,7 +4154,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 12px; border: 3px solid #f8fafc; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
       `}</style>
-        </div>
+        </div >
     );
 };
 
