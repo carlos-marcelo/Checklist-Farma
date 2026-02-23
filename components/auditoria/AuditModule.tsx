@@ -699,7 +699,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
                     status: 'open',
-                    data: { ...data, termDrafts } as any,
+                    data: { ...data, termDrafts: ((data as any)?.termDrafts || termDrafts || {}) } as any,
                     progress: progress,
                     user_email: userEmail
                 });
@@ -744,7 +744,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
                     status: 'completed',
-                    data: { ...data, termDrafts } as any,
+                    data: { ...data, termDrafts: ((data as any)?.termDrafts || termDrafts || {}) } as any,
                     progress: 100,
                     user_email: userEmail
                 });
@@ -775,11 +775,34 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const normalizeBarcode = (val: any): string => {
         if (val === null || val === undefined) return "";
+        if (typeof val === 'number' && Number.isFinite(val)) {
+            return String(Math.trunc(val)).replace(/^0+/, "");
+        }
         let s = val.toString().trim();
         if (s.includes('E+') || s.includes('e+')) {
             s = Number(val).toLocaleString('fullwide', { useGrouping: false });
         }
+        if (/^\d+[.,]0+$/.test(s)) s = s.split(/[.,]/)[0];
         return s.replace(/\D/g, "").replace(/^0+/, "");
+    };
+
+    const parseStockNumber = (val: any): number => {
+        if (val === null || val === undefined) return 0;
+        if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+        const raw = String(val).trim();
+        if (!raw) return 0;
+        let s = raw.replace(/\s+/g, '');
+        if (s.includes('.') && s.includes(',')) {
+            s = s.lastIndexOf(',') > s.lastIndexOf('.')
+                ? s.replace(/\./g, '').replace(',', '.')
+                : s.replace(/,/g, '');
+        } else if (s.includes(',')) {
+            s = /,\d+$/.test(s) ? s.replace(',', '.') : s.replace(/,/g, '');
+        } else if ((s.match(/\./g) || []).length > 1) {
+            s = s.replace(/\./g, '');
+        }
+        const n = Number(s);
+        return Number.isFinite(n) ? n : 0;
     };
 
     const readExcel = (file: File): Promise<any[][]> => {
@@ -853,14 +876,51 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const hasLocalStructureFiles = localGroupFilesCount > 0;
         const hasOpenStructure = !!(data && data.groups && data.groups.length > 0);
         const shouldMergeStockOnly = hasOpenStructure;
+        const shouldReclassifyOpen = hasOpenStructure && hasStructureFiles;
+        const mergePreservingDone = (baseData: AuditData, rebuiltData: AuditData): AuditData => {
+            const merged: AuditData = {
+                ...rebuiltData,
+                groups: rebuiltData.groups.map(g => ({
+                    ...g,
+                    departments: g.departments.map(d => ({ ...d, categories: [...d.categories] }))
+                }))
+            };
+            const ensureGroup = (groupId: string, groupName: string) => {
+                let g = merged.groups.find(x => String(x.id) === String(groupId));
+                if (!g) {
+                    g = { id: groupId, name: groupName, departments: [] };
+                    merged.groups.push(g);
+                }
+                return g;
+            };
+            const ensureDept = (group: Group, dept: Department) => {
+                const deptIdentity = dept.id || dept.name;
+                let d = group.departments.find(x => x.id === deptIdentity || x.name === dept.name);
+                if (!d) {
+                    d = { ...dept, categories: [] };
+                    group.departments.push(d);
+                }
+                return d;
+            };
+
+            baseData.groups.forEach(oldGroup => {
+                oldGroup.departments.forEach(oldDept => {
+                    oldDept.categories.forEach(oldCat => {
+                        if (!isDoneStatus(oldCat.status)) return;
+                        const group = ensureGroup(String(oldGroup.id), oldGroup.name);
+                        const dept = ensureDept(group, oldDept);
+                        const catId = oldCat.id;
+                        const idx = dept.categories.findIndex(c => c.id === catId || c.name === oldCat.name);
+                        if (idx >= 0) dept.categories[idx] = { ...oldCat };
+                        else dept.categories.push({ ...oldCat });
+                    });
+                });
+            });
+            return merged;
+        };
 
         if (!fileStock) {
             alert("Por favor, carregue o arquivo de SALDOS.");
-            return;
-        }
-
-        if (shouldMergeStockOnly && hasLocalStructureFiles) {
-            alert("A auditoria já foi iniciada. Após o início, somente o arquivo de SALDOS pode ser alterado.");
             return;
         }
 
@@ -874,7 +934,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             return;
         }
 
-        if (!shouldMergeStockOnly) {
+        if (shouldReclassifyOpen && data) {
+            if (!window.confirm("Reclassificar a estrutura aberta com os novos arquivos carregados?")) {
+                return;
+            }
+        } else if (!shouldMergeStockOnly) {
             if (!window.confirm(`ATENÇÃO: Você está prestes a criar um NOVO inventário (Nº ${nextAuditNumber}) para a Filial ${selectedFilial}.\n\nDeseja realmente prosseguir?`)) {
                 return;
             }
@@ -882,19 +946,34 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         setIsProcessing(true);
         try {
-            if (shouldMergeStockOnly && data) {
+            if (shouldMergeStockOnly && data && !shouldReclassifyOpen) {
                 // Lógica de MERGE de estoque
                 const rowsStock = await readExcel(fileStock!);
-                const stockMap: Record<string, { q: number; c: number }> = {};
+                const stockAcc: Record<string, { q: number; costAmount: number }> = {};
                 rowsStock.forEach(row => {
-                    if (!row || row.length < 14) return;
-                    const b = normalizeBarcode(row[1]);
-                    const q = parseFloat(row[13]?.toString() || "0");
-                    const c = parseFloat(row[9]?.toString() || "0"); // Coluna J
-                    if (b) stockMap[b] = { q, c };
+                    if (!row) return;
+                    const reduced = normalizeBarcode(row[1]); // B (reduzido)
+                    if (!reduced) return;
+                    const q = parseStockNumber(row[14]); // O
+                    const c = parseStockNumber(row[15]); // P
+                    if (q <= 0) return;
+                    const prev = stockAcc[reduced] || { q: 0, costAmount: 0 };
+                    stockAcc[reduced] = {
+                        q: prev.q + q,
+                        costAmount: prev.costAmount + (q * c)
+                    };
+                });
+                const stockMap: Record<string, { q: number; c: number }> = {};
+                Object.entries(stockAcc).forEach(([reduced, acc]) => {
+                    stockMap[reduced] = {
+                        q: acc.q,
+                        c: acc.q > 0 ? (acc.costAmount / acc.q) : 0
+                    };
                 });
 
                 const newData = { ...data };
+                let appliedUnits = 0;
+                const matchedReduced = new Set<string>();
                 newData.groups.forEach(g => {
                     g.departments.forEach(d => {
                         d.categories.forEach(c => {
@@ -902,16 +981,27 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 c.totalQuantity = 0;
                                 c.totalCost = 0;
                                 c.products.forEach(p => {
-                                    const entry = stockMap[p.code] || { q: 0, c: 0 };
+                                    const reduced = normalizeBarcode(p.reducedCode || p.code);
+                                    const entry = stockMap[reduced] || { q: 0, c: 0 };
                                     p.quantity = entry.q;
                                     p.cost = entry.c;
                                     c.totalQuantity += entry.q;
                                     c.totalCost += (entry.q * entry.c);
+                                    appliedUnits += entry.q;
+                                    if (entry.q > 0 && reduced) matchedReduced.add(reduced);
                                 });
                             }
                         });
                     });
                 });
+                const stockUnits = Object.values(stockMap).reduce((sum, e) => sum + e.q, 0);
+                let unmatchedUnits = 0;
+                Object.entries(stockMap).forEach(([reduced, entry]) => {
+                    if (!matchedReduced.has(reduced)) unmatchedUnits += entry.q;
+                });
+                if (Math.abs(stockUnits - appliedUnits) > 0.01 || unmatchedUnits > 0.01) {
+                    alert(`Reconciliação do estoque:\nArquivo: ${Math.round(stockUnits).toLocaleString()} unid.\nAplicado: ${Math.round(appliedUnits).toLocaleString()} unid.\nNão classificados: ${Math.round(unmatchedUnits).toLocaleString()} unid.`);
+                }
 
                 const nowIso = new Date().toISOString();
                 const prevSourceFiles = ((data as any).sourceFiles || {}) as any;
@@ -926,7 +1016,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         { ...stockMeta, updatedAt: nowIso }
                     ]
                 };
-                const persistedData = { ...newData, sourceFiles: nextSourceFiles } as any;
+                const preservedTermDrafts = ((data as any).termDrafts || termDrafts || {}) as Record<string, any>;
+                const persistedData = { ...newData, termDrafts: preservedTermDrafts, sourceFiles: nextSourceFiles } as any;
                 const progress = calculateProgress(persistedData as AuditData);
                 const savedSession = await upsertAuditSession({
                     id: dbSessionId,
@@ -943,6 +1034,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                 setDbSessionId(savedSession.id);
                 setNextAuditNumber(savedSession.audit_number);
+                setTermDrafts(preservedTermDrafts as any);
                 setData((savedSession.data as AuditData) || (persistedData as AuditData));
                 setGroupFiles(createInitialGroupFiles());
                 setFileDeptIds(null);
@@ -962,34 +1054,31 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const rowsGroupsByFile = await Promise.all(effectiveGroupFiles.map(entry => readExcel(entry.file)));
             const rowsStock = await readExcel(fileStock);
 
-            const mapIdsAndBarcodes = (rows: any[][]) => {
-                const nameToId: Record<string, string> = {};
-                const barcodeToId: Record<string, string> = {};
-                let lastId = "";
-                rows.forEach(row => {
-                    if (!row) return;
-                    const parsedId = parseSheetNumericCode(row[5]);
-                    const currentId = parsedId !== null ? String(parsedId) : row[5]?.toString().trim();
-                    if (currentId) lastId = currentId;
-                    const currentDesc = row[7]?.toString();
-                    if (lastId) {
-                        if (currentDesc) nameToId[cleanDescription(currentDesc)] = lastId;
-                        row.forEach(cell => {
-                            const b = normalizeBarcode(cell);
-                            if (b.length >= 8 && b.length <= 14) barcodeToId[b] = lastId;
-                        });
-                    }
-                });
-                return { nameToId, barcodeToId };
-            };
-
-            const emptyIdsMap = { nameToId: {} as Record<string, string>, barcodeToId: {} as Record<string, string> };
-            const deptIdMaps = effectiveDeptIdsFile ? mapIdsAndBarcodes(await readExcel(effectiveDeptIdsFile)) : emptyIdsMap;
-            const catIdMaps = effectiveCatIdsFile ? mapIdsAndBarcodes(await readExcel(effectiveCatIdsFile)) : emptyIdsMap;
-
             type ProductScope = { groupId: string; groupName: string; deptId: string; deptName: string; catId: string; catName: string };
-            const productsByBarcode: Record<string, ProductScope[]> = {};
             const productsByReduced: Record<string, ProductScope[]> = {};
+            const productsByName: Record<string, ProductScope[]> = {};
+            const catReportByReduced: Record<string, { catId: string; catName: string; deptName: string }> = {};
+
+            if (effectiveCatIdsFile) {
+                const rowsCat = await readExcel(effectiveCatIdsFile);
+                let lastCatId = "";
+                let lastCatName = "";
+                rowsCat.forEach(row => {
+                    if (!row) return;
+                    const catIdNow = parseSheetNumericCode(row[5]); // F
+                    if (catIdNow !== null) lastCatId = String(catIdNow);
+                    const catNameNowRaw = String(row[7] ?? '').trim(); // H
+                    if (catNameNowRaw) lastCatName = catNameNowRaw.replace(/^\s*[-:/.]+\s*/, '').trim();
+                    const reduced = normalizeBarcode(row[2]); // C
+                    if (!reduced) return;
+                    const deptName = String(row[19] ?? '').trim(); // T
+                    catReportByReduced[reduced] = {
+                        catId: lastCatId,
+                        catName: lastCatName,
+                        deptName
+                    };
+                });
+            }
 
             const addScope = (bucket: Record<string, ProductScope[]>, key: string, scope: ProductScope) => {
                 if (!key) return;
@@ -1018,10 +1107,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 rows.forEach((row) => {
                     if (!row || row.length < 4) return;
 
-                    // Cadastro individual: K = código de barras, C = código reduzido, S = departamento, W = categoria
-                    const barcodeFromCadastro = normalizeBarcode(row[10]);
+                    // Cadastro individual: C = reduzido, S = departamento, W = categoria
                     const reducedFromCadastro = normalizeBarcode(row[2]);
-                    if (!barcodeFromCadastro && !reducedFromCadastro) return;
+                    if (!reducedFromCadastro) return;
+                    const productNameKey = cleanDescription(row[3]?.toString() || "");
 
                     const deptCell = parseHierarchyCell(row[18], "OUTROS");
                     const catCell = parseHierarchyCell(row[22], "GERAL");
@@ -1035,93 +1124,101 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         catName: catCell.name
                     };
 
-                    addScope(productsByBarcode, barcodeFromCadastro, scope);
                     addScope(productsByReduced, reducedFromCadastro, scope);
+                    addScope(productsByName, productNameKey, scope);
                 });
             });
 
+            const stockAcc: Record<string, { q: number; costAmount: number; name: string; groupId: string }> = {};
             const groupsMap: Record<string, Group> = {};
             rowsStock.forEach((row) => {
-                if (!row || row.length < 14) return;
-                // Estoque: B = código de barras
-                const barcode = normalizeBarcode(row[1]);
-                const productName = row[4]?.toString() || "Sem Descrição";
-                const stockQty = parseFloat(row[13]?.toString() || "0");
-                const stockCost = parseFloat(row[9]?.toString() || "0"); // Coluna J
+                if (!row) return;
+                const reduced = normalizeBarcode(row[1]); // B
+                if (!reduced) return;
+                const productName = row[2]?.toString() || row[4]?.toString() || "Sem Descrição";
+                const stockQty = parseStockNumber(row[14]); // O
+                const stockCost = parseStockNumber(row[15]); // P
+                const stockGroupNum = parseSheetNumericCode(row[6]); // G
+                const stockGroupId = stockGroupNum !== null ? String(stockGroupNum) : '';
+                if (stockQty <= 0) return;
 
-                if (stockQty > 0) {
-                    // Fallback por código reduzido caso o barcode não esteja no cadastro
-                    const reducedCandidates = [
-                        normalizeBarcode(row[2]), // C
-                        normalizeBarcode(row[7]), // H
-                        normalizeBarcode(row[0])  // A
-                    ].filter(Boolean);
-                    const reduced = reducedCandidates[0] || "";
+                const prev = stockAcc[reduced] || { q: 0, costAmount: 0, name: productName, groupId: stockGroupId };
+                stockAcc[reduced] = {
+                    q: prev.q + stockQty,
+                    costAmount: prev.costAmount + (stockQty * stockCost),
+                    name: prev.name || productName,
+                    groupId: prev.groupId || stockGroupId
+                };
+            });
 
-                    const byBarcode = barcode ? (productsByBarcode[barcode] || []) : [];
-                    const byReduced = reduced ? (productsByReduced[reduced] || []) : [];
-                    const mergedMap = new Map<string, ProductScope>();
-                    [...byBarcode, ...byReduced].forEach(scope => {
-                        const deptKey = scope.deptId || scope.deptName;
-                        const catKey = scope.catId || scope.catName;
-                        mergedMap.set(`${scope.groupId}|${deptKey}|${catKey}`, scope);
-                    });
-                    const productInfos = Array.from(mergedMap.values());
-                    if (productInfos.length === 0) return;
+            Object.entries(stockAcc).forEach(([reduced, acc]) => {
+                const avgCost = acc.q > 0 ? (acc.costAmount / acc.q) : 0;
+                const nameKey = cleanDescription(acc.name || "");
+                const scopesByReduced = productsByReduced[reduced] || [];
+                const scopesByName = nameKey ? (productsByName[nameKey] || []) : [];
+                const scopes = scopesByReduced.length > 0 ? scopesByReduced : scopesByName;
 
-                    productInfos.forEach(productInfo => {
-                        const finalGroupId = productInfo.groupId;
-                        const finalGroupName = productInfo.groupName;
-
-                        if (!groupsMap[finalGroupId]) groupsMap[finalGroupId] = { id: finalGroupId, name: finalGroupName, departments: [] };
-
-                        const deptIdentity = productInfo.deptId || productInfo.deptName;
-                        let dept = groupsMap[finalGroupId].departments.find(d => d.id === deptIdentity || d.name === productInfo.deptName);
-                        const resolvedDeptId = deptIdMaps.barcodeToId[barcode] || deptIdMaps.nameToId[cleanDescription(productInfo.deptName)] || "";
-                        if (!dept) {
-                            dept = {
-                                id: deptIdentity,
-                                numericId: productInfo.deptId || resolvedDeptId || undefined,
-                                name: productInfo.deptName,
-                                categories: []
-                            };
-                            groupsMap[finalGroupId].departments.push(dept);
-                        } else if (!dept.numericId && (productInfo.deptId || resolvedDeptId)) {
-                            dept.numericId = productInfo.deptId || resolvedDeptId;
-                        }
-
-                        const catIdentity = productInfo.catId || productInfo.catName;
-                        const catNodeId = `${finalGroupId}-${deptIdentity}-${catIdentity}`;
-                        let cat = dept.categories.find(c => c.id === catNodeId || c.name === productInfo.catName);
-                        const resolvedCatId = catIdMaps.barcodeToId[barcode] || catIdMaps.nameToId[cleanDescription(productInfo.catName)] || "";
-                        if (!cat) {
-                            cat = {
-                                id: catNodeId,
-                                numericId: productInfo.catId || resolvedCatId || undefined,
-                                name: productInfo.catName,
-                                itemsCount: 0,
-                                totalQuantity: 0,
-                                totalCost: 0,
-                                status: AuditStatus.TODO,
-                                products: []
-                            };
-                            dept.categories.push(cat);
-                        } else if (!cat.numericId && (productInfo.catId || resolvedCatId)) {
-                            cat.numericId = productInfo.catId || resolvedCatId;
-                        }
-
-                        cat.itemsCount++;
-                        cat.totalQuantity += stockQty;
-                        cat.totalCost += (stockQty * stockCost);
-                        cat.products.push({
-                            code: barcode || reduced || '',
-                            reducedCode: reduced || undefined,
-                            name: productName,
-                            quantity: stockQty,
-                            cost: stockCost
-                        });
-                    });
+                let chosenScope: ProductScope | null = null;
+                if (scopes.length > 0) {
+                    chosenScope = scopes.find(s => String(s.groupId) === String(acc.groupId)) || scopes[0];
+                } else {
+                    const catFallback = catReportByReduced[reduced];
+                    if (catFallback && acc.groupId && ALLOWED_IDS.includes(Number(acc.groupId))) {
+                        const deptFallback = parseHierarchyCell(catFallback.deptName, "OUTROS");
+                        chosenScope = {
+                            groupId: acc.groupId,
+                            groupName: GROUP_CONFIG_DEFAULTS[acc.groupId] || `Grupo ${acc.groupId}`,
+                            deptId: deptFallback.numericId,
+                            deptName: deptFallback.name || "OUTROS",
+                            catId: catFallback.catId || "",
+                            catName: catFallback.catName || "GERAL"
+                        };
+                    }
                 }
+                if (!chosenScope) return;
+                const finalGroupId = chosenScope.groupId;
+                const finalGroupName = chosenScope.groupName;
+                if (!groupsMap[finalGroupId]) groupsMap[finalGroupId] = { id: finalGroupId, name: finalGroupName, departments: [] };
+
+                const deptIdentity = chosenScope.deptId || chosenScope.deptName;
+                let dept = groupsMap[finalGroupId].departments.find(d => d.id === deptIdentity || d.name === chosenScope.deptName);
+                if (!dept) {
+                    dept = {
+                        id: deptIdentity,
+                        numericId: chosenScope.deptId || undefined,
+                        name: chosenScope.deptName,
+                        categories: []
+                    };
+                    groupsMap[finalGroupId].departments.push(dept);
+                }
+
+                const catIdentity = chosenScope.catId || chosenScope.catName;
+                const catNodeId = `${finalGroupId}-${deptIdentity}-${catIdentity}`;
+                let cat = dept.categories.find(c => c.id === catNodeId || c.name === chosenScope.catName);
+                if (!cat) {
+                    cat = {
+                        id: catNodeId,
+                        numericId: chosenScope.catId || undefined,
+                        name: chosenScope.catName,
+                        itemsCount: 0,
+                        totalQuantity: 0,
+                        totalCost: 0,
+                        status: AuditStatus.TODO,
+                        products: []
+                    };
+                    dept.categories.push(cat);
+                }
+
+                cat.itemsCount++;
+                cat.totalQuantity += acc.q;
+                cat.totalCost += (acc.q * avgCost);
+                cat.products.push({
+                    code: reduced,
+                    reducedCode: reduced,
+                    name: acc.name,
+                    quantity: acc.q,
+                    cost: avgCost
+                });
             });
 
             const nextData: AuditData = {
@@ -1130,12 +1227,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 filial: selectedFilial,
                 inventoryNumber: inventoryNumber.trim()
             };
+            const finalData = (shouldReclassifyOpen && data) ? mergePreservingDone(data, nextData) : nextData;
+            const finalTermDrafts = (shouldReclassifyOpen && data)
+                ? (((data as any).termDrafts || termDrafts || {}) as Record<string, any>)
+                : {};
             const persistedData = {
-                ...nextData,
-                termDrafts: {},
+                ...finalData,
+                termDrafts: finalTermDrafts,
                 sourceFiles: buildStructureSourceMeta()
             } as any;
-            const progress = calculateProgress(nextData);
+            const progress = calculateProgress(finalData);
             const savedSession = await upsertAuditSession({
                 id: dbSessionId,
                 branch: selectedFilial,
@@ -1151,8 +1252,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
             setDbSessionId(savedSession.id);
             setNextAuditNumber(savedSession.audit_number);
-            setTermDrafts({});
-            setData((savedSession.data as AuditData) || nextData);
+            setTermDrafts(finalTermDrafts as any);
+            setData((savedSession.data as AuditData) || finalData);
             setGroupFiles(createInitialGroupFiles());
             setFileDeptIds(null);
             setFileCatIds(null);
@@ -1197,14 +1298,19 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             if (!payload || !payload.groups) {
                 throw new Error("Resposta invalida do servidor Trier.");
             }
-            const nextData = { ...payload, inventoryNumber: inventoryNumber.trim() || payload.inventoryNumber || "" };
+            const preservedTermDrafts = ((data as any)?.termDrafts || termDrafts || {}) as Record<string, any>;
+            const nextData = {
+                ...payload,
+                inventoryNumber: inventoryNumber.trim() || payload.inventoryNumber || "",
+                termDrafts: preservedTermDrafts
+            };
             const progress = calculateProgress(nextData as AuditData);
             const savedSession = await upsertAuditSession({
                 id: dbSessionId,
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: nextData as any,
+                data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || (data as any)?.termDrafts || termDrafts || {}) } as any,
                 progress: progress,
                 user_email: userEmail
             });
@@ -1214,6 +1320,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
             setDbSessionId(savedSession.id);
             setNextAuditNumber(savedSession.audit_number);
+            setTermDrafts(preservedTermDrafts as any);
             setData((savedSession.data as AuditData) || (nextData as AuditData));
             setView({ level: 'groups' });
             setInitialDoneUnits(0);
@@ -1436,9 +1543,43 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     };
 
     const closeTermModal = useCallback(() => {
+        const currentScope = termModal;
+        const currentForm = termForm;
+        if (isMaster && currentScope && currentForm && data) {
+            const key = buildTermKey(currentScope);
+            const nextDrafts = { ...termDrafts, [key]: currentForm };
+            setTermDrafts(nextDrafts);
+            (async () => {
+                try {
+                    const nextDataWithTerms = { ...data, termDrafts: nextDrafts } as any;
+                    let skus = 0;
+                    let doneSkus = 0;
+                    (nextDataWithTerms.groups || []).forEach((g: any) =>
+                        (g.departments || []).forEach((d: any) =>
+                            (d.categories || []).forEach((c: any) => {
+                                skus += Number(c.itemsCount || 0);
+                                if (isDoneStatus(c.status)) doneSkus += Number(c.itemsCount || 0);
+                            })
+                        )
+                    );
+                    const progress = skus > 0 ? (doneSkus / skus) * 100 : 0;
+                    await upsertAuditSession({
+                        id: dbSessionId,
+                        branch: selectedFilial,
+                        audit_number: nextAuditNumber,
+                        status: 'open',
+                        data: nextDataWithTerms,
+                        progress: progress,
+                        user_email: userEmail
+                    });
+                } catch (err) {
+                    console.error("Error autosaving term draft on close:", err);
+                }
+            })();
+        }
         setTermModal(null);
         setTermForm(null);
-    }, []);
+    }, [termModal, termForm, isMaster, data, termDrafts, dbSessionId, selectedFilial, nextAuditNumber, userEmail]);
 
     useEffect(() => {
         if (!termModal || typeof window === 'undefined' || typeof document === 'undefined') return;
@@ -1818,7 +1959,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: { ...nextData, termDrafts } as any,
+                data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || (data as any)?.termDrafts || termDrafts || {}) } as any,
                 progress: progress,
                 user_email: userEmail
             });
@@ -1907,7 +2048,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: { ...nextData, termDrafts } as any,
+                data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || (data as any)?.termDrafts || termDrafts || {}) } as any,
                 progress: progress,
                 user_email: userEmail
             });
@@ -2003,7 +2144,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: { ...nextData, termDrafts } as any,
+                data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || (data as any)?.termDrafts || termDrafts || {}) } as any,
                 progress: progress,
                 user_email: userEmail
             });
@@ -2133,7 +2274,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: { ...nextData, termDrafts } as any,
+                data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || (data as any)?.termDrafts || termDrafts || {}) } as any,
                 progress: progress,
                 user_email: userEmail
             });
@@ -2470,7 +2611,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         branch: selectedFilial,
                         audit_number: nextAuditNumber,
                         status: 'open',
-                        data: nextData as any,
+                        data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || (data as any)?.termDrafts || termDrafts || {}) } as any,
                         progress: progress,
                         user_email: userEmail
                     });
@@ -2557,7 +2698,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: nextData as any,
+                data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || termDrafts || {}) } as any,
                 progress: progress,
                 user_email: userEmail
             });
