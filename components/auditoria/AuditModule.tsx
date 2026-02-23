@@ -314,6 +314,16 @@ interface TermForm {
     managerCpf: string;
     managerSignature: string;
     collaborators: TermCollaborator[];
+    excelMetrics?: {
+        sysQty: number;
+        sysCost: number;
+        countedQty: number;
+        countedCost: number;
+        diffQty: number;
+        diffCost: number;
+        items: any[];
+        groupedDifferences?: any[];
+    };
 }
 
 interface AuditModuleProps {
@@ -344,6 +354,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         diffQty: number;
         diffCost: number;
         items: any[];
+        groupedDifferences?: any[];
     } | null>(null);
     const [auditLookup, setAuditLookup] = useState('');
     const [auditLookupOpen, setAuditLookupOpen] = useState(false);
@@ -1643,6 +1654,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             : createDefaultTermForm();
         setTermModal(scope);
         setTermForm(nextForm);
+        setTermComparisonMetrics(draft?.excelMetrics || null);
+
         if (draft && nextForm !== draft) {
             setTermDrafts(current => ({ ...current, [key]: nextForm }));
         }
@@ -1665,7 +1678,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const currentForm = termForm;
         if (isMaster && currentScope && currentForm && data) {
             const key = buildTermKey(currentScope);
-            const nextDrafts = { ...termDrafts, [key]: currentForm };
+            const formToSave = { ...currentForm, excelMetrics: termComparisonMetrics || undefined };
+            const nextDrafts = { ...termDrafts, [key]: formToSave };
             setTermDrafts(nextDrafts);
             (async () => {
                 try {
@@ -1717,6 +1731,26 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             let diffCostSum = 0;
             const items: any[] = [];
 
+            // Pre-build hierarchy lookup for fast cross-referencing Col B (reduced code)
+            const productLookup = new Map<string, { groupName: string, deptName: string, catName: string }>();
+            if (data?.groups) {
+                data.groups.forEach(g => {
+                    g.departments.forEach(d => {
+                        d.categories.forEach(c => {
+                            c.products.forEach(p => {
+                                productLookup.set(String(p.code).trim(), {
+                                    groupName: g.name,
+                                    deptName: d.name,
+                                    catName: c.name
+                                });
+                            });
+                        });
+                    });
+                });
+            }
+
+            const groupedMap: Record<string, { groupName: string, deptName: string, catName: string, diffCost: number, diffQty: number }> = {};
+
             // Skip header (row 0), process data rows
             for (let i = 1; i < rows.length; i++) {
                 const row = rows[i];
@@ -1756,7 +1790,28 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 countedQty += cq;
                 countedCost += cc;
                 diffQtySum += dq;
-                diffCostSum += (cc - sc);
+                const costDiff = cc - sc;
+                diffCostSum += costDiff;
+
+                // Identifica a Hierarquia cruzando com memory database
+                const hierarchy = productLookup.get(code) || {
+                    groupName: 'CONVENIÊNCIA',
+                    deptName: 'DIVERSOS (SEM DEPARTAMENTO)',
+                    catName: 'DIVERSOS (SEM CATEGORIA)'
+                };
+
+                const groupKey = `${hierarchy.groupName}|${hierarchy.deptName}|${hierarchy.catName}`;
+                if (!groupedMap[groupKey]) {
+                    groupedMap[groupKey] = {
+                        groupName: hierarchy.groupName,
+                        deptName: hierarchy.deptName,
+                        catName: hierarchy.catName,
+                        diffCost: 0,
+                        diffQty: 0
+                    };
+                }
+                groupedMap[groupKey].diffCost += costDiff;
+                groupedMap[groupKey].diffQty += dq;
 
                 items.push({
                     code,
@@ -1766,24 +1821,50 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     sysCost: sc,
                     countedQty: cq,
                     countedCost: cc,
-                    diffQty: dq, // Passando a diferença cravada da coluna N
-                    diffCost: cc - sc // Valores: Coluna Q - Coluna M
+                    diffQty: dq,
+                    diffCost: costDiff,
+                    ...hierarchy
                 });
             }
 
-            setTermComparisonMetrics({
+            // Convert map to sorted array (Sort by highest cost difference missing)
+            const groupedDifferences = Object.values(groupedMap).sort((a, b) => a.diffCost - b.diffCost);
+
+            const payload = {
                 sysQty,
                 sysCost,
                 countedQty,
                 countedCost,
                 diffQty: diffQtySum,
                 diffCost: diffCostSum,
-                items
-            });
+                items,
+                groupedDifferences
+            };
+
+            setTermComparisonMetrics(payload);
+
+            // Auto-Save do Excel no Termo Draft corrente
+            if (termModal && termForm) {
+                const key = buildTermKey(termModal);
+                setTermDrafts(current => ({
+                    ...current,
+                    [key]: { ...termForm, excelMetrics: payload }
+                }));
+            }
+
         } catch (err) {
             console.error("Erro ao processar Excel do Termo:", err);
             alert("Erro ao ler o arquivo Excel.");
             setTermComparisonMetrics(null);
+
+            if (termModal && termForm) {
+                const key = buildTermKey(termModal);
+                setTermDrafts(current => {
+                    const next = { ...current };
+                    if (next[key]) next[key] = { ...next[key], excelMetrics: undefined };
+                    return next;
+                });
+            }
         }
 
         // Reset input value to allow uploading the same file again if needed
@@ -1792,6 +1873,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const removeTermComparisonExcel = () => {
         setTermComparisonMetrics(null);
+        if (termModal && termForm) {
+            const key = buildTermKey(termModal);
+            setTermDrafts(current => {
+                const next = { ...current };
+                if (next[key]) next[key] = { ...next[key], excelMetrics: undefined };
+                return next;
+            });
+        }
     };
 
     useEffect(() => {
@@ -2159,6 +2248,50 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
             // @ts-ignore
             afterProductTableY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : afterProductTableY + 50;
+
+            // 3. Tabela Opcional: Resumo de Divergências por Categoria
+            if (termComparisonMetrics.groupedDifferences && termComparisonMetrics.groupedDifferences.length > 0) {
+                if (afterProductTableY > 240) {
+                    doc.addPage();
+                    afterProductTableY = 20;
+                }
+
+                doc.setFontSize(11);
+                doc.setTextColor(15, 23, 42);
+                doc.text('RESUMO DE DIVERGÊNCIAS POR CATEGORIA', 14, afterProductTableY);
+
+                const groupHead = [['Hierarquia (Grupo > Depto > Categoria)', 'Dif Qtd', 'Prejuízo/Sobra']];
+                const groupBody = termComparisonMetrics.groupedDifferences.map((g: any) => [
+                    `${g.groupName} > ${g.deptName} > ${g.catName}`,
+                    `${g.diffQty > 0 ? '+' : ''}${Math.round(g.diffQty).toLocaleString('pt-BR')} un.`,
+                    `R$ ${g.diffCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                ]);
+
+                // @ts-ignore
+                doc.autoTable({
+                    startY: afterProductTableY + 6,
+                    head: groupHead,
+                    body: groupBody,
+                    theme: 'striped',
+                    styles: { fontSize: 8, cellPadding: 2 },
+                    headStyles: { fillColor: [99, 102, 241], textColor: [255, 255, 255] }, // Indigo-500
+                    didParseCell: (hookData: any) => {
+                        if (hookData.section === 'body' && hookData.column.index === 2) {
+                            const valStr = hookData.cell.raw.toString();
+                            if (valStr.includes('-')) {
+                                hookData.cell.styles.textColor = [220, 38, 38]; // Red
+                                hookData.cell.styles.fontStyle = 'bold';
+                            } else if (valStr !== 'R$ 0,00' && valStr !== 'R$ -0,00') {
+                                hookData.cell.styles.textColor = [22, 163, 74]; // Green
+                                hookData.cell.styles.fontStyle = 'bold';
+                            }
+                        }
+                    }
+                });
+
+                // @ts-ignore
+                afterProductTableY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : afterProductTableY + 30;
+            }
         }
 
         let finalY = afterProductTableY;
@@ -3579,7 +3712,45 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             <span className="text-emerald-600">R$ {m.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} Aud.</span>
                                         </div>
                                     </div>
-                                    <ProgressBar percentage={groupProgressValue} size="md" label={`Progresso do Grupo`} tone={groupAllDone ? 'green' : groupHasInProgress ? 'blue' : 'auto'} />
+
+                                    {/* Injeção do Dashboard de Excel (Geral) */}
+                                    {(() => {
+                                        const tk = buildTermKey({ type: 'group', groupId: group.id });
+                                        const metrics = termDrafts[tk]?.excelMetrics;
+                                        if (!metrics || !metrics.groupedDifferences) return null;
+
+                                        const gDiffs = metrics.groupedDifferences.filter((d: any) => d.groupName === group.name);
+                                        if (gDiffs.length === 0) return null;
+
+                                        const totGDiffQty = gDiffs.reduce((acc, curr) => acc + curr.diffQty, 0);
+                                        const totGDiffCost = gDiffs.reduce((acc, curr) => acc + curr.diffCost, 0);
+
+                                        return (
+                                            <div className="mt-4 pt-4 border-t border-indigo-100/50">
+                                                <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest">
+                                                    <span className="text-indigo-800 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> Planilha de Conflito</span>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-3 mt-3">
+                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2.5">
+                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Dif. Qtde Total</span>
+                                                        <span className={`text-[11px] font-black ${totGDiffQty < 0 ? 'text-red-600' : totGDiffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                            {totGDiffQty > 0 ? '+' : ''}{Math.round(totGDiffQty).toLocaleString('pt-BR')} un.
+                                                        </span>
+                                                    </div>
+                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2.5">
+                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Resultado Financeiro</span>
+                                                        <span className={`text-[11px] font-black ${totGDiffCost < 0 ? 'text-red-700' : totGDiffCost > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
+                                                            {totGDiffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
+
+                                    <div className="mt-6">
+                                        <ProgressBar percentage={groupProgressValue} size="md" label={`Progresso do Grupo`} tone={groupAllDone ? 'green' : groupHasInProgress ? 'blue' : 'auto'} />
+                                    </div>
                                 </div>
                             </div>
                         );
@@ -3645,6 +3816,42 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Custo Total</span><span className="text-lg font-black text-slate-400">R$ {m.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
                                         <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Custo Aud.</span><span className="text-xl font-black text-emerald-600 tabular-nums">R$ {m.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
                                     </div>
+
+                                    {/* Injeção do Dashboard de Excel (Departamento) */}
+                                    {(() => {
+                                        const tk = buildTermKey({ type: 'department', groupId: selectedGroup!.id, deptId: dept.id });
+                                        const metrics = termDrafts[tk]?.excelMetrics;
+                                        if (!metrics || !metrics.groupedDifferences) return null;
+
+                                        const dDiffs = metrics.groupedDifferences.filter((d: any) => d.deptName === dept.name && d.groupName === selectedGroup!.name);
+                                        if (dDiffs.length === 0) return null;
+
+                                        const totDDiffQty = dDiffs.reduce((acc, curr) => acc + curr.diffQty, 0);
+                                        const totDDiffCost = dDiffs.reduce((acc, curr) => acc + curr.diffCost, 0);
+
+                                        return (
+                                            <div className="mt-4 pt-4 border-t border-indigo-100/50 mb-6">
+                                                <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest">
+                                                    <span className="text-indigo-800 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> Planilha de Conflito</span>
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-3 mt-3">
+                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-3">
+                                                        <span className="text-[8px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Dif. Qtde Total</span>
+                                                        <span className={`text-[13px] font-black ${totDDiffQty < 0 ? 'text-red-600' : totDDiffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                            {totDDiffQty > 0 ? '+' : ''}{Math.round(totDDiffQty).toLocaleString('pt-BR')} un.
+                                                        </span>
+                                                    </div>
+                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-3">
+                                                        <span className="text-[8px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Resultado Financeiro</span>
+                                                        <span className={`text-[13px] font-black ${totDDiffCost < 0 ? 'text-red-700' : totDDiffCost > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
+                                                            {totDDiffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        );
+                                    })()}
+
                                     <ProgressBar percentage={deptProgressValue} size="md" label={`Status do Departamento`} tone={deptAllDone ? 'green' : deptHasInProgress ? 'blue' : 'auto'} />
                                 </div>
                             </div>
@@ -3657,29 +3864,56 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         const startLabel = catStatus === AuditStatus.IN_PROGRESS ? 'PAUSAR' : 'INICIAR';
                         return (
                             <div key={cat.id} className={`p-6 rounded-[2rem] border-2 flex items-center justify-between gap-8 transition-all hover:shadow-lg group ${catStatus === AuditStatus.DONE ? 'border-emerald-500/20 bg-emerald-50/50' : catStatus === AuditStatus.IN_PROGRESS ? 'border-blue-200 bg-blue-50/40' : 'border-slate-50 bg-white'}`}>
-                                <div className="flex items-center gap-8 flex-1">
-                                    <div className="flex flex-col items-center justify-center bg-white border border-slate-200 rounded-2xl p-5 min-w-[120px] shadow-sm">
-                                        <span className="text-[9px] font-black text-slate-400 uppercase mb-1 italic">ID CAT</span>
-                                        <span className={`text-4xl font-black leading-none ${catStatus === AuditStatus.DONE ? 'text-emerald-700' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-700' : 'text-indigo-700'}`}>{cat.numericId || '--'}</span>
-                                    </div>
-                                    <div>
-                                        <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-2xl uppercase italic leading-none cursor-pointer hover:underline transition-all ${catStatus === AuditStatus.DONE ? 'text-emerald-900' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-900' : 'text-slate-900'} tracking-tighter`}>{cat.name}</h3>
-                                        <div className="flex gap-10 mt-3 items-center">
-                                            <div className="flex flex-col">
-                                                <span className="text-[9px] font-black text-slate-400 uppercase italic">SKUs Importados</span>
-                                                <span className="text-md font-black text-slate-800 tabular-nums leading-none whitespace-nowrap">{cat.itemsCount} Mix</span>
-                                            </div>
-                                            <div className="w-px h-6 bg-slate-100"></div>
-                                            <div className="flex flex-col">
-                                                <span className="text-[9px] font-black text-slate-400 uppercase italic">Estoque Físico</span>
-                                                <span className="text-md font-black text-indigo-600 tabular-nums leading-none whitespace-nowrap">{cat.totalQuantity.toLocaleString()} Unid.</span>
-                                            </div>
-                                            <div className="w-px h-6 bg-slate-100"></div>
-                                            <div className="flex flex-col">
-                                                <span className="text-[9px] font-black text-slate-400 uppercase italic">Valor em Custo</span>
-                                                <span className="text-md font-black text-emerald-600 tabular-nums leading-none whitespace-nowrap">R$ {cat.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                                            </div>
+                                <div className="flex-1">
+                                    <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-2xl uppercase italic leading-none cursor-pointer hover:underline transition-all ${catStatus === AuditStatus.DONE ? 'text-emerald-900' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-900' : 'text-slate-900'} tracking-tighter`}>{cat.name}</h3>
+                                    <div className="flex gap-10 mt-3 items-center">
+                                        <div className="flex flex-col">
+                                            <span className="text-[9px] font-black text-slate-400 uppercase italic">SKUs Importados</span>
+                                            <span className="text-md font-black text-slate-800 tabular-nums leading-none whitespace-nowrap">{cat.itemsCount} Mix</span>
                                         </div>
+                                        <div className="w-px h-6 bg-slate-100"></div>
+                                        <div className="flex flex-col">
+                                            <span className="text-[9px] font-black text-slate-400 uppercase italic">Estoque Físico</span>
+                                            <span className="text-md font-black text-indigo-600 tabular-nums leading-none whitespace-nowrap">{cat.totalQuantity.toLocaleString()} Unid.</span>
+                                        </div>
+                                        <div className="w-px h-6 bg-slate-100"></div>
+                                        <div className="flex flex-col">
+                                            <span className="text-[9px] font-black text-slate-400 uppercase italic">Valor em Custo</span>
+                                            <span className="text-md font-black text-emerald-600 tabular-nums leading-none whitespace-nowrap">R$ {cat.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                        </div>
+
+                                        {/* Injeção do Dashboard de Excel (Categoria) */}
+                                        {(() => {
+                                            const tk = buildTermKey({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id });
+                                            const metrics = termDrafts[tk]?.excelMetrics;
+                                            if (!metrics || !metrics.groupedDifferences) return null;
+
+                                            const cDiff = metrics.groupedDifferences.find((d: any) =>
+                                                d.catName === cat.name &&
+                                                d.deptName === selectedDept!.name &&
+                                                d.groupName === selectedGroup!.name
+                                            );
+                                            if (!cDiff) return null;
+
+                                            return (
+                                                <>
+                                                    <div className="w-px h-6 bg-indigo-100"></div>
+                                                    <div className="flex items-center gap-6 bg-indigo-50/30 px-4 py-2 rounded-2xl border border-indigo-100/50">
+                                                        <div className="flex flex-col">
+                                                            <span className="text-[8px] font-black text-indigo-400 uppercase italic">Diferença Excel</span>
+                                                            <div className="flex items-center gap-3">
+                                                                <span className={`text-[12px] font-black ${cDiff.diffQty < 0 ? 'text-red-500' : cDiff.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                                    {cDiff.diffQty > 0 ? '+' : ''}{Math.round(cDiff.diffQty).toLocaleString('pt-BR')} un.
+                                                                </span>
+                                                                <span className={`text-[12px] font-black ${cDiff.diffCost < 0 ? 'text-red-600' : cDiff.diffCost > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                                    {cDiff.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                </span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </>
+                                            );
+                                        })()}
                                     </div>
                                 </div>
                                 <div className="flex gap-4">
@@ -4127,6 +4361,125 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 </div>
                                             </div>
                                         </div>
+
+                                        {/* Quadrinho de Resumo por Categoria */}
+                                        {termComparisonMetrics.groupedDifferences && termComparisonMetrics.groupedDifferences.length > 0 && (
+                                            <div className="mt-4 pt-4 border-t border-indigo-100">
+                                                <h6 className="text-[10px] font-black text-indigo-800 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                                                    <Boxes className="w-3.5 h-3.5" />
+                                                    Resumo de Prejuízo por Categoria
+                                                </h6>
+                                                <div className="space-y-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
+                                                    {(() => {
+                                                        const groupsMap = new Map();
+                                                        termComparisonMetrics.groupedDifferences.forEach((diff: any) => {
+                                                            if (!groupsMap.has(diff.groupName)) {
+                                                                groupsMap.set(diff.groupName, { name: diff.groupName, diffQty: 0, diffCost: 0, departments: new Map() });
+                                                            }
+                                                            const g = groupsMap.get(diff.groupName);
+                                                            g.diffQty += diff.diffQty;
+                                                            g.diffCost += diff.diffCost;
+
+                                                            if (!g.departments.has(diff.deptName)) {
+                                                                g.departments.set(diff.deptName, { name: diff.deptName, diffQty: 0, diffCost: 0, categories: [] });
+                                                            }
+                                                            const d = g.departments.get(diff.deptName);
+                                                            d.diffQty += diff.diffQty;
+                                                            d.diffCost += diff.diffCost;
+
+                                                            d.categories.push({ name: diff.catName, diffQty: diff.diffQty, diffCost: diff.diffCost });
+                                                        });
+
+                                                        const nested = Array.from(groupsMap.values()).map(g => ({
+                                                            ...g,
+                                                            departments: Array.from(g.departments.values())
+                                                        }));
+
+                                                        return nested.map((group: any, gIdx: number) => (
+                                                            <div key={gIdx} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2">
+                                                                {/* GROUP HEADER */}
+                                                                <div className="p-3 bg-indigo-50/50 border-b border-indigo-100 flex items-center justify-between">
+                                                                    <div className="flex items-center gap-3">
+                                                                        <div className="w-8 h-8 rounded-xl bg-white border border-indigo-100 flex items-center justify-center shadow-sm">
+                                                                            <Boxes className="w-4 h-4 text-indigo-600" />
+                                                                        </div>
+                                                                        <div>
+                                                                            <h3 className="text-[11px] font-black text-indigo-900 uppercase italic tracking-wider">{group.name}</h3>
+                                                                            <p className="text-[8px] font-bold text-indigo-400 uppercase tracking-widest mt-0.5">Grupo</p>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div className="text-right flex items-center gap-3">
+                                                                        <div>
+                                                                            <p className="text-[7px] font-black text-indigo-400 uppercase tracking-widest">Dif. Qtd</p>
+                                                                            <p className={`font-bold text-[10px] ${group.diffQty < 0 ? 'text-red-500' : group.diffQty > 0 ? 'text-green-500' : 'text-slate-500'}`}>{group.diffQty > 0 ? '+' : ''}{Math.round(group.diffQty).toLocaleString('pt-BR')} un.</p>
+                                                                        </div>
+                                                                        <div className="border-l border-indigo-100 pl-3">
+                                                                            <p className="text-[7px] font-black text-indigo-400 uppercase tracking-widest">Finanças</p>
+                                                                            <p className={`font-black text-xs ${group.diffCost < 0 ? 'text-red-600' : group.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>{group.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+
+                                                                {/* DEPARTMENTS */}
+                                                                <div className="p-3 space-y-3 bg-slate-50/50">
+                                                                    {group.departments.map((dept: any, dIdx: number) => (
+                                                                        <div key={dIdx} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                                                                            <div className="p-2.5 border-b border-slate-100 flex items-center justify-between">
+                                                                                <div className="flex items-center gap-2.5">
+                                                                                    <div className="w-6 h-6 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center">
+                                                                                        <FileBox className="w-3 h-3 text-slate-500" />
+                                                                                    </div>
+                                                                                    <div>
+                                                                                        <h4 className="text-[10px] font-black text-indigo-700 uppercase italic tracking-widest">{dept.name}</h4>
+                                                                                        <p className="text-[7px] font-bold text-slate-400 uppercase tracking-widest">Departamento</p>
+                                                                                    </div>
+                                                                                </div>
+                                                                                <div className="text-right flex items-center gap-3">
+                                                                                    <div>
+                                                                                        <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Dif. Qtd</p>
+                                                                                        <p className={`font-bold text-[9px] ${dept.diffQty < 0 ? 'text-red-500' : dept.diffQty > 0 ? 'text-green-500' : 'text-slate-500'}`}>{dept.diffQty > 0 ? '+' : ''}{Math.round(dept.diffQty).toLocaleString('pt-BR')} un.</p>
+                                                                                    </div>
+                                                                                    <div className="border-l border-slate-100 pl-3 w-20">
+                                                                                        <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Finanças</p>
+                                                                                        <p className={`font-black text-[11px] ${dept.diffCost < 0 ? 'text-red-600' : dept.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>{dept.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+
+                                                                            {/* CATEGORIES */}
+                                                                            <div className="p-2 bg-[#f8fafc] grid grid-cols-1 gap-1.5">
+                                                                                {dept.categories.map((cat: any, cIdx: number) => (
+                                                                                    <div key={cIdx} className="bg-[#F0FDF4] border border-[#dcfce7] rounded-lg p-2 flex items-center justify-between transition-colors">
+                                                                                        <div className="flex items-center gap-2">
+                                                                                            <Activity className="w-3 h-3 text-[#059669]" />
+                                                                                            <div>
+                                                                                                <span className="text-[9px] font-black text-[#065f46] uppercase italic tracking-widest block">{cat.name}</span>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                        <div className="flex items-center gap-3 text-right">
+                                                                                            <div className="min-w-[45px]">
+                                                                                                <span className={`text-[9px] font-bold ${cat.diffQty < 0 ? 'text-red-600' : cat.diffQty > 0 ? 'text-[#16a34a]' : 'text-[#166534]/70'}`}>
+                                                                                                    {cat.diffQty > 0 ? '+' : ''}{Math.round(cat.diffQty).toLocaleString('pt-BR')} un.
+                                                                                                </span>
+                                                                                            </div>
+                                                                                            <div className="min-w-[65px]">
+                                                                                                <span className={`text-[10px] font-black ${cat.diffCost < 0 ? 'text-red-600' : cat.diffCost > 0 ? 'text-[#16a34a]' : 'text-[#166534]/80'}`}>
+                                                                                                    {cat.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                                                </span>
+                                                                                            </div>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                ))}
+                                                                            </div>
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        ));
+                                                    })()}
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>
