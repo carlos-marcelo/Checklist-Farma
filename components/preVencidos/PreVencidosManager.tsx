@@ -56,6 +56,7 @@ import {
   fetchGlobalBaseFilesForModules
 } from '../../supabaseService';
 import { CadastrosBaseService } from '../../src/cadastrosBase/cadastrosBaseService';
+import { CacheService } from '../../src/cacheService';
 import {
   loadLocalPVSession,
   saveLocalPVSession,
@@ -332,8 +333,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     if (!cid || !br) return { ok: false, count: 0 };
     setConnectionStatus('syncing');
     try {
-      const records = await fetchPVBranchRecords(cid, br);
-      setPvRecords(mapDbRecordsToPV(records));
+      const records = await CacheService.fetchWithCache(`pv_records_${cid}_${br}`, () => fetchPVBranchRecords(cid, br), (data) => {
+        if (data) setPvRecords(mapDbRecordsToPV(data));
+      });
+      if (records) setPvRecords(mapDbRecordsToPV(records));
       setConnectionStatus('online');
       return { ok: true, count: records?.length || 0 };
     } catch (error) {
@@ -443,16 +446,43 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
       try {
         const [inventoryRes, activeSalesRes, uploadsRes] = await Promise.allSettled([
-          fetchPVInventoryReport(companyId, branch),
-          fetchActiveSalesReport(companyId, branch),
-          fetchPVSalesUploads(companyId, branch)
+          CacheService.fetchWithCache(`pv_inventory_${companyId}_${branch}`, () => fetchPVInventoryReport(companyId, branch), (data) => {
+            if (data && !cancelled) {
+              setInventoryReport(data);
+              buildInventoryMaps(data.records || []);
+            }
+          }),
+          CacheService.fetchWithCache(`pv_active_sales_${companyId}_${branch}`, () => fetchActiveSalesReport(companyId, branch), (data) => {
+            if (data && !cancelled) {
+              if (data.sales_records && data.sales_records.length > 0) setSalesRecords(data.sales_records);
+              setSalesPeriod(data.sales_period || '');
+              const { confirmed, finalized } = extractConfirmedSalesPayload(data.confirmed_sales || null);
+              setConfirmedPVSales(confirmed);
+              setFinalizedREDSByPeriod(finalized);
+              if (data.sales_period || data.uploaded_at) {
+                setLocalLastUpload({
+                  period_label: data.sales_period,
+                  file_name: data.file_name || 'Relatório Ativo',
+                  uploaded_at: data.uploaded_at || undefined,
+                  user_email: data.user_email || '',
+                  company_id: data.company_id,
+                  branch: data.branch,
+                  period_start: null,
+                  period_end: null
+                });
+              }
+            }
+          }),
+          CacheService.fetchWithCache(`pv_uploads_${companyId}_${branch}`, () => fetchPVSalesUploads(companyId, branch), (data) => {
+            if (data && !cancelled) setSalesUploads(Array.isArray(data) ? data : []);
+          })
         ]);
 
         if (cancelled) return;
 
         const inventory = inventoryRes.status === 'fulfilled' ? inventoryRes.value : null;
         const activeSales = activeSalesRes.status === 'fulfilled' ? activeSalesRes.value : null;
-        const uploads = uploadsRes.status === 'fulfilled' ? uploadsRes.value : [];
+        const uploads = uploadsRes.status === 'fulfilled' ? uploadsRes.value as DbPVSalesUpload[] : [];
 
         if (inventory) {
           setInventoryReport(inventory);
@@ -543,8 +573,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
     let cancelled = false;
     (async () => {
-      const reports = await fetchPVDashboardReports(sessionInfo.companyId, sessionInfo.filial, 1);
-      if (!cancelled) {
+      const reports = await CacheService.fetchWithCache(`pv_dashboard_${sessionInfo.companyId}_${sessionInfo.filial}`, () => fetchPVDashboardReports(sessionInfo.companyId, sessionInfo.filial, 1), (data) => {
+        if (!cancelled && data && data.length > 0) setLastDashboardReport(data[0]);
+      });
+      if (!cancelled && reports && reports.length > 0) {
         setLastDashboardReport(reports[0] || null);
       }
     })();
@@ -1097,8 +1129,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       try {
         console.log('🔍 [PV DEBUG] Buscando histórico de vendas...');
         const [historyRes, activeSalesRes] = await Promise.allSettled([
-          fetchPVSalesHistory(sessionInfo.companyId!, sessionInfo.filial!),
-          fetchActiveSalesReport(sessionInfo.companyId!, sessionInfo.filial!)
+          CacheService.fetchWithCache(`pv_sales_history_${sessionInfo.companyId}_${sessionInfo.filial}`, () => fetchPVSalesHistory(sessionInfo.companyId!, sessionInfo.filial!)),
+          CacheService.fetchWithCache(`pv_active_sales_${sessionInfo.companyId}_${sessionInfo.filial}`, () => fetchActiveSalesReport(sessionInfo.companyId!, sessionInfo.filial!))
         ]);
 
         if (cancelled) return;
@@ -1168,7 +1200,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
     branchFetchInFlightRef.current.add(fetchKey);
     setIsLoadingSalesUploads(true);
-    fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial)
+    CacheService.fetchWithCache(`pv_uploads_${sessionInfo.companyId}_${sessionInfo.filial}`, () => fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial))
       .then(reports => {
         if (cancelled) return;
         setSalesUploads(reports);
@@ -1198,7 +1230,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
     let cancelled = false;
     setIsLoadingAnalysisReports(true);
-    fetchPVSalesAnalysisReports(sessionInfo.companyId, sessionInfo.filial)
+    CacheService.fetchWithCache(`pv_analysis_${sessionInfo.companyId}_${sessionInfo.filial}`, () => fetchPVSalesAnalysisReports(sessionInfo.companyId, sessionInfo.filial))
       .then(reports => {
         if (cancelled) return;
         const map: Record<string, AnalysisReportPayload> = {};
@@ -1242,7 +1274,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
     branchFetchInFlightRef.current.add(fetchKey);
     setIsLoadingInventoryReport(true);
-    fetchPVInventoryReport(sessionInfo.companyId, sessionInfo.filial)
+    CacheService.fetchWithCache(`pv_inventory_${sessionInfo.companyId}_${sessionInfo.filial}`, () => fetchPVInventoryReport(sessionInfo.companyId, sessionInfo.filial))
       .then(report => {
         if (cancelled) return;
         if (report) {
@@ -1597,7 +1629,18 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       analysis_payload: payload
     };
 
-    await upsertPVSalesAnalysisReport(record);
+    const result = await upsertPVSalesAnalysisReport(record);
+    if (result) {
+      await CacheService.set(`pv_analysis_${sessionInfo.companyId}_${sessionInfo.filial}`,
+        (old: DbPVSalesAnalysisReport[]) => {
+          const arr = Array.isArray(old) ? [...old] : [];
+          const idx = arr.findIndex(r => r.period_label === record.period_label);
+          if (idx >= 0) arr[idx] = result;
+          else arr.push(result);
+          return arr;
+        }
+      );
+    }
   };
 
   const handleUpdatePVSale = (saleId: string, classification: PVSaleClassification) => {
@@ -1615,6 +1658,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           uploaded_at: localLastUpload?.uploaded_at,
           user_email: userEmail || '',
           status: 'processed'
+        }).then(async success => {
+          if (success) {
+            // Update cache with the new active sales report
+            const updatedReport = {
+              company_id: sessionInfo.companyId!,
+              branch: sessionInfo.filial,
+              sales_records: salesRecords,
+              sales_period: salesPeriod,
+              confirmed_sales: buildConfirmedSalesPayload(newState, effectiveFinalizedByPeriod),
+              uploaded_at: localLastUpload?.uploaded_at,
+              user_email: userEmail || '',
+              status: 'processed' as const
+            };
+            await CacheService.set(`pv_active_sales_${sessionInfo.companyId}_${sessionInfo.filial}`, updatedReport);
+          }
         }).catch(err => console.error('Erro ao salvar classificação:', err));
       }
 
@@ -2710,7 +2768,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     persistTimeoutRef.current = setTimeout(() => {
       persistPVSession();
       persistTimeoutRef.current = null;
-    }, 2500);
+    }, 10000); // Aumentado de 2.5s para 10s para poupar CPU/DB
   }, [persistPVSession, userEmail]);
 
   useEffect(() => {

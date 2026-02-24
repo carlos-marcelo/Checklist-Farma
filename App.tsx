@@ -14,6 +14,7 @@ import { Topbar } from './components/Layout/Topbar';
 import { Header } from './components/Layout/Header';
 import { Logo, MFLogo, LogoPrint } from './components/Layout/Logo';
 import { AppStorage } from './src/appStorage';
+import { CacheService } from './src/cacheService';
 import { ImageUtils } from './src/utils/imageUtils';
 
 
@@ -1572,7 +1573,7 @@ const App: React.FC = () => {
             if (report && (!report.items || report.items.length === 0)) {
                 try {
                     console.log('🔍 Buscando detalhes da conferência:', historyId);
-                    const fullReport = await SupabaseService.fetchStockConferenceReportDetails(historyId);
+                    const fullReport = await CacheService.fetchWithCache(`stock_report_${historyId}`, () => SupabaseService.fetchStockConferenceReportDetails(historyId));
                     if (fullReport) {
                         // Atualizar o cache local
                         setStockConferenceReportsRaw(prev => prev.map(r => r.id === historyId ? fullReport : r));
@@ -1746,7 +1747,7 @@ const App: React.FC = () => {
             try {
                 setIsLoadingData(true);
 
-                // 1. Launch all primary fetches in parallel
+                // 1. Launch all primary fetches in parallel with Cache-First strategy
                 const [
                     dbUsers,
                     dbConfig,
@@ -1756,80 +1757,70 @@ const App: React.FC = () => {
                     dbMatrix,
                     dbTickets
                 ] = await Promise.all([
-                    SupabaseService.fetchUsers(),
-                    SupabaseService.fetchConfig(),
-                    SupabaseService.fetchReportsSummary(0, REPORTS_PAGE_SIZE),
-                    SupabaseService.fetchStockConferenceReportsSummaryPage(0, STOCK_PAGE_SIZE),
-                    SupabaseService.fetchCompanies(),
-                    SupabaseService.fetchAccessMatrix(),
-                    SupabaseService.fetchTickets()
+                    CacheService.fetchWithCache('users_list', SupabaseService.fetchUsers, (data) => {
+                        if (data && data.length > 0) {
+                            setUsers(data.map(u => ({ ...u, preferredTheme: u.preferred_theme as ThemeColor | undefined })));
+                        }
+                    }),
+                    CacheService.fetchWithCache('app_config', SupabaseService.fetchConfig, (data) => {
+                        if (data) setConfig({ pharmacyName: data.pharmacy_name, logo: data.logo });
+                    }),
+                    CacheService.fetchWithCache(CACHE_KEY_REPORTS, () => SupabaseService.fetchReportsSummary(0, REPORTS_PAGE_SIZE), (data) => {
+                        if (data && data.length > 0) setReportHistory(data.map(mapDbReportToHistoryItem));
+                    }),
+                    CacheService.fetchWithCache(CACHE_KEY_STOCK, () => SupabaseService.fetchStockConferenceReportsSummaryPage(0, STOCK_PAGE_SIZE), (data) => {
+                        if (data) handleStockReportsLoaded(data as SupabaseService.DbStockConferenceReport[]);
+                    }),
+                    CacheService.fetchWithCache('companies_list', SupabaseService.fetchCompanies, (data) => {
+                        if (data && data.length > 0) setCompanies(data);
+                    }),
+                    CacheService.fetchWithCache('access_matrix', SupabaseService.fetchAccessMatrix, (data) => {
+                        if (data && data.length > 0) {
+                            const mapped = data.reduce((acc: any, entry: any) => {
+                                acc[entry.level] = entry.modules || {};
+                                return acc;
+                            }, {});
+                            setAccessMatrix(mergeAccessMatrixWithDefaults(mapped));
+                        }
+                    }),
+                    CacheService.fetchWithCache('tickets_list', SupabaseService.fetchTickets, (data) => {
+                        if (data && data.length > 0) setTickets(data);
+                    })
                 ]);
 
-                // 2. Process Users
+                // 2. Initial State Population (from the result of Promise.all, which could be Cache or Remote)
                 if (dbUsers && dbUsers.length > 0) {
-                    const mappedUsers = dbUsers.map(u => ({ ...u, preferredTheme: u.preferred_theme as ThemeColor | undefined }));
-                    setUsers(mappedUsers);
-                    localStorage.setItem('APP_USERS', JSON.stringify(mappedUsers));
-                } else {
-                    const localUsers = localStorage.getItem('APP_USERS');
-                    if (localUsers) setUsers(JSON.parse(localUsers));
+                    setUsers(dbUsers.map(u => ({ ...u, preferredTheme: u.preferred_theme as ThemeColor | undefined })));
                 }
 
-                // 3. Process Config
                 if (dbConfig) {
                     setConfig({ pharmacyName: dbConfig.pharmacy_name, logo: dbConfig.logo });
-                    localStorage.setItem('APP_CONFIG', JSON.stringify({ pharmacyName: dbConfig.pharmacy_name, logo: dbConfig.logo }));
-                } else {
-                    const localConfig = localStorage.getItem('APP_CONFIG');
-                    if (localConfig) setConfig(JSON.parse(localConfig));
                 }
 
-                // 4. Process Reports (with sessionStorage cache)
-                const cachedReports = loadHistoryCache(CACHE_KEY_REPORTS);
-                if (cachedReports && cachedReports.length > 0) {
-                    console.log('📦 Usando cache checklists:', cachedReports.length);
-                    setReportHistory(cachedReports);
-                    setHasMoreReports(true);
-                } else if (dbReportsSummary && dbReportsSummary.length > 0) {
+                if (dbReportsSummary && dbReportsSummary.length > 0) {
                     const formatted = dbReportsSummary.map(mapDbReportToHistoryItem);
                     setReportHistory(formatted);
                     setHasMoreReports(dbReportsSummary.length === REPORTS_PAGE_SIZE);
-                    saveHistoryCache(CACHE_KEY_REPORTS, formatted);
                     setLastHistoryCacheAt(new Date());
                 }
 
-                // 5. Process Stock Conference Reports (paginated)
-                const cachedStock = loadHistoryCache(CACHE_KEY_STOCK);
-                if (cachedStock && cachedStock.length > 0) {
-                    console.log('📦 Usando cache conferências:', cachedStock.length);
-                    handleStockReportsLoaded(cachedStock as SupabaseService.DbStockConferenceReport[]);
-                } else if (dbStockReportsSummary) {
+                if (dbStockReportsSummary) {
                     handleStockReportsLoaded(dbStockReportsSummary as SupabaseService.DbStockConferenceReport[]);
                     setHasMoreStockConferences(dbStockReportsSummary.length === STOCK_PAGE_SIZE);
-                    saveHistoryCache(CACHE_KEY_STOCK, dbStockReportsSummary);
                     setLastHistoryCacheAt(new Date());
                 }
 
-                // 5. Process Companies
-                if (dbCompanies && dbCompanies.length > 0) {
-                    setCompanies(dbCompanies);
-                }
+                if (dbCompanies) setCompanies(dbCompanies);
 
-                // 6. Process Access Matrix
                 if (dbMatrix && dbMatrix.length > 0) {
-                    const mapped = dbMatrix.reduce((acc, entry) => {
-                        acc[entry.level as AccessLevelId] = entry.modules || {};
+                    const mapped = dbMatrix.reduce((acc: any, entry: any) => {
+                        acc[entry.level] = entry.modules || {};
                         return acc;
-                    }, {} as Record<AccessLevelId, Record<string, boolean>>);
+                    }, {});
                     setAccessMatrix(mergeAccessMatrixWithDefaults(mapped));
-                } else {
-                    setAccessMatrix(prev => mergeAccessMatrixWithDefaults(prev));
                 }
 
-                // 7. Process Tickets
-                if (dbTickets && dbTickets.length > 0) {
-                    setTickets(dbTickets);
-                }
+                if (dbTickets) setTickets(dbTickets);
 
                 // 8. Restore Persisted View (Reports)
                 const pendingReportId = localStorage.getItem('APP_VIEWING_REPORT_ID');
@@ -1837,8 +1828,6 @@ const App: React.FC = () => {
                     const found = dbReportsSummary.find(r => r.id === pendingReportId);
                     if (found) {
                         handleViewHistoryItem(mapDbReportToHistoryItem(found as SupabaseService.DbReport));
-                    } else {
-                        // Se não estiver no sumário recente, podemos tentar buscar direto (opcional)
                     }
                 }
 
@@ -1921,7 +1910,14 @@ const App: React.FC = () => {
     useEffect(() => {
         if (currentUser && currentUser.email !== loadedDraftEmail) {
             const loadDraft = async () => {
-                const draft = await SupabaseService.fetchDraft(currentUser.email);
+                const draft = await CacheService.fetchWithCache(`draft_${currentUser.email}`, () => SupabaseService.fetchDraft(currentUser.email), (newDraft) => {
+                    if (newDraft) {
+                        setFormData(newDraft.form_data || {});
+                        setImages(newDraft.images || {});
+                        setSignatures(newDraft.signatures || {});
+                        setIgnoredChecklists(new Set(newDraft.ignored_checklists || []));
+                    }
+                });
                 if (draft) {
                     setFormData(draft.form_data || {});
                     setImages(draft.images || {});
@@ -2272,6 +2268,8 @@ const App: React.FC = () => {
         }
     };
 
+    const lastDraftUpdateRef = useRef<string | null>(null);
+
     // Sincronização bidirecional - Puxa do Supabase apenas quando usuário está INATIVO
     useEffect(() => {
         if (!currentUser || !draftLoaded) return;
@@ -2288,9 +2286,17 @@ const App: React.FC = () => {
             if (isSavingRef.current) return; // Não sincronizar durante salvamento
 
             try {
-                const remoteDraft = await SupabaseService.fetchDraft(currentUser.email);
+                // PRIMEIRO: Verifica apenas metadados para economizar transferência
+                const meta = await SupabaseService.fetchDraftMetadata(currentUser.email);
+                if (!meta || lastDraftUpdateRef.current === meta.updated_at) {
+                    return;
+                }
+
+                console.log('🔄 Mudança detectada no rascunho remoto, baixando...');
+                const remoteDraft = await CacheService.fetchWithCache(`draft_${currentUser.email}`, () => SupabaseService.fetchDraft(currentUser.email));
 
                 if (remoteDraft) {
+                    lastDraftUpdateRef.current = remoteDraft.updated_at || null;
                     // Comparar se há diferenças antes de atualizar (evita re-render desnecessário)
                     const hasChanges =
                         JSON.stringify(remoteDraft.form_data) !== JSON.stringify(formData) ||
@@ -2308,7 +2314,7 @@ const App: React.FC = () => {
             } catch (error) {
                 console.error('❌ Erro na sincronização:', error);
             }
-        }, 3000);
+        }, 15000); // Aumentado de 3s para 15s para reduzir carga drastically
 
         return () => clearInterval(syncInterval);
     }, [currentUser, draftLoaded, formData, images, signatures, lastUserActivity]);
@@ -2335,7 +2341,7 @@ const App: React.FC = () => {
             isSavingRef.current = true;
             setSyncStatus('saving');
 
-            const success = await SupabaseService.saveDraft({
+            const result = await SupabaseService.saveDraft({
                 user_email: currentUser.email,
                 form_data: formData,
                 images: images,
@@ -2343,7 +2349,9 @@ const App: React.FC = () => {
                 ignored_checklists: Array.from(ignoredChecklists)
             });
 
-            if (success) {
+            if (result) {
+                await CacheService.set(`draft_${currentUser.email}`, result);
+                lastDraftUpdateRef.current = result.updated_at || null;
                 setSyncStatus('saved');
                 setTimeout(() => setSyncStatus('idle'), 1000);
             } else {
@@ -3528,7 +3536,7 @@ const App: React.FC = () => {
             if (!hasImages && !hasSignatures) {
                 try {
                     console.log('🔍 Buscando detalhes do relatório:', item.id);
-                    const detailedData = await SupabaseService.fetchReportDetails(item.id);
+                    const detailedData = await CacheService.fetchWithCache(`checklist_report_${item.id}`, () => SupabaseService.fetchReportDetails(item.id));
                     if (detailedData) {
                         fullReport = mapDbReportToHistoryItem(detailedData);
                         // Atualizar o cache local

@@ -425,6 +425,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const countRef = useRef<HTMLInputElement>(null);
   const [isSavingStockReport, setIsSavingStockReport] = useState(false);
   const [isSavingSession, setIsSavingSession] = useState(false);
+  const [isDirty, setIsDirty] = useState(false); // Track if there are unsaved changes
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [lastSavedReportId, setLastSavedReportId] = useState<string | null>(null);
@@ -446,14 +447,15 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     if (!userEmail) return;
     if (masterProducts.size === 0 || inventory.size === 0) return;
 
-    // Save every 30 seconds
+    // Save every 120 seconds (increased from 60s) only if dirty and not already saving
     const interval = setInterval(() => {
+      if (!isDirty || isSavingSession) return;
       console.log('⏰ Auto-saving session...');
-      void persistSession();
-    }, 30000);
+      void persistSession().then(() => setIsDirty(false));
+    }, 120000);
 
     return () => clearInterval(interval);
-  }, [step, userEmail, masterProducts.size, inventory.size]);
+  }, [step, userEmail, masterProducts.size, inventory.size, isDirty, isSavingSession]);
 
   // Limpeza de cache legado no mount
   useEffect(() => {
@@ -1057,6 +1059,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     updatedInventory.set(product.reducedCode, updatedItem);
 
     setInventory(updatedInventory);
+    setIsDirty(true);
     setLastScanned({ item: updatedItem, product });
     playAccumulationBeep();
 
@@ -1110,6 +1113,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     const updatedInventory = new Map(inventory);
     updatedInventory.set(activeItem.reducedCode, newItem);
     setInventory(updatedInventory);
+    setIsDirty(true);
     setLastScanned({ item: newItem, product: activeItem });
 
     setActiveItem(null);
@@ -1187,6 +1191,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
 
     // 4. Update all states
     setInventory(newInventory);
+    setIsDirty(true);
     setRecountTargets(divergentKeys);
     setLastScanned(null); // Clear history for fresh start
     setActiveItem(null);

@@ -4,6 +4,7 @@ import { AuditData, ViewState, AuditStatus, Group, Department, Category, Product
 import ProgressBar from './components/ProgressBar';
 import Breadcrumbs from './components/Breadcrumbs';
 import { fetchLatestAudit, upsertAuditSession, fetchAuditSession, fetchAuditsHistory, DbAuditSession } from '../supabaseService';
+import { CacheService } from '../src/cacheService';
 
 const ALLOWED_IDS = [66, 67, 2000, 3000, 4000, 8000, 10000];
 const FILIAIS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18];
@@ -77,9 +78,18 @@ const App: React.FC = () => {
     if (!selectedFilial) return;
 
     const loadSession = async () => {
+      if (!selectedFilial) return;
       setIsProcessing(true);
       try {
-        const latest = await fetchLatestAudit(selectedFilial);
+        const latest = await CacheService.fetchWithCache(`audit_session_${selectedFilial}`, () => fetchLatestAudit(selectedFilial), (newData) => {
+          if (newData && newData.status === 'open') {
+            const parsed = newData.data;
+            setData({ ...parsed, sessionId: newData.id, auditNumber: newData.audit_number });
+            setAuditNumber(newData.audit_number);
+            setDbSessionId(newData.id);
+          }
+        });
+
         if (latest) {
           if (latest.status === 'open') {
             // Retomar
@@ -95,11 +105,11 @@ const App: React.FC = () => {
               })));
             }
             setInitialDoneUnits(done);
-            alert(`Auditoria Nº ${latest.audit_number} em aberto encontrada e carregada.`);
+            // alert(`Auditoria Nº ${latest.audit_number} em aberto encontrada e carregada.`); // Removido alert intrusivo no cache-first
           } else {
             // Auditoria anterior fechada -> Próxima
             setAuditNumber(latest.audit_number + 1);
-            alert(`Última auditoria (Nº ${latest.audit_number}) finalizada em ${new Date(latest.updated_at!).toLocaleDateString()}. Preparando Auditoria Nº ${latest.audit_number + 1}.`);
+            // alert(`Última auditoria (Nº ${latest.audit_number}) finalizada em ${new Date(latest.updated_at!).toLocaleDateString()}. Preparando Auditoria Nº ${latest.audit_number + 1}.`); // Removido alert
             setData(null);
           }
         } else {
@@ -120,9 +130,13 @@ const App: React.FC = () => {
     if (!selectedFilial) return;
     setIsProcessing(true);
     try {
-      const list = await fetchAuditsHistory(selectedFilial);
-      setHistoryList(list);
-      setShowHistory(true);
+      const list = await CacheService.fetchWithCache(`audit_history_${selectedFilial}`, () => fetchAuditsHistory(selectedFilial), (newList) => {
+        setHistoryList(newList);
+      });
+      if (list) {
+        setHistoryList(list);
+        setShowHistory(true);
+      }
     } catch (err) {
       console.error(err);
       alert("Erro ao carregar histórico.");

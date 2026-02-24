@@ -16,6 +16,7 @@ import {
     insertAppEventLog
 } from '../../supabaseService';
 import { CadastrosBaseService } from '../../src/cadastrosBase/cadastrosBaseService';
+import { CacheService } from '../../src/cacheService';
 import * as AuditStorage from '../../src/auditoria/storage';
 import type { DbGlobalBaseFile } from '../../supabaseService';
 import ProgressBar from './ProgressBar';
@@ -372,13 +373,38 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     );
     const [isUpdatingStock, setIsUpdatingStock] = useState(false);
 
+    const lastAuditUpdateRef = useRef<string | null>(null);
+
     const loadAuditNum = useCallback(async (silent: boolean = false) => {
         if (!selectedFilial) return;
         try {
-            const latest = await fetchLatestAudit(selectedFilial);
+            // Se for polling silencioso, busca apenas metadados para economizar banda e processamento
+            if (silent) {
+                const meta = await SupabaseService.fetchLatestAuditMetadata(selectedFilial);
+                if (!meta) return;
+
+                // Se a data de atualização for a mesma, não faz nada
+                if (lastAuditUpdateRef.current === meta.updated_at) {
+                    return;
+                }
+
+                console.log('🔄 Mudança detectada na auditoria, carregando dados completos...');
+                lastAuditUpdateRef.current = meta.updated_at;
+            }
+
+            const latest = await CacheService.fetchWithCache(`audit_session_${selectedFilial}`, () => fetchLatestAudit(selectedFilial), (newData) => {
+                // Se a sessão for a mesma, atualizamos os dados em background silenciosamente
+                if (newData && dbSessionId === newData.id && newData.data) {
+                    // Update data directly instead of recursive call
+                    setData(newData.data);
+                    setTermDrafts((newData.data as any).termDrafts || {});
+                    lastAuditUpdateRef.current = newData.updated_at || null;
+                }
+            });
 
             // Polling silencioso com mesma sessão → atualiza dados sem popups
             if (silent && latest && dbSessionId === latest.id && latest.data) {
+                lastAuditUpdateRef.current = latest.updated_at || null;
                 // Normaliza e aplica os dados frescos do banco para todos os usuários
                 if ((latest.data as any).partialStart && !(latest.data as any).partialStarts) {
                     (latest.data as any).partialStarts = [(latest.data as any).partialStart];
@@ -536,12 +562,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }
     }, [selectedFilial]);
 
-    // Polling a cada 10s — detecta mudanças feitas por outros usuários na mesma filial
+    // Polling a cada 30s (aumentado de 10s para performance) — detecta mudanças feitas por outros usuários na mesma filial
     useEffect(() => {
         if (!selectedFilial) return;
         const interval = setInterval(() => {
             loadAuditNum(true);
-        }, 10000);
+        }, 30000);
         return () => clearInterval(interval);
     }, [selectedFilial, loadAuditNum]);
 

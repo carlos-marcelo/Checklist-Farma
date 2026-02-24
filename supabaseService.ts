@@ -1015,6 +1015,8 @@ export async function fetchAuditSession(branch: string, auditNumber: number): Pr
 }
 
 export async function fetchLatestAudit(branch: string): Promise<DbAuditSession | null> {
+  // Use a targeted selection instead of * if possible, but for now we keep it to match existing usage
+  // until we verify where all properties are used.
   try {
     const { data, error } = await supabase
       .from('audit_sessions')
@@ -1028,6 +1030,27 @@ export async function fetchLatestAudit(branch: string): Promise<DbAuditSession |
     return data;
   } catch (error) {
     console.error('Error fetching latest audit:', error);
+    return null;
+  }
+}
+
+/**
+ * Lightweight check for audit changes
+ */
+export async function fetchLatestAuditMetadata(branch: string): Promise<{ id: string, updated_at: string, audit_number: number } | null> {
+  try {
+    const { data, error } = await supabase
+      .from('audit_sessions')
+      .select('id, updated_at, audit_number')
+      .eq('branch', branch)
+      .order('audit_number', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error('Error fetching latest audit metadata:', error);
     return null;
   }
 }
@@ -2139,10 +2162,29 @@ export async function fetchDraft(userEmail: string): Promise<DbDraft | null> {
   }
 }
 
-export async function saveDraft(draft: DbDraft): Promise<boolean> {
+/**
+ * Lightweight check for draft changes
+ */
+export async function fetchDraftMetadata(userEmail: string): Promise<{ updated_at: string } | null> {
+  try {
+    const { data, error } = await supabase
+      .from('drafts')
+      .select('updated_at')
+      .eq('user_email', userEmail)
+      .single();
+
+    if (error && error.code !== 'PGRST116') throw error;
+    return data;
+  } catch (error) {
+    console.error('Error fetching draft metadata:', error);
+    return null;
+  }
+}
+
+export async function saveDraft(draft: DbDraft): Promise<DbDraft | null> {
   try {
     // Use upsert to avoid race condition from fetch-before-save pattern
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('drafts')
       .upsert({
         user_email: draft.user_email,
@@ -2153,13 +2195,15 @@ export async function saveDraft(draft: DbDraft): Promise<boolean> {
         updated_at: new Date().toISOString()
       }, {
         onConflict: 'user_email'
-      });
+      })
+      .select()
+      .single();
 
     if (error) throw error;
-    return true;
+    return data;
   } catch (error) {
     console.error('Error saving draft:', error);
-    return false;
+    return null;
   }
 }
 
@@ -2249,11 +2293,11 @@ export async function migrateLocalStorageToSupabase() {
     if (localDrafts) {
       const draftsObj = JSON.parse(localDrafts);
       for (const [email, draft] of Object.entries(draftsObj)) {
-        const saved = await saveDraft({
+        const result = await saveDraft({
           user_email: email,
           ...(draft as any)
         });
-        if (saved) results.drafts++;
+        if (result) results.drafts++;
       }
     }
 
