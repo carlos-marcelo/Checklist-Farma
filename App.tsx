@@ -1467,6 +1467,8 @@ const App: React.FC = () => {
     const [activeSessions, setActiveSessions] = useState<SupabaseService.DbActiveSession[]>([]);
     const [isLoadingSessions, setIsLoadingSessions] = useState(false);
     const [isBulkSessionActionRunning, setIsBulkSessionActionRunning] = useState(false);
+    const [pendingSessionCommands, setPendingSessionCommands] = useState<Record<string, { command: 'FORCE_LOGOUT' | 'RELOAD'; startedAt: number }>>({});
+    const forcedSessionCleanupRef = useRef<Set<string>>(new Set());
 
     useEffect(() => {
         const handleOnline = () => setIsOnline(true);
@@ -3988,6 +3990,14 @@ const App: React.FC = () => {
         try {
             const sessions = await SupabaseService.fetchActiveSessions();
             setActiveSessions(sessions);
+            const activeClientIds = new Set((sessions || []).map(s => s.client_id));
+            setPendingSessionCommands(prev => {
+                const next: Record<string, { command: 'FORCE_LOGOUT' | 'RELOAD'; startedAt: number }> = {};
+                Object.entries(prev).forEach(([clientId, meta]) => {
+                    if (activeClientIds.has(clientId)) next[clientId] = meta;
+                });
+                return next;
+            });
         } catch (error) {
             console.error('Error fetching active sessions:', error);
         } finally {
@@ -4003,6 +4013,35 @@ const App: React.FC = () => {
 
         return () => clearInterval(interval);
     }, [currentView, currentUser?.role, currentUser?.company_id, refreshActiveSessions]);
+
+    useEffect(() => {
+        if (currentView !== 'logs' || currentUser?.role !== 'MASTER') return;
+
+        const interval = setInterval(async () => {
+            const activeIds = new Set(activeSessions.map(s => s.client_id));
+            const now = Date.now();
+            const staleForceLogoutIds = Object.entries(pendingSessionCommands)
+                .filter(([clientId, meta]) =>
+                    meta.command === 'FORCE_LOGOUT' &&
+                    activeIds.has(clientId) &&
+                    now - meta.startedAt >= 10000 &&
+                    !forcedSessionCleanupRef.current.has(clientId)
+                )
+                .map(([clientId]) => clientId);
+
+            if (!staleForceLogoutIds.length) return;
+
+            staleForceLogoutIds.forEach(clientId => forcedSessionCleanupRef.current.add(clientId));
+            try {
+                await Promise.all(staleForceLogoutIds.map(clientId => SupabaseService.deleteActiveSession(clientId)));
+            } finally {
+                staleForceLogoutIds.forEach(clientId => forcedSessionCleanupRef.current.delete(clientId));
+                await refreshActiveSessions();
+            }
+        }, 2000);
+
+        return () => clearInterval(interval);
+    }, [currentView, currentUser?.role, activeSessions, pendingSessionCommands, refreshActiveSessions]);
 
     const filteredEventLogs = useMemo(() => {
         let filtered = [...appEventLogs];
@@ -6213,9 +6252,26 @@ const App: React.FC = () => {
                                                 if (!ok) return;
                                                 setIsBulkSessionActionRunning(true);
                                                 try {
-                                                    const results = await Promise.all(activeSessions.map(session => SupabaseService.sendSessionCommand(session.client_id, 'FORCE_LOGOUT')));
+                                                    const targetClientIds = activeSessions.map(session => session.client_id);
+                                                    setPendingSessionCommands(prev => {
+                                                        const next = { ...prev };
+                                                        targetClientIds.forEach(clientId => {
+                                                            next[clientId] = { command: 'FORCE_LOGOUT', startedAt: Date.now() };
+                                                        });
+                                                        return next;
+                                                    });
+                                                    const results = await Promise.all(targetClientIds.map(clientId => SupabaseService.sendSessionCommand(clientId, 'FORCE_LOGOUT')));
                                                     const successCount = results.filter(Boolean).length;
                                                     const failCount = results.length - successCount;
+                                                    if (failCount > 0) {
+                                                        setPendingSessionCommands(prev => {
+                                                            const next = { ...prev };
+                                                            targetClientIds.forEach((clientId, index) => {
+                                                                if (!results[index]) delete next[clientId];
+                                                            });
+                                                            return next;
+                                                        });
+                                                    }
                                                     if (successCount === 0) {
                                                         alert('Nenhuma sessão foi atualizada. Verifique permissões/políticas do Supabase para update em active_sessions.');
                                                     } else if (failCount > 0) {
@@ -6247,18 +6303,22 @@ const App: React.FC = () => {
                                                 <th className="px-6 py-3 text-left">Filial / Área</th>
                                                 <th className="px-6 py-3 text-left">Módulos Ativos</th>
                                                 <th className="px-6 py-3 text-left">Último Sinal</th>
+                                                <th className="px-6 py-3 text-left">Status</th>
                                                 <th className="px-6 py-3 text-right">Ações</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-gray-100">
                                             {groupedActiveSessions.length === 0 ? (
                                                 <tr>
-                                                    <td colSpan={5} className="px-6 py-12 text-center text-gray-400 font-medium italic">
+                                                    <td colSpan={6} className="px-6 py-12 text-center text-gray-400 font-medium italic">
                                                         Nenhuma sessão ativa detectada no momento.
                                                     </td>
                                                 </tr>
                                             ) : (
-                                                groupedActiveSessions.map(user => (
+                                                groupedActiveSessions.map(user => {
+                                                    const pendingForUser = user.modules.filter(mod => !!pendingSessionCommands[mod.client_id]);
+                                                    const isPendingForceLogout = pendingForUser.some(mod => pendingSessionCommands[mod.client_id]?.command === 'FORCE_LOGOUT');
+                                                    return (
                                                     <tr key={user.user_email} className="hover:bg-blue-50/30 transition-colors">
                                                         <td className="px-6 py-4">
                                                             <div className="flex items-center gap-3">
@@ -6291,13 +6351,40 @@ const App: React.FC = () => {
                                                         <td className="px-6 py-4 text-xs font-bold text-gray-500">
                                                             {new Date(user.last_ping).toLocaleTimeString('pt-BR')}
                                                         </td>
+                                                        <td className="px-6 py-4">
+                                                            {isPendingForceLogout ? (
+                                                                <div className="inline-flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-black uppercase tracking-wide text-amber-700">
+                                                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                                                    Encerrando...
+                                                                </div>
+                                                            ) : (
+                                                                <span className="text-[10px] font-bold text-slate-300">-</span>
+                                                            )}
+                                                        </td>
                                                         <td className="px-6 py-4 text-right space-x-2">
                                                             <button
                                                                 onClick={async () => {
                                                                     if (confirm(`Forçar logout de ${user.user_name || user.user_email}? (${user.modules.length} sessão(ões))`)) {
-                                                                        const results = await Promise.all(user.modules.map(m => SupabaseService.sendSessionCommand(m.client_id, 'FORCE_LOGOUT')));
+                                                                        const targetClientIds = user.modules.map(m => m.client_id);
+                                                                        setPendingSessionCommands(prev => {
+                                                                            const next = { ...prev };
+                                                                            targetClientIds.forEach(clientId => {
+                                                                                next[clientId] = { command: 'FORCE_LOGOUT', startedAt: Date.now() };
+                                                                            });
+                                                                            return next;
+                                                                        });
+                                                                        const results = await Promise.all(targetClientIds.map(clientId => SupabaseService.sendSessionCommand(clientId, 'FORCE_LOGOUT')));
                                                                         const successCount = results.filter(Boolean).length;
                                                                         const failCount = results.length - successCount;
+                                                                        if (failCount > 0) {
+                                                                            setPendingSessionCommands(prev => {
+                                                                                const next = { ...prev };
+                                                                                targetClientIds.forEach((clientId, index) => {
+                                                                                    if (!results[index]) delete next[clientId];
+                                                                                });
+                                                                                return next;
+                                                                            });
+                                                                        }
                                                                         if (successCount === 0) {
                                                                             alert('Nenhuma sessão foi atualizada. Verifique permissões/políticas do Supabase para update em active_sessions.');
                                                                         } else if (failCount > 0) {
@@ -6331,7 +6418,7 @@ const App: React.FC = () => {
                                                             </button>
                                                         </td>
                                                     </tr>
-                                                ))
+                                                )})
                                             )}
                                         </tbody>
                                     </table>
