@@ -1150,6 +1150,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         setIsProcessing(true);
         try {
+            const safePartialStarts = Array.isArray(data?.partialStarts) ? data.partialStarts : [];
+
             if (shouldMergeStockOnly && data && !shouldReclassifyOpen) {
                 // Lógica de MERGE de estoque
                 const rowsStock = await readExcel(fileStock!);
@@ -1222,7 +1224,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 };
                 const preservedTermDrafts = ((data as any).termDrafts || termDrafts || {}) as Record<string, any>;
                 const basePersistedData = { ...newData, termDrafts: preservedTermDrafts, sourceFiles: nextSourceFiles } as any;
-                const persistedData = applyPartialScopes(basePersistedData, (data as AuditData).partialStarts || []);
+                const persistedData = applyPartialScopes(basePersistedData, safePartialStarts);
                 const progress = calculateProgress(persistedData as AuditData);
                 const savedSession = await upsertAuditSession({
                     id: dbSessionId,
@@ -1541,7 +1543,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 termDrafts: finalTermDrafts,
                 sourceFiles: buildStructureSourceMeta()
             } as any;
-            const persistedData = applyPartialScopes(basePersistedData, (data as AuditData).partialStarts || []);
+            const persistedData = applyPartialScopes(
+                basePersistedData,
+                shouldReclassifyOpen ? safePartialStarts : []
+            );
             const progress = calculateProgress(finalData);
             const savedSession = await upsertAuditSession({
                 id: dbSessionId,
@@ -1567,8 +1572,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             setIsUpdatingStock(false);
             setView({ level: 'groups' });
         } catch (err) {
-            alert("Erro ao processar/salvar arquivos da auditoria.");
-            console.error(err);
+            const detail = err instanceof Error
+                ? err.message
+                : (typeof err === 'string' ? err : 'Falha desconhecida');
+            alert(`Erro ao processar/salvar arquivos da auditoria.\n\nDetalhe: ${detail}`);
+            console.error('Erro detalhado em handleStartAudit:', {
+                detail,
+                selectedFilial,
+                nextAuditNumber,
+                hasOpenStructure: !!(data && data.groups && data.groups.length > 0),
+                hasStructureFiles: effectiveGroupFiles.length > 0
+            }, err);
         }
         finally { setIsProcessing(false); }
     };
