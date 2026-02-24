@@ -353,11 +353,12 @@ const mergeTermDraftMaps = (
             base[key] = incomingDraft;
             return;
         }
-        const preservedMetrics = currentDraft?.excelMetrics ?? incomingDraft?.excelMetrics;
-        const preservedRemovedAt = currentDraft?.excelMetricsRemovedAt ?? incomingDraft?.excelMetricsRemovedAt;
-        base[key] = preservedMetrics
-            ? { ...currentDraft, ...incomingDraft, excelMetrics: preservedMetrics, excelMetricsRemovedAt: preservedRemovedAt }
-            : { ...currentDraft, ...incomingDraft, excelMetricsRemovedAt: preservedRemovedAt };
+        const nextMetrics = incomingDraft?.excelMetrics ?? currentDraft?.excelMetrics;
+        let nextRemovedAt = incomingDraft?.excelMetricsRemovedAt ?? currentDraft?.excelMetricsRemovedAt;
+        if (incomingDraft?.excelMetrics) nextRemovedAt = undefined;
+        base[key] = nextMetrics
+            ? { ...currentDraft, ...incomingDraft, excelMetrics: nextMetrics, excelMetricsRemovedAt: nextRemovedAt }
+            : { ...currentDraft, ...incomingDraft, excelMetricsRemovedAt: nextRemovedAt };
     });
     return base;
 };
@@ -513,6 +514,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const loadAuditNum = useCallback(async (silent: boolean = false) => {
         if (!selectedFilial) return;
         try {
+            let forceFreshFetch = false;
             // Se for polling silencioso, busca apenas metadados para economizar banda e processamento
             if (silent) {
                 const meta = await fetchLatestAuditMetadata(selectedFilial);
@@ -524,9 +526,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 }
 
                 lastAuditUpdateRef.current = meta.updated_at;
+                forceFreshFetch = true;
             }
 
-            const latest = await CacheService.fetchWithCache<DbAuditSession>(`audit_session_${selectedFilial}`, () => fetchLatestAudit(selectedFilial), (newData) => {
+            const latest = forceFreshFetch
+                ? await fetchLatestAudit(selectedFilial)
+                : await CacheService.fetchWithCache<DbAuditSession>(`audit_session_${selectedFilial}`, () => fetchLatestAudit(selectedFilial), (newData) => {
                 // Se a sessão for a mesma, atualizamos os dados em background silenciosamente
                 if (newData && dbSessionId === newData.id && newData.data) {
                     // Update data directly instead of recursive call
@@ -2124,7 +2129,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         });
     };
 
-    const closeTermModal = useCallback(() => {
+    const closeTermModal = useCallback(async () => {
         const currentScope = termModal;
         const currentForm = termForm;
         if (isMaster && currentScope && currentForm && data) {
@@ -2140,34 +2145,36 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 ? { ...currentForm, excelMetrics: persistedMetrics }
                 : currentForm;
             const nextDrafts = { ...termDrafts, [key]: formToSave };
+            const nextDataWithTerms = { ...data, termDrafts: nextDrafts } as any;
             setTermDrafts(nextDrafts);
-            (async () => {
-                try {
-                    const nextDataWithTerms = { ...data, termDrafts: nextDrafts } as any;
-                    let skus = 0;
-                    let doneSkus = 0;
-                    (nextDataWithTerms.groups || []).forEach((g: any) =>
-                        (g.departments || []).forEach((d: any) =>
-                            (d.categories || []).forEach((c: any) => {
-                                skus += Number(c.itemsCount || 0);
-                                if (isDoneStatus(c.status)) doneSkus += Number(c.itemsCount || 0);
-                            })
-                        )
-                    );
-                    const progress = skus > 0 ? (doneSkus / skus) * 100 : 0;
-                    await upsertAuditSession({
-                        id: dbSessionId,
-                        branch: selectedFilial,
-                        audit_number: nextAuditNumber,
-                        status: 'open',
-                        data: nextDataWithTerms,
-                        progress: progress,
-                        user_email: userEmail
-                    });
-                } catch (err) {
-                    console.error("Error autosaving term draft on close:", err);
+            setData(nextDataWithTerms as AuditData);
+            try {
+                let skus = 0;
+                let doneSkus = 0;
+                (nextDataWithTerms.groups || []).forEach((g: any) =>
+                    (g.departments || []).forEach((d: any) =>
+                        (d.categories || []).forEach((c: any) => {
+                            skus += Number(c.itemsCount || 0);
+                            if (isDoneStatus(c.status)) doneSkus += Number(c.itemsCount || 0);
+                        })
+                    )
+                );
+                const progress = skus > 0 ? (doneSkus / skus) * 100 : 0;
+                const savedSession = await upsertAuditSession({
+                    id: dbSessionId,
+                    branch: selectedFilial,
+                    audit_number: nextAuditNumber,
+                    status: 'open',
+                    data: nextDataWithTerms,
+                    progress: progress,
+                    user_email: userEmail
+                });
+                if (savedSession) {
+                    await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
                 }
-            })();
+            } catch (err) {
+                console.error("Error autosaving term draft on close:", err);
+            }
             if (forceCleared) {
                 removedExcelDraftKeysRef.current.delete(key);
             }
@@ -2538,7 +2545,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         e.target.value = '';
     };
 
-    const removeTermComparisonExcel = () => {
+    const removeTermComparisonExcel = async () => {
         setTermComparisonMetrics(null);
         const removedAt = new Date().toISOString();
         setTermForm(prev => (prev ? { ...prev, excelMetrics: undefined, excelMetricsRemovedAt: removedAt } : prev));
@@ -2610,7 +2617,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             if (nextData) setData(nextData);
 
             if (isMaster && nextData) {
-                upsertAuditSession({
+                const savedSession = await upsertAuditSession({
                     id: dbSessionId,
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
@@ -2618,7 +2625,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     data: { ...nextData, termDrafts: nextDrafts } as any,
                     progress: calculateProgress(nextData),
                     user_email: userEmail
-                }).catch(err => console.error("Error removing term excel metrics:", err));
+                });
+                if (savedSession) {
+                    await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+                    const savedData = (savedSession.data as AuditData) || nextData;
+                    setData(savedData);
+                    setTermDrafts(current => mergeTermDraftMaps(current, ((savedData as any)?.termDrafts || nextDrafts || {}) as any));
+                } else {
+                    throw new Error("Erro ao salvar remoção do Excel.");
+                }
             }
         }
     };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package, ArrowRight, ArrowLeft, ShieldCheck, HelpCircle, Info, LayoutGrid, UserCircle, FileSearch, ChevronDown, Calendar, RefreshCw, UserCircle2, Plus, SearchX, WifiOff } from 'lucide-react';
 import { CHECKLISTS as BASE_CHECKLISTS, THEMES, ACCESS_MODULES, ACCESS_LEVELS, INPUT_TYPE_LABELS, generateId } from './constants';
@@ -1466,6 +1466,7 @@ const App: React.FC = () => {
     const [isOnline, setIsOnline] = useState(navigator.onLine);
     const [activeSessions, setActiveSessions] = useState<SupabaseService.DbActiveSession[]>([]);
     const [isLoadingSessions, setIsLoadingSessions] = useState(false);
+    const [isBulkSessionActionRunning, setIsBulkSessionActionRunning] = useState(false);
 
     useEffect(() => {
         const handleOnline = () => setIsOnline(true);
@@ -2579,23 +2580,32 @@ const App: React.FC = () => {
         };
 
         performHeartbeat();
-        const interval = setInterval(performHeartbeat, 60000);
+        const interval = setInterval(performHeartbeat, 20000);
+        const handleWakeHeartbeat = () => {
+            if (!document.hidden) performHeartbeat();
+        };
+        document.addEventListener('visibilitychange', handleWakeHeartbeat);
+        window.addEventListener('focus', handleWakeHeartbeat);
 
         return () => {
             clearInterval(interval);
+            document.removeEventListener('visibilitychange', handleWakeHeartbeat);
+            window.removeEventListener('focus', handleWakeHeartbeat);
             SupabaseService.deleteActiveSession(clientIdRef.current).catch(() => { });
         };
     }, [currentUser?.email, currentView]);
 
     useEffect(() => {
         if (!currentUser) return;
-
-        const commandInterval = setInterval(async () => {
+        let isCheckingCommand = false;
+        const checkSessionCommand = async () => {
+            if (isCheckingCommand) return;
+            isCheckingCommand = true;
             try {
-                const sessions = await SupabaseService.fetchActiveSessions();
-                const mySession = sessions.find(s => s.client_id === clientIdRef.current);
+                const mySession = await SupabaseService.fetchActiveSessionByClientId(clientIdRef.current);
 
                 if (mySession?.command === 'FORCE_LOGOUT') {
+                    await SupabaseService.sendSessionCommand(clientIdRef.current, null);
                     alert('⚠️ Sua sessão foi encerrada remotamente por um administrador.');
                     handleLogout();
                 } else if (mySession?.command === 'RELOAD') {
@@ -2604,10 +2614,24 @@ const App: React.FC = () => {
                 }
             } catch (error) {
                 console.error('Error checking session commands:', error);
+            } finally {
+                isCheckingCommand = false;
             }
-        }, 15000);
+        };
 
-        return () => clearInterval(commandInterval);
+        checkSessionCommand();
+        const commandInterval = setInterval(checkSessionCommand, 5000);
+        const handleWakeCommandCheck = () => {
+            if (!document.hidden) checkSessionCommand();
+        };
+        document.addEventListener('visibilitychange', handleWakeCommandCheck);
+        window.addEventListener('focus', handleWakeCommandCheck);
+
+        return () => {
+            clearInterval(commandInterval);
+            document.removeEventListener('visibilitychange', handleWakeCommandCheck);
+            window.removeEventListener('focus', handleWakeCommandCheck);
+        };
     }, [currentUser?.email, handleLogout]);
 
     const handleRegister = async (newUser: User) => {
@@ -3959,26 +3983,26 @@ const App: React.FC = () => {
             .finally(() => setIsLoadingLogs(false));
     }, [currentView, currentUser?.company_id, currentUser?.filial, currentUser?.role, logsDateRange]);
 
+    const refreshActiveSessions = useCallback(async () => {
+        setIsLoadingSessions(true);
+        try {
+            const sessions = await SupabaseService.fetchActiveSessions();
+            setActiveSessions(sessions);
+        } catch (error) {
+            console.error('Error fetching active sessions:', error);
+        } finally {
+            setIsLoadingSessions(false);
+        }
+    }, []);
+
     useEffect(() => {
         if (currentView !== 'logs' || currentUser?.role !== 'MASTER' || !currentUser?.company_id) return;
 
-        const fetchSessions = async () => {
-            setIsLoadingSessions(true);
-            try {
-                const sessions = await SupabaseService.fetchActiveSessions();
-                setActiveSessions(sessions);
-            } catch (error) {
-                console.error('Error fetching active sessions:', error);
-            } finally {
-                setIsLoadingSessions(false);
-            }
-        };
-
-        fetchSessions();
-        const interval = setInterval(fetchSessions, 20000); // 20 segundos
+        refreshActiveSessions();
+        const interval = setInterval(refreshActiveSessions, 8000); // 8 segundos
 
         return () => clearInterval(interval);
-    }, [currentView, currentUser?.role, currentUser?.company_id]);
+    }, [currentView, currentUser?.role, currentUser?.company_id, refreshActiveSessions]);
 
     const filteredEventLogs = useMemo(() => {
         let filtered = [...appEventLogs];
@@ -6180,6 +6204,37 @@ const App: React.FC = () => {
                                         Sessões Ativas em Tempo Real
                                     </h3>
                                     <div className="flex items-center gap-4">
+                                        <button
+                                            type="button"
+                                            disabled={activeSessions.length === 0 || isBulkSessionActionRunning}
+                                            onClick={async () => {
+                                                if (!activeSessions.length) return;
+                                                const ok = confirm(`Forçar logout de todas as ${activeSessions.length} sessão(ões) ativas?`);
+                                                if (!ok) return;
+                                                setIsBulkSessionActionRunning(true);
+                                                try {
+                                                    const results = await Promise.all(activeSessions.map(session => SupabaseService.sendSessionCommand(session.client_id, 'FORCE_LOGOUT')));
+                                                    const successCount = results.filter(Boolean).length;
+                                                    const failCount = results.length - successCount;
+                                                    if (successCount === 0) {
+                                                        alert('Nenhuma sessão foi atualizada. Verifique permissões/políticas do Supabase para update em active_sessions.');
+                                                    } else if (failCount > 0) {
+                                                        alert(`Logout enviado para ${successCount} sessão(ões). ${failCount} falharam.`);
+                                                    } else {
+                                                        alert('Comando de logout enviado para todas as sessões ativas!');
+                                                    }
+                                                    await refreshActiveSessions();
+                                                } catch (error) {
+                                                    console.error('Error sending force logout to all sessions:', error);
+                                                    alert('Falha ao enviar comando para todas as sessões.');
+                                                } finally {
+                                                    setIsBulkSessionActionRunning(false);
+                                                }
+                                            }}
+                                            className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-[10px] font-black hover:bg-red-100 transition-colors border border-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        >
+                                            {isBulkSessionActionRunning ? 'ENCERRANDO...' : 'ENCERRAR TODAS'}
+                                        </button>
                                         {isLoadingSessions && <div className="w-4 h-4 border-2 border-slate-200 border-t-slate-500 rounded-full animate-spin"></div>}
                                         <span className="text-xs font-bold text-slate-400">{groupedActiveSessions.length} usuário(s) online · {activeSessions.length} sessão(ões)</span>
                                     </div>
@@ -6240,8 +6295,17 @@ const App: React.FC = () => {
                                                             <button
                                                                 onClick={async () => {
                                                                     if (confirm(`Forçar logout de ${user.user_name || user.user_email}? (${user.modules.length} sessão(ões))`)) {
-                                                                        await Promise.all(user.modules.map(m => SupabaseService.sendSessionCommand(m.client_id, 'FORCE_LOGOUT')));
-                                                                        alert('Comando de logout enviado para todas as sessões!');
+                                                                        const results = await Promise.all(user.modules.map(m => SupabaseService.sendSessionCommand(m.client_id, 'FORCE_LOGOUT')));
+                                                                        const successCount = results.filter(Boolean).length;
+                                                                        const failCount = results.length - successCount;
+                                                                        if (successCount === 0) {
+                                                                            alert('Nenhuma sessão foi atualizada. Verifique permissões/políticas do Supabase para update em active_sessions.');
+                                                                        } else if (failCount > 0) {
+                                                                            alert(`Logout enviado para ${successCount} sessão(ões). ${failCount} falharam.`);
+                                                                        } else {
+                                                                            alert('Comando de logout enviado para todas as sessões!');
+                                                                        }
+                                                                        await refreshActiveSessions();
                                                                     }
                                                                 }}
                                                                 className="px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-[10px] font-black hover:bg-red-100 transition-colors border border-red-100"
@@ -6250,8 +6314,16 @@ const App: React.FC = () => {
                                                             </button>
                                                             <button
                                                                 onClick={async () => {
-                                                                    await Promise.all(user.modules.map(m => SupabaseService.sendSessionCommand(m.client_id, 'RELOAD')));
-                                                                    alert('Reload enviado para todas as sessões!');
+                                                                    const results = await Promise.all(user.modules.map(m => SupabaseService.sendSessionCommand(m.client_id, 'RELOAD')));
+                                                                    const successCount = results.filter(Boolean).length;
+                                                                    const failCount = results.length - successCount;
+                                                                    if (successCount === 0) {
+                                                                        alert('Nenhuma sessão foi atualizada. Verifique permissões/políticas do Supabase para update em active_sessions.');
+                                                                    } else if (failCount > 0) {
+                                                                        alert(`Reload enviado para ${successCount} sessão(ões). ${failCount} falharam.`);
+                                                                    } else {
+                                                                        alert('Reload enviado para todas as sessões!');
+                                                                    }
                                                                 }}
                                                                 className="px-3 py-1.5 bg-blue-50 text-blue-600 rounded-lg text-[10px] font-black hover:bg-blue-100 transition-colors border border-blue-100"
                                                             >

@@ -2405,11 +2405,27 @@ export function exportLocalStorageBackup() {
 
 export async function upsertActiveSession(session: Partial<DbActiveSession>): Promise<boolean> {
   try {
-    const { error } = await supabase
-      .from('active_sessions')
-      .upsert([session], { onConflict: 'client_id' });
+    const clientId = session.client_id;
+    if (!clientId) return false;
 
-    if (error) throw error;
+    // Heartbeat não deve sobrescrever "command" para evitar perder FORCE_LOGOUT/RELOAD
+    const heartbeatPayload: Partial<DbActiveSession> = { ...session };
+    delete (heartbeatPayload as any).command;
+
+    const { data: updatedRows, error: updateError } = await supabase
+      .from('active_sessions')
+      .update(heartbeatPayload)
+      .eq('client_id', clientId)
+      .select('client_id');
+
+    if (updateError) throw updateError;
+    if (Array.isArray(updatedRows) && updatedRows.length > 0) return true;
+
+    const { error: insertError } = await supabase
+      .from('active_sessions')
+      .insert([{ ...heartbeatPayload, client_id: clientId, command: null }]);
+
+    if (insertError) throw insertError;
     return true;
   } catch (error) {
     console.error('Error upserting active session:', error);
@@ -2438,16 +2454,33 @@ export async function fetchActiveSessions(): Promise<DbActiveSession[]> {
 
 export async function sendSessionCommand(clientId: string, command: 'FORCE_LOGOUT' | 'RELOAD' | null): Promise<boolean> {
   try {
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('active_sessions')
       .update({ command, updated_at: new Date().toISOString() })
-      .eq('client_id', clientId);
+      .eq('client_id', clientId)
+      .select('client_id');
 
     if (error) throw error;
-    return true;
+    return Array.isArray(data) && data.length > 0;
   } catch (error) {
     console.error('Error sending session command:', error);
     return false;
+  }
+}
+
+export async function fetchActiveSessionByClientId(clientId: string): Promise<DbActiveSession | null> {
+  try {
+    const { data, error } = await supabase
+      .from('active_sessions')
+      .select('*')
+      .eq('client_id', clientId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data || null;
+  } catch (error) {
+    console.error('Error fetching active session by client id:', error);
+    return null;
   }
 }
 
