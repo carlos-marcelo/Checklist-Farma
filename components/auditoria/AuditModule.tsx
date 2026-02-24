@@ -377,6 +377,14 @@ const mergeExcelMetricsPools = (pools: any[]): any | null => {
     }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0, items: [], groupedDifferences: [] });
 };
 
+const getFinancialRepresentativity = (auditedBaseCost?: number, diffCost?: number): number | null => {
+    const base = Math.abs(Number(auditedBaseCost || 0));
+    if (!base || !Number.isFinite(base)) return null;
+    const diff = Math.abs(Number(diffCost || 0));
+    if (!Number.isFinite(diff)) return null;
+    return (diff / base) * 100;
+};
+
 const ExcelMetricsDashboard: React.FC<{
     metrics: {
         sysQty: number;
@@ -385,9 +393,11 @@ const ExcelMetricsDashboard: React.FC<{
         countedCost: number;
         diffQty: number;
         diffCost: number;
-    }
-}> = ({ metrics }) => {
+    };
+    auditedBaseCost?: number;
+}> = ({ metrics, auditedBaseCost }) => {
     if (!metrics || typeof metrics.diffQty !== 'number') return null;
+    const representativity = getFinancialRepresentativity(auditedBaseCost ?? metrics.countedCost, metrics.diffCost);
 
     return (
         <div className="mt-4 pt-4 border-t border-indigo-100/50">
@@ -396,36 +406,41 @@ const ExcelMetricsDashboard: React.FC<{
             </div>
             <div className="grid grid-cols-3 gap-2">
                 <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
-                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Est. Sist (Qtde)</span>
-                    <span className="text-[11px] font-black text-slate-600">{Math.round(metrics.sysQty).toLocaleString('pt-BR')} un.</span>
+                    <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Est. Sist (Qtde)</span>
+                    <span className="text-[14px] font-black text-slate-700">{Math.round(metrics.sysQty).toLocaleString('pt-BR')} un.</span>
                 </div>
                 <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
-                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Est. Físico (Qtde)</span>
-                    <span className="text-[11px] font-black text-slate-600">{Math.round(metrics.countedQty).toLocaleString('pt-BR')} un.</span>
+                    <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Est. Físico (Qtde)</span>
+                    <span className="text-[14px] font-black text-slate-700">{Math.round(metrics.countedQty).toLocaleString('pt-BR')} un.</span>
                 </div>
                 <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
-                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Diferença (Qtde)</span>
-                    <span className={`text-[11px] font-black ${metrics.diffQty < 0 ? 'text-red-600' : metrics.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                    <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Diferença (Qtde)</span>
+                    <span className={`text-[14px] font-black ${metrics.diffQty < 0 ? 'text-red-600' : metrics.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
                         {metrics.diffQty > 0 ? '+' : ''}{Math.round(metrics.diffQty).toLocaleString('pt-BR')} un.
                     </span>
                 </div>
             </div>
             <div className="grid grid-cols-3 gap-2 mt-2">
                 <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
-                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Custo Sist</span>
-                    <span className="text-[11px] font-black text-slate-600">{metrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                    <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Custo Sist</span>
+                    <span className="text-[14px] font-black text-slate-700">{metrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                 </div>
                 <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
-                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Custo Físico</span>
-                    <span className="text-[11px] font-black text-slate-600">{metrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                    <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Custo Físico</span>
+                    <span className="text-[14px] font-black text-slate-700">{metrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                 </div>
                 <div className={`border rounded-lg p-2 ${metrics.diffCost < 0 ? 'bg-red-50 border-red-200' : metrics.diffCost > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-100'}`}>
-                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Resultado Fin.</span>
-                    <span className={`text-[11px] font-black ${metrics.diffCost < 0 ? 'text-red-700' : metrics.diffCost > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
+                    <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Resultado Fin.</span>
+                    <span className={`text-[14px] font-black ${metrics.diffCost < 0 ? 'text-red-700' : metrics.diffCost > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
                         {metrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                     </span>
-                    {metrics.diffCost < 0 && <span className="text-[7px] font-black text-red-500 uppercase block">Prejuízo</span>}
-                    {metrics.diffCost > 0 && <span className="text-[7px] font-black text-emerald-600 uppercase block">Sobra</span>}
+                    {metrics.diffCost < 0 && <span className="text-[8px] font-black text-red-500 uppercase block">Prejuízo</span>}
+                    {metrics.diffCost > 0 && <span className="text-[8px] font-black text-emerald-600 uppercase block">Sobra</span>}
+                    {representativity !== null && (
+                        <span className="text-[8px] font-black text-slate-600 uppercase tracking-widest block mt-1">
+                            Rep. Auditada: {representativity.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
+                        </span>
+                    )}
                 </div>
             </div>
         </div>
@@ -3022,6 +3037,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             finalY += 6;
 
             const diffType = termComparisonMetrics.diffCost < 0 ? 'Prejuízo (Falta)' : termComparisonMetrics.diffCost > 0 ? 'Sobra (Excesso)' : 'Zero';
+            const scopeAuditedCost = (scopeInfo.products || []).reduce((sum: number, p: any) => sum + ((p.quantity || 0) * (p.cost || 0)), 0);
+            const representativity = getFinancialRepresentativity(scopeAuditedCost, termComparisonMetrics.diffCost);
+            const representativityLabel = representativity === null
+                ? 'N/A'
+                : `${representativity.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
 
             const summaryRows = [
                 ['Estoque Sistema (Qtde)', Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')],
@@ -3029,7 +3049,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 ['Estoque Físico (Qtde)', Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')],
                 ['Custo Total Físico', termComparisonMetrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })],
                 ['Diferença de Estoque (Qtde)', termComparisonMetrics.diffQty.toLocaleString('pt-BR')],
-                ['Resultado Financeiro', termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) + ` (${diffType})`]
+                ['Resultado Financeiro', termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) + ` (${diffType})`],
+                ['Representatividade no Auditado', representativityLabel]
             ];
 
             // @ts-ignore
@@ -4447,7 +4468,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     {(() => {
                                         const metrics = getScopedMetrics({ type: 'group', groupId: group.id });
                                         if (!metrics) return null;
-                                        return <ExcelMetricsDashboard metrics={metrics} />;
+                                        return <ExcelMetricsDashboard metrics={metrics} auditedBaseCost={m.doneCost} />;
                                     })()}
 
                                     <div className="mt-6">
@@ -4522,7 +4543,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     {(() => {
                                         const metrics = getScopedMetrics({ type: 'department', groupId: selectedGroup!.id, deptId: dept.id });
                                         if (!metrics) return null;
-                                        return <ExcelMetricsDashboard metrics={metrics} />;
+                                        return <ExcelMetricsDashboard metrics={metrics} auditedBaseCost={m.doneCost} />;
                                     })()}
 
                                     <ProgressBar percentage={deptProgressValue} size="md" label={`Status do Departamento`} tone={deptAllDone ? 'green' : deptHasInProgress ? 'blue' : 'auto'} />
@@ -4559,7 +4580,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     {(() => {
                                         const metrics = getScopedMetrics({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id });
                                         if (!metrics) return null;
-                                        return <ExcelMetricsDashboard metrics={metrics} />;
+                                        return <ExcelMetricsDashboard metrics={metrics} auditedBaseCost={cat.totalCost} />;
                                     })()}
                                 </div>
                                 <div className="flex gap-4">
@@ -4961,6 +4982,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                                 {termComparisonMetrics && (
                                     <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 relative animate-in fade-in slide-in-from-top-2">
+                                        {(() => {
+                                            const scopeAuditedCost = (termScopeInfo?.products || []).reduce(
+                                                (sum: number, p: any) => sum + ((p.quantity || 0) * (p.cost || 0)),
+                                                0
+                                            );
+                                            const representativity = getFinancialRepresentativity(scopeAuditedCost, termComparisonMetrics.diffCost);
+                                            return (
+                                                <>
                                         <button
                                             onClick={removeTermComparisonExcel}
                                             className="absolute top-3 right-3 text-indigo-400 hover:text-red-500 transition-colors"
@@ -5007,6 +5036,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                         <span className={`text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${termComparisonMetrics.diffCost < 0 ? 'bg-red-100 text-red-600' : termComparisonMetrics.diffCost > 0 ? 'bg-green-100 text-green-600' : 'bg-slate-200 text-slate-600'}`}>
                                                             {termComparisonMetrics.diffCost < 0 ? 'Prejuízo' : termComparisonMetrics.diffCost > 0 ? 'Sobra' : 'Zero'}
                                                         </span>
+                                                        {representativity !== null && (
+                                                            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mt-1">
+                                                                Rep. Auditada: {representativity.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
+                                                            </span>
+                                                        )}
                                                     </div>
                                                 </div>
                                             </div>
@@ -5223,6 +5257,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                     </div>
                                                 </div>
                                             )
+                                        })()}
+                                                </>
+                                            );
                                         })()}
                                     </div>
                                 )}
