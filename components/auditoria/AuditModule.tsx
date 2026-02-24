@@ -701,13 +701,35 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }
     }, [selectedFilial]);
 
-    // Polling a cada 30s (aumentado de 10s para performance) — detecta mudanças feitas por outros usuários na mesma filial
+    // Polling de sincronização entre usuários
     useEffect(() => {
         if (!selectedFilial) return;
-        const interval = setInterval(() => {
-            loadAuditNum(true);
-        }, 30000);
-        return () => clearInterval(interval);
+        const syncNow = () => loadAuditNum(true);
+
+        // Aba ativa: sincroniza rápido. Aba oculta: reduz frequência para economizar.
+        const getIntervalMs = () => (document.hidden ? 12000 : 5000);
+        let interval = setInterval(syncNow, getIntervalMs());
+
+        const resetInterval = () => {
+            clearInterval(interval);
+            interval = setInterval(syncNow, getIntervalMs());
+        };
+
+        const handleVisibilityOrFocus = () => {
+            resetInterval();
+            if (!document.hidden) {
+                syncNow();
+            }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+        window.addEventListener('focus', handleVisibilityOrFocus);
+
+        return () => {
+            clearInterval(interval);
+            document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+            window.removeEventListener('focus', handleVisibilityOrFocus);
+        };
     }, [selectedFilial, loadAuditNum]);
 
     // Derived inventory number (Auto-generated)
@@ -3327,7 +3349,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             return;
         }
         const nowIso = new Date().toISOString();
-        const existing = data.partialStarts || [];
+        const existing = data?.partialStarts || [];
         const catMap = new Map<string, { startedAt: string; groupId: string; deptId: string; catId: string }>();
 
         existing.forEach(p => {
@@ -3456,7 +3478,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             return false;
         };
 
-        const existingPartials = data.partialStarts || [];
+        const existingPartials = data?.partialStarts || [];
         const filteredPartials = existingPartials.filter(p => !entryTouchesTargetScope(p));
         const baseCompleted = allDone
             ? (data.partialCompleted || []).filter(p => !entryTouchesTargetScope(p))

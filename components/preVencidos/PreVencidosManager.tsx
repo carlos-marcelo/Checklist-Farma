@@ -158,7 +158,7 @@ const normalizeReducedCode = (value?: string) => {
 
 const buildSetupDraftKey = (email: string) => `PV_SETUP_DRAFT_${(email || '').trim().toLowerCase()}`;
 const GLOBAL_BASE_CACHE_TTL_MS = 60 * 1000;
-const BRANCH_FETCH_COOLDOWN_MS = 20 * 1000;
+const BRANCH_FETCH_COOLDOWN_MS = 5 * 1000;
 const PV_GLOBAL_MODULE_KEYS = ['shared_cadastro_produtos', 'pre_dcb_base'] as const;
 
 const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
@@ -415,6 +415,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   useEffect(() => {
     setHasInitialHydrationCompleted(false);
+    setHydrationDelayDone(false);
+    setIsInitialSyncDone(false);
+    setReportsReady(false);
+    setReportsSyncStatus('idle');
+    reportsSyncInFlightRef.current.clear();
+    reportsSyncLastRunRef.current.clear();
+    branchFetchInFlightRef.current.clear();
+    branchFetchLastRunRef.current.clear();
   }, [userEmail]);
 
   useEffect(() => {
@@ -669,6 +677,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       const now = Date.now();
       const isCooldown = now - lastRun < BRANCH_FETCH_COOLDOWN_MS;
       if (reportsSyncInFlightRef.current.has(syncKey) || isCooldown) {
+        if (!cancelled) setIsInitialSyncDone(true);
         return;
       }
       reportsSyncInFlightRef.current.add(syncKey);
@@ -725,14 +734,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           }));
         }
 
-        const systemMissingLab = finalSystem.some(item => !String((item as any)?.lab || '').trim());
+        let systemMissingLab = finalSystem.some(item => !String((item as any)?.lab || '').trim());
         const hasMissingCacheForLab = systemMissingLab && !(storedReports as any)?.enrichedLabs;
 
         // Fallback/enriquecimento global por empresa (carregado no módulo Cadastros Base).
         // Também usa o arquivo global para preencher laboratório ausente no system já salvo em DB.
         if (
           reportLookupCompanyId &&
-          (finalSystem.length === 0 || finalDcb.length === 0 || systemMissingLab)
+          (finalSystem.length === 0 || finalDcb.length === 0 || hasMissingCacheForLab)
         ) {
           try {
             const globalFiles = await fetchGlobalBaseFilesCached(reportLookupCompanyId);
@@ -740,13 +749,53 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
               const fileByKey = new Map(globalFiles.map(file => [file.module_key, file]));
               const systemGlobal = fileByKey.get('shared_cadastro_produtos');
               const dcbGlobal = fileByKey.get('pre_dcb_base');
+
+              if (systemGlobal && (finalSystem.length === 0 || hasMissingCacheForLab)) {
+                const systemFile = decodeGlobalFileToBrowserFile(systemGlobal as any);
+                if (systemFile) {
+                  const parsedSystem = await parseSystemProductsXLSX(systemFile);
+                  if (parsedSystem.length > 0) {
+                    if (finalSystem.length === 0) {
+                      finalSystem = parsedSystem;
+                      loadedSystemFromGlobal = true;
+                    } else if (hasMissingCacheForLab) {
+                      const globalLabByReduced = new Map<string, string>();
+                      parsedSystem.forEach(item => {
+                        const reduced = normalizeReducedCode((item as any)?.reducedCode || '');
+                        const lab = String((item as any)?.lab || '').trim();
+                        if (reduced && lab && !globalLabByReduced.has(reduced)) {
+                          globalLabByReduced.set(reduced, lab);
+                        }
+                      });
+                      finalSystem = finalSystem.map(item => {
+                        const currentLab = String((item as any)?.lab || '').trim();
+                        if (currentLab) return item;
+                        const reduced = normalizeReducedCode((item as any)?.reducedCode || '');
+                        const fallbackLab = reduced ? globalLabByReduced.get(reduced) : '';
+                        return fallbackLab ? { ...item, lab: fallbackLab } : item;
+                      });
+                      loadedSystemFromGlobal = true;
+                    }
+                  }
+                }
+              }
+
+              if (dcbGlobal && finalDcb.length === 0) {
+                const dcbFile = decodeGlobalFileToBrowserFile(dcbGlobal as any);
+                if (dcbFile) {
+                  const parsedDcb = await parseDCBProductsXLSX(dcbFile);
+                  if (parsedDcb.length > 0) {
+                    finalDcb = parsedDcb;
+                    loadedDcbFromGlobal = true;
+                  }
+                }
+              }
             }
           } catch (e) {
             console.warn('Fallback global falhou', e)
           }
         }
-
-        // [Otimização] Fallback global desabilitado temporariamente para debugar lentidão na inicialização
+        systemMissingLab = finalSystem.some(item => !String((item as any)?.lab || '').trim());
 
         if (finalSystem.length) setSystemProducts(finalSystem);
         if (finalDcb.length) setDcbBaseProducts(finalDcb);
@@ -761,12 +810,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
         // [Otimização] Só salva no cache local se realmente baixou algo NOVO do banco de dados remoto
         // Se `finalSystem` for apenas o `localSystem` reaproveitado, reescrever 100 mil itens no IndexedDB causa travamento/OOM (tela branca)
-        if (hasDbSystem || hasDbDcb) {
+        if (hasDbSystem || hasDbDcb || loadedSystemFromGlobal || loadedDcbFromGlobal) {
           console.log(`✅ [PV Sync] Cacheando relatórios baixados do DB: ${finalSystem.length} sistem, ${finalDcb.length} dcb`);
           saveLocalPVReports(userEmail, {
             systemProducts: finalSystem,
             dcbProducts: finalDcb,
-            ...(systemMissingLab ? { enrichedLabs: true } : {})
+            ...(systemMissingLab ? {} : { enrichedLabs: true })
           } as any);
         }
 
@@ -853,7 +902,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   // Load Session Logic
   useEffect(() => {
-    if (!userEmail) return;
+    if (!userEmail) {
+      setIsLoadingSession(false);
+      return;
+    }
 
     let isMounted = true;
     setIsLoadingSession(true);
@@ -937,9 +989,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         console.error('[PV AutoLoad] Fetch error:', err);
         if (retries > 0 && isMounted) {
           retries--;
-          console.log(`[PV AutoLoad] Retrying in 2s... attempts left: ${retries}`);
+          console.log(`[PV AutoLoad] Retrying in 0.8s... attempts left: ${retries}`);
           setConnectionStatus('offline');
-          setTimeout(loadRecords, 2000);
+          setTimeout(loadRecords, 800);
         } else {
           setConnectionStatus('offline');
         }
@@ -2768,7 +2820,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     persistTimeoutRef.current = setTimeout(() => {
       persistPVSession();
       persistTimeoutRef.current = null;
-    }, 10000); // Aumentado de 2.5s para 10s para poupar CPU/DB
+    }, 3000);
   }, [persistPVSession, userEmail]);
 
   useEffect(() => {
@@ -3171,7 +3223,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
     if (initialHydrationReady) {
       if (!hydrationDelayDone) {
-        timeout = setTimeout(() => setHydrationDelayDone(true), 1200); // 1.2s guarantee to let tables mount
+        timeout = setTimeout(() => setHydrationDelayDone(true), 250);
       } else {
         setHasInitialHydrationCompleted(true);
       }

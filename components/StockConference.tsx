@@ -432,6 +432,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const [lastSavedSummary, setLastSavedSummary] = useState<StockSummaryPayload | null>(null);
   const manualSessionStartedRef = useRef(false);
   const lastSyncTimestampRef = useRef<number>(0);
+  const lastConflictCheckRef = useRef<number>(0);
   const signatureHashRef = useRef('');
 
   // --- Effects ---
@@ -447,14 +448,25 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     if (!userEmail) return;
     if (masterProducts.size === 0 || inventory.size === 0) return;
 
-    // Save every 120 seconds (increased from 60s) only if dirty and not already saving
+    // Save periodically only when dirty and not already saving
     const interval = setInterval(() => {
       if (!isDirty || isSavingSession) return;
-      console.log('⏰ Auto-saving session...');
       void persistSession().then(() => setIsDirty(false));
-    }, 120000);
+    }, 30000);
 
-    return () => clearInterval(interval);
+    const handleWake = () => {
+      if (!document.hidden && isDirty && !isSavingSession) {
+        void persistSession().then(() => setIsDirty(false));
+      }
+    };
+    document.addEventListener('visibilitychange', handleWake);
+    window.addEventListener('focus', handleWake);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', handleWake);
+      window.removeEventListener('focus', handleWake);
+    };
   }, [step, userEmail, masterProducts.size, inventory.size, isDirty, isSavingSession]);
 
   // Limpeza de cache legado no mount
@@ -713,21 +725,20 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     });
 
     try {
-      const remoteSession = await SupabaseService.fetchStockConferenceSession(userEmail);
-      const remoteTs = getSessionTimestamp(remoteSession);
+      const nowMs = Date.now();
+      const shouldCheckConflict = nowMs - lastConflictCheckRef.current > 20000;
+      let isConflict = false;
+      if (shouldCheckConflict) {
+        lastConflictCheckRef.current = nowMs;
+        const remoteSession = await SupabaseService.fetchStockConferenceSession(userEmail);
+        const remoteTs = getSessionTimestamp(remoteSession);
 
-      // Buffer de 5 segundos para evitar falsos positivos por latência/clock drift
-      const SYNC_BUFFER_MS = 5000;
-      // Usamos o Ref para garantir que comparamos com o último valor REAL salvo nesta aba
-      const isConflict = remoteTs > (lastSyncTimestampRef.current + SYNC_BUFFER_MS);
+        // Buffer para evitar falsos positivos por latência/clock drift
+        const SYNC_BUFFER_MS = 5000;
+        isConflict = remoteTs > (lastSyncTimestampRef.current + SYNC_BUFFER_MS);
+      }
 
       if (isConflict) {
-        console.warn('⚠️ Sync Conflict Detected:', {
-          remote: new Date(remoteTs).toISOString(),
-          local: new Date(lastSyncTimestampRef.current).toISOString(),
-          diff_ms: remoteTs - lastSyncTimestampRef.current
-        });
-
         const proceed = window.confirm(
           '⚠️ Conflito de Sincronização:\n\n' +
           'Esta sessão foi atualizada em outro dispositivo (ou aba).\n' +
