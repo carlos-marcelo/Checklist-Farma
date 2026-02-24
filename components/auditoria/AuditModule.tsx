@@ -327,6 +327,7 @@ interface TermForm {
         items: any[];
         groupedDifferences?: any[];
     };
+    excelMetricsRemovedAt?: string;
 }
 
 const getScopeGroupIds = (scope?: TermScope | null): string[] => {
@@ -358,6 +359,22 @@ const mergeTermDraftMaps = (
             : { ...currentDraft, ...incomingDraft };
     });
     return base;
+};
+
+const mergeExcelMetricsPools = (pools: any[]): any | null => {
+    const validPools = (pools || []).filter(Boolean);
+    if (validPools.length === 0) return null;
+    if (validPools.length === 1) return validPools[0];
+    return validPools.reduce((acc: any, curr: any) => ({
+        sysQty: (acc.sysQty || 0) + (curr.sysQty || 0),
+        sysCost: (acc.sysCost || 0) + (curr.sysCost || 0),
+        countedQty: (acc.countedQty || 0) + (curr.countedQty || 0),
+        countedCost: (acc.countedCost || 0) + (curr.countedCost || 0),
+        diffQty: (acc.diffQty || 0) + (curr.diffQty || 0),
+        diffCost: (acc.diffCost || 0) + (curr.diffCost || 0),
+        items: [...(acc.items || []), ...(curr.items || [])],
+        groupedDifferences: [...(acc.groupedDifferences || []), ...(curr.groupedDifferences || [])]
+    }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0, items: [], groupedDifferences: [] });
 };
 
 const ExcelMetricsDashboard: React.FC<{
@@ -449,6 +466,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [auditLookup, setAuditLookup] = useState('');
     const [auditLookupOpen, setAuditLookupOpen] = useState(false);
     const auditLookupInputRef = useRef<HTMLInputElement | null>(null);
+    const removedExcelDraftKeysRef = useRef<Set<string>>(new Set());
 
     const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
     const [selectedFilial, setSelectedFilial] = useState("");
@@ -1837,9 +1855,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setTermModal(scope);
         setTermForm(nextForm);
 
-        // Prioridade real: Bucket do draft > Bucket do grupo
-        const rawPool = draft?.excelMetrics || (scope.groupId ? data?.sharedGroupExcelMetrics?.[normalizeScopeId(scope.groupId)] : null);
         const scopeGroupIds = getScopeGroupIds(scope);
+        const sharedPools = scopeGroupIds
+            .map(id => data?.sharedGroupExcelMetrics?.[normalizeScopeId(id)])
+            .filter(Boolean);
+        const isExcelExplicitlyCleared = !!draft?.excelMetricsRemovedAt;
+        // Prioridade real: Bucket do draft > Buckets compartilhados do escopo
+        const rawPool = isExcelExplicitlyCleared ? null : (draft?.excelMetrics || (
+            scope.type === 'custom'
+                ? mergeExcelMetricsPools(sharedPools as any[])
+                : (scope.groupId ? data?.sharedGroupExcelMetrics?.[normalizeScopeId(scope.groupId)] : null)
+        ));
 
         let nextMetrics = null;
 
@@ -2064,10 +2090,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const currentForm = termForm;
         if (isMaster && currentScope && currentForm && data) {
             const key = buildTermKey(currentScope);
+            const forceCleared = removedExcelDraftKeysRef.current.has(key);
             const persistedMetrics =
-                termComparisonMetrics ||
-                currentForm.excelMetrics ||
-                termDrafts[key]?.excelMetrics;
+                forceCleared
+                    ? undefined
+                    : (termComparisonMetrics ||
+                        currentForm.excelMetrics ||
+                        termDrafts[key]?.excelMetrics);
             const formToSave = persistedMetrics
                 ? { ...currentForm, excelMetrics: persistedMetrics }
                 : currentForm;
@@ -2100,6 +2129,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     console.error("Error autosaving term draft on close:", err);
                 }
             })();
+            if (forceCleared) {
+                removedExcelDraftKeysRef.current.delete(key);
+            }
         }
         setTermModal(null);
         setTermForm(null);
@@ -2418,7 +2450,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             };
 
             setTermComparisonMetrics(payload);
-            setTermForm(prev => (prev ? { ...prev, excelMetrics: payload } : prev));
+            setTermForm(prev => (prev ? { ...prev, excelMetrics: payload, excelMetricsRemovedAt: undefined } : prev));
 
             // Salvamento Global isolado por grupo
             if (data && scopeGroupIds.length > 0) {
@@ -2446,9 +2478,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             // Auto-Save do Excel no Termo Draft corrente
             if (termModal && termForm) {
                 const key = buildTermKey(termModal);
+                removedExcelDraftKeysRef.current.delete(key);
                 setTermDrafts(current => ({
                     ...current,
-                    [key]: { ...termForm, excelMetrics: payload }
+                    [key]: { ...termForm, excelMetrics: payload, excelMetricsRemovedAt: undefined }
                 }));
             }
 
@@ -2473,7 +2506,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const removeTermComparisonExcel = () => {
         setTermComparisonMetrics(null);
-        setTermForm(prev => (prev ? { ...prev, excelMetrics: undefined } : prev));
+        const removedAt = new Date().toISOString();
+        setTermForm(prev => (prev ? { ...prev, excelMetrics: undefined, excelMetricsRemovedAt: removedAt } : prev));
         if (termModal && termForm) {
             const scopeGroupIds = getScopeGroupIds(termModal);
             const tk = buildTermKey(termModal);
@@ -2518,9 +2552,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             Object.keys(nextDrafts).forEach(draftKey => {
                 if (!nextDrafts[draftKey]?.excelMetrics) return;
                 if (!keyTouchesTarget(draftKey)) return;
-                nextDrafts[draftKey] = { ...nextDrafts[draftKey], excelMetrics: undefined };
+                nextDrafts[draftKey] = { ...nextDrafts[draftKey], excelMetrics: undefined, excelMetricsRemovedAt: removedAt };
+                removedExcelDraftKeysRef.current.add(draftKey);
             });
-            if (!nextDrafts[tk]) nextDrafts[tk] = { ...termForm, excelMetrics: undefined };
+            if (!nextDrafts[tk]) nextDrafts[tk] = { ...termForm, excelMetrics: undefined, excelMetricsRemovedAt: removedAt };
+            else nextDrafts[tk] = { ...nextDrafts[tk], excelMetrics: undefined, excelMetricsRemovedAt: removedAt };
+            removedExcelDraftKeysRef.current.add(tk);
             setTermDrafts(nextDrafts);
 
             const nextShared = { ...((data?.sharedGroupExcelMetrics || {}) as Record<string, any>) };
