@@ -2477,23 +2477,77 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         if (termModal && termForm) {
             const scopeGroupIds = getScopeGroupIds(termModal);
             const tk = buildTermKey(termModal);
-            setTermDrafts(current => {
-                const next = { ...current };
-                if (next[tk]) next[tk] = { ...next[tk], excelMetrics: undefined };
-                return next;
-            });
+            const nextDrafts = { ...termDrafts };
+            const makeCatKey = (groupId?: string | number, deptId?: string | number, catId?: string | number) =>
+                partialScopeKey({ groupId, deptId, catId });
+            const collectScopeCatKeys = (scope: { groupId?: string; deptId?: string; catId?: string }) =>
+                getScopeCategories(scope.groupId, scope.deptId, scope.catId)
+                    .map(({ group, dept, cat }) => makeCatKey(group.id, dept.id, cat.id));
+            const targetCatKeys = new Set<string>();
+            if (termModal.type === 'custom') {
+                (termModal.customScopes || []).forEach(scope => {
+                    collectScopeCatKeys(scope).forEach(k => targetCatKeys.add(k));
+                });
+            } else {
+                collectScopeCatKeys(termModal).forEach(k => targetCatKeys.add(k));
+            }
+            const keyTouchesTarget = (draftKey: string) => {
+                if (targetCatKeys.size === 0) return draftKey === tk;
+                if (draftKey.startsWith('custom|')) {
+                    const match = draftKey.match(/^custom\|[^|]*\|(.*)$/);
+                    const scopesPart = match?.[1] || '';
+                    const scopedKeys = scopesPart.split(',').filter(Boolean);
+                    for (const scopeKey of scopedKeys) {
+                        const [g, d, c] = scopeKey.split('|');
+                        const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+                        for (const { group, dept, cat } of expanded) {
+                            if (targetCatKeys.has(makeCatKey(group.id, dept.id, cat.id))) return true;
+                        }
+                    }
+                    return false;
+                }
+                const [type, g, d, c] = draftKey.split('|');
+                if (!type || type === 'custom') return false;
+                const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+                for (const { group, dept, cat } of expanded) {
+                    if (targetCatKeys.has(makeCatKey(group.id, dept.id, cat.id))) return true;
+                }
+                return false;
+            };
 
-            if (data && scopeGroupIds.length > 0) {
-                const nextShared = { ...(data.sharedGroupExcelMetrics || {}) } as Record<string, any>;
+            Object.keys(nextDrafts).forEach(draftKey => {
+                if (!nextDrafts[draftKey]?.excelMetrics) return;
+                if (!keyTouchesTarget(draftKey)) return;
+                nextDrafts[draftKey] = { ...nextDrafts[draftKey], excelMetrics: undefined };
+            });
+            if (!nextDrafts[tk]) nextDrafts[tk] = { ...termForm, excelMetrics: undefined };
+            setTermDrafts(nextDrafts);
+
+            const nextShared = { ...((data?.sharedGroupExcelMetrics || {}) as Record<string, any>) };
+            if (scopeGroupIds.length > 0) {
                 scopeGroupIds.forEach(groupId => {
                     const sid = normalizeScopeId(groupId);
                     if (sid) nextShared[sid] = undefined;
                 });
-                const nextData = {
+            }
+            const nextData = data
+                ? {
                     ...data,
                     sharedGroupExcelMetrics: nextShared
-                };
-                setData(nextData);
+                }
+                : null;
+            if (nextData) setData(nextData);
+
+            if (isMaster && nextData) {
+                upsertAuditSession({
+                    id: dbSessionId,
+                    branch: selectedFilial,
+                    audit_number: nextAuditNumber,
+                    status: 'open',
+                    data: { ...nextData, termDrafts: nextDrafts } as any,
+                    progress: calculateProgress(nextData),
+                    user_email: userEmail
+                }).catch(err => console.error("Error removing term excel metrics:", err));
             }
         }
     };
@@ -3281,10 +3335,25 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         if (!window.confirm(msg)) return;
 
+        const targetScopeCatKeys = new Set(
+            getScopeCategories(groupId, deptId, catId).map(({ group, dept, cat }) =>
+                partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id })
+            )
+        );
+        const entryTouchesTargetScope = (entry: { groupId?: string; deptId?: string; catId?: string }) => {
+            if (targetScopeCatKeys.size === 0) return scopeContainsPartial(entry, groupId, deptId, catId);
+            const expanded = getScopeCategories(entry.groupId, entry.deptId, entry.catId);
+            for (const { group, dept, cat } of expanded) {
+                const key = partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id });
+                if (targetScopeCatKeys.has(key)) return true;
+            }
+            return false;
+        };
+
         const existingPartials = data.partialStarts || [];
-        const filteredPartials = existingPartials.filter(p => !scopeContainsPartial(p, groupId, deptId, catId));
+        const filteredPartials = existingPartials.filter(p => !entryTouchesTargetScope(p));
         const baseCompleted = allDone
-            ? (data.partialCompleted || []).filter(p => !scopeContainsPartial(p, groupId, deptId, catId))
+            ? (data.partialCompleted || []).filter(p => !entryTouchesTargetScope(p))
             : (data.partialCompleted || []);
         let nextCompleted = baseCompleted;
         let nextBatchId = data.lastPartialBatchId;
