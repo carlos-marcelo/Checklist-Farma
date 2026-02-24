@@ -329,6 +329,37 @@ interface TermForm {
     };
 }
 
+const getScopeGroupIds = (scope?: TermScope | null): string[] => {
+    if (!scope) return [];
+    const ids = new Set<string>();
+    const addId = (value?: string | number) => {
+        const normalized = normalizeScopeId(value);
+        if (normalized) ids.add(normalized);
+    };
+    addId(scope.groupId);
+    (scope.customScopes || []).forEach(s => addId(s.groupId));
+    return Array.from(ids);
+};
+
+const mergeTermDraftMaps = (
+    current: Record<string, TermForm> | undefined,
+    incoming: Record<string, TermForm> | undefined
+): Record<string, TermForm> => {
+    const base = { ...(current || {}) };
+    Object.entries(incoming || {}).forEach(([key, incomingDraft]) => {
+        const currentDraft = base[key];
+        if (!currentDraft) {
+            base[key] = incomingDraft;
+            return;
+        }
+        const preservedMetrics = incomingDraft?.excelMetrics ?? currentDraft?.excelMetrics;
+        base[key] = preservedMetrics
+            ? { ...currentDraft, ...incomingDraft, excelMetrics: preservedMetrics }
+            : { ...currentDraft, ...incomingDraft };
+    });
+    return base;
+};
+
 const ExcelMetricsDashboard: React.FC<{
     metrics: {
         sysQty: number;
@@ -454,7 +485,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 if (newData && dbSessionId === newData.id && newData.data) {
                     // Update data directly instead of recursive call
                     setData(newData.data);
-                    setTermDrafts((newData.data as any).termDrafts || {});
+                    setTermDrafts(current => mergeTermDraftMaps(current, (newData.data as any).termDrafts || {}));
                     lastAuditUpdateRef.current = newData.updated_at || null;
                 }
             });
@@ -491,7 +522,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     });
                 }
                 setData(latest.data);
-                setTermDrafts((latest.data as any).termDrafts || {});
+                setTermDrafts(current => mergeTermDraftMaps(current, (latest.data as any).termDrafts || {}));
                 return; // Dados atualizados silenciosamente, sem popups
             }
 
@@ -536,7 +567,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     }
                     setData(latest.data);
                     const draftsFromData = (latest.data as any).termDrafts || {};
-                    setTermDrafts(draftsFromData);
+                    setTermDrafts(current => mergeTermDraftMaps(current, draftsFromData));
                     setDbSessionId(latest.id);
 
                     if (!silent) {
@@ -1717,7 +1748,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const buildTermKey = (scope: TermScope) => {
         if (scope.type === 'custom') {
-            const customKey = (scope.customScopes || []).map(s => partialScopeKey(s)).join(',');
+            const customKey = (scope.customScopes || [])
+                .map(s => partialScopeKey(s))
+                .filter(Boolean)
+                .sort()
+                .join(',');
             return `custom|${scope.batchId || ''}|${customKey}`;
         }
         return [scope.type, scope.groupId || '', scope.deptId || '', scope.catId || ''].join('|');
@@ -1786,7 +1821,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const key = buildTermKey(scope);
         let draft = termDrafts[key];
         if (!draft && scope.type === 'custom' && scope.batchId) {
-            const legacyKey = `custom|${(scope.customScopes || []).map(s => partialScopeKey(s)).join(',')}`;
+            const legacyCustomKey = (scope.customScopes || [])
+                .map(s => partialScopeKey(s))
+                .filter(Boolean)
+                .sort()
+                .join(',');
+            const legacyKey = `custom|${legacyCustomKey}`;
             draft = termDrafts[legacyKey];
         }
         const nextForm = draft
@@ -1799,8 +1839,62 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         // Prioridade real: Bucket do draft > Bucket do grupo
         const rawPool = draft?.excelMetrics || (scope.groupId ? data?.sharedGroupExcelMetrics?.[normalizeScopeId(scope.groupId)] : null);
+        const scopeGroupIds = getScopeGroupIds(scope);
 
         let nextMetrics = null;
+
+        if (rawPool?.groupedDifferences && scope.type === 'custom') {
+            if (scopeGroupIds.length > 0 && data?.groups) {
+                const acceptedNames = new Set<string>();
+                scopeGroupIds.forEach(id => {
+                    const group = data.groups.find(g => normalizeScopeId(g.id) === normalizeScopeId(id));
+                    if (group) acceptedNames.add(normalizeText(group.name));
+                    acceptedNames.add(normalizeText(GROUP_CONFIG_DEFAULTS[id as keyof typeof GROUP_CONFIG_DEFAULTS] || `Grupo ${id}`));
+                });
+
+                const filteredGrouped = (rawPool.groupedDifferences || []).filter((d: any) =>
+                    acceptedNames.has(normalizeText(d.groupName))
+                );
+                const filteredItems = (rawPool.items || []).filter((it: any) =>
+                    acceptedNames.has(normalizeText(it.groupName))
+                );
+
+                if (filteredGrouped.length > 0 || filteredItems.length > 0) {
+                    const groupedSource = filteredGrouped.length > 0
+                        ? filteredGrouped
+                        : (filteredItems || []).map((it: any) => ({
+                            groupName: it.groupName,
+                            deptName: it.deptName,
+                            catName: it.catName,
+                            sysQty: it.sysQty || 0,
+                            sysCost: it.sysCost || 0,
+                            countedQty: it.countedQty || 0,
+                            countedCost: it.countedCost || 0,
+                            diffQty: it.diffQty || 0,
+                            diffCost: it.diffCost || 0
+                        }));
+
+                    const aggregated = groupedSource.reduce((acc: any, curr: any) => ({
+                        sysQty: (acc.sysQty || 0) + (curr.sysQty || 0),
+                        sysCost: (acc.sysCost || 0) + (curr.sysCost || 0),
+                        countedQty: (acc.countedQty || 0) + (curr.countedQty || 0),
+                        countedCost: (acc.countedCost || 0) + (curr.countedCost || 0),
+                        diffQty: (acc.diffQty || 0) + (curr.diffQty || 0),
+                        diffCost: (acc.diffCost || 0) + (curr.diffCost || 0)
+                    }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0 });
+
+                    nextMetrics = {
+                        ...aggregated,
+                        items: filteredItems,
+                        groupedDifferences: filteredGrouped
+                    };
+                }
+            }
+
+            if (!nextMetrics) {
+                nextMetrics = rawPool;
+            }
+        }
 
         if (rawPool?.groupedDifferences && scope.groupId) {
             const group = data?.groups?.find(g => normalizeScopeId(g.id) === normalizeScopeId(scope.groupId));
@@ -1950,7 +2044,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const next = updater(prev);
             if (termModal) {
                 const key = buildTermKey(termModal);
-                setTermDrafts(current => ({ ...current, [key]: next }));
+                setTermDrafts(current => {
+                    const persistedMetrics =
+                        termComparisonMetrics ||
+                        next.excelMetrics ||
+                        current[key]?.excelMetrics;
+                    return {
+                        ...current,
+                        [key]: persistedMetrics ? { ...next, excelMetrics: persistedMetrics } : next
+                    };
+                });
             }
             return next;
         });
@@ -1961,7 +2064,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const currentForm = termForm;
         if (isMaster && currentScope && currentForm && data) {
             const key = buildTermKey(currentScope);
-            const formToSave = { ...currentForm, excelMetrics: termComparisonMetrics || undefined };
+            const persistedMetrics =
+                termComparisonMetrics ||
+                currentForm.excelMetrics ||
+                termDrafts[key]?.excelMetrics;
+            const formToSave = persistedMetrics
+                ? { ...currentForm, excelMetrics: persistedMetrics }
+                : currentForm;
             const nextDrafts = { ...termDrafts, [key]: formToSave };
             setTermDrafts(nextDrafts);
             (async () => {
@@ -1995,7 +2104,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setTermModal(null);
         setTermForm(null);
         setTermComparisonMetrics(null);
-    }, [termModal, termForm, isMaster, data, termDrafts, dbSessionId, selectedFilial, nextAuditNumber, userEmail]);
+    }, [termModal, termForm, termComparisonMetrics, isMaster, data, termDrafts, dbSessionId, selectedFilial, nextAuditNumber, userEmail]);
 
     const handleProcessTermComparisonExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
@@ -2013,6 +2122,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             let diffQtySum = 0;
             let diffCostSum = 0;
             const items: any[] = [];
+            const scopeGroupIds = getScopeGroupIds(termModal);
+            const hasSingleScopeGroup = scopeGroupIds.length === 1;
+            const primaryScopeGroupId = hasSingleScopeGroup ? scopeGroupIds[0] : undefined;
+            const scopedGroupNameSet = new Set<string>();
+            if (data?.groups && scopeGroupIds.length > 0) {
+                data.groups.forEach(g => {
+                    if (scopeGroupIds.includes(normalizeScopeId(g.id))) {
+                        scopedGroupNameSet.add(normalizeText(g.name));
+                    }
+                });
+            }
+            const singleScopedGroupName = primaryScopeGroupId
+                ? (GROUP_CONFIG_DEFAULTS[primaryScopeGroupId as keyof typeof GROUP_CONFIG_DEFAULTS] || `Grupo ${primaryScopeGroupId}`)
+                : undefined;
 
             // --- Universal Registry: fallback scan of ALL group cadastro files ---
             const universalRegistry = new Map<string, { groupName: string, deptName: string, catName: string }>();
@@ -2087,8 +2210,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             // --- Secondary lookup: read cadastro file directly for this group ---
             // Pega itens com estoque zero (não em data.groups) via Col B e Col C (código reduzido)
             const cadastroLookup = new Map<string, { deptName: string; catName: string }>();
-            if (termModal?.groupId) {
-                const groupIdKey = termModal.groupId as typeof GROUP_UPLOAD_IDS[number];
+            if (primaryScopeGroupId) {
+                const groupIdKey = primaryScopeGroupId as typeof GROUP_UPLOAD_IDS[number];
                 const cadastroFile = groupFiles[groupIdKey] || globalGroupFiles[groupIdKey];
                 if (cadastroFile) {
                     try {
@@ -2187,10 +2310,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 diffCostSum += costDiff;
 
                 // Identifica a Hierarquia cruzando com memory database
-                // O grupo do termo é o grupo que define o escopo do Excel — todos itens pertencem a ele.
-                const termGroupName = termModal?.groupId
-                    ? (GROUP_CONFIG_DEFAULTS[termModal.groupId] || `Grupo ${termModal.groupId}`)
-                    : 'Conveniência';
+                const forcedGroupName = primaryScopeGroupId
+                    ? (GROUP_CONFIG_DEFAULTS[primaryScopeGroupId as keyof typeof GROUP_CONFIG_DEFAULTS] || `Grupo ${primaryScopeGroupId}`)
+                    : undefined;
 
                 // Normaliza o código da coluna B para o mesmo formato do lookup
                 let normalizedCode = normalizeBarcode(code);
@@ -2224,14 +2346,24 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 }
 
                 // Prioritize finding the item ALREADY in the current group's stock
-                const contextRegistryEntry = registries.find(r => normalizeText(r.groupName) === normalizeText(termGroupName));
+                const contextRegistryEntry = forcedGroupName
+                    ? registries.find(r => normalizeText(r.groupName) === normalizeText(forcedGroupName))
+                    : (scopedGroupNameSet.size > 0
+                        ? registries.find(r => scopedGroupNameSet.has(normalizeText(r.groupName)))
+                        : undefined);
                 const globalRegistryEntry = registries[0];
 
                 // Fallback to other groups' stock OR universalRegistry (global search)
-                const fallbackEntry = globalRegistryEntry || universalEntry;
+                const fallbackEntry = contextRegistryEntry || globalRegistryEntry || universalEntry;
+                const resolvedGroupName =
+                    forcedGroupName ||
+                    contextRegistryEntry?.groupName ||
+                    fallbackEntry?.groupName ||
+                    singleScopedGroupName ||
+                    'DIVERSOS (SEM GRUPO)';
 
                 const hierarchy = {
-                    groupName: termGroupName, // ALWAYS force current group context
+                    groupName: resolvedGroupName,
                     deptName: contextRegistryEntry?.deptName || localCadastroEntry?.deptName || fallbackEntry?.deptName || 'DIVERSOS (SEM DEPARTAMENTO)',
                     catName: contextRegistryEntry?.catName || localCadastroEntry?.catName || fallbackEntry?.catName || 'DIVERSOS (SEM CATEGORIA)'
                 };
@@ -2286,16 +2418,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             };
 
             setTermComparisonMetrics(payload);
+            setTermForm(prev => (prev ? { ...prev, excelMetrics: payload } : prev));
 
             // Salvamento Global isolado por grupo
-            if (data && termModal?.groupId) {
-                const sid = normalizeScopeId(termModal.groupId);
+            if (data && scopeGroupIds.length > 0) {
+                const nextShared = { ...(data.sharedGroupExcelMetrics || {}) } as Record<string, any>;
+                scopeGroupIds.forEach(groupId => {
+                    const sid = normalizeScopeId(groupId);
+                    if (sid) nextShared[sid] = payload;
+                });
                 const nextData = {
                     ...data,
-                    sharedGroupExcelMetrics: {
-                        ...(data.sharedGroupExcelMetrics || {}),
-                        [sid]: payload
-                    }
+                    sharedGroupExcelMetrics: nextShared
                 };
                 setData(nextData);
                 upsertAuditSession({
@@ -2339,7 +2473,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const removeTermComparisonExcel = () => {
         setTermComparisonMetrics(null);
+        setTermForm(prev => (prev ? { ...prev, excelMetrics: undefined } : prev));
         if (termModal && termForm) {
+            const scopeGroupIds = getScopeGroupIds(termModal);
             const tk = buildTermKey(termModal);
             setTermDrafts(current => {
                 const next = { ...current };
@@ -2347,14 +2483,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 return next;
             });
 
-            if (data && termModal.groupId) {
-                const sid = normalizeScopeId(termModal.groupId);
+            if (data && scopeGroupIds.length > 0) {
+                const nextShared = { ...(data.sharedGroupExcelMetrics || {}) } as Record<string, any>;
+                scopeGroupIds.forEach(groupId => {
+                    const sid = normalizeScopeId(groupId);
+                    if (sid) nextShared[sid] = undefined;
+                });
                 const nextData = {
                     ...data,
-                    sharedGroupExcelMetrics: {
-                        ...(data.sharedGroupExcelMetrics || {}),
-                        [sid]: undefined
-                    }
+                    sharedGroupExcelMetrics: nextShared
                 };
                 setData(nextData);
             }
@@ -2527,7 +2664,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         if (isMaster) {
             const key = buildTermKey(termModal);
-            const nextDrafts = { ...termDrafts, [key]: termForm };
+            const persistedMetrics =
+                termComparisonMetrics ||
+                termForm.excelMetrics ||
+                termDrafts[key]?.excelMetrics;
+            const formToPersist = persistedMetrics
+                ? { ...termForm, excelMetrics: persistedMetrics }
+                : termForm;
+            const nextDrafts = { ...termDrafts, [key]: formToPersist };
             setTermDrafts(nextDrafts);
             try {
                 // Persistence consolidated in audit_sessions (data field)
@@ -3571,7 +3715,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const scope = { groupId: p.groupId, deptId: p.deptId, catId: p.catId };
             map.set(partialScopeKey(scope), scope);
         });
-        const customScopes = Array.from(map.values());
+        const customScopes = Array.from(map.entries())
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([, scope]) => scope);
         if (customScopes.length === 0) return;
         openTermModal({
             type: 'custom',
