@@ -3958,7 +3958,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         return (
                                             <div className="mt-4 pt-4 border-t border-indigo-100/50">
                                                 <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest mb-3">
-                                                    <span className="text-indigo-800 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> Planilha de Conflito</span>
+                                                    <span className="text-indigo-800 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> Planilha de Divergências</span>
                                                 </div>
                                                 <div className="grid grid-cols-3 gap-2">
                                                     <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
@@ -4085,7 +4085,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         return (
                                             <div className="mt-4 pt-4 border-t border-indigo-100/50 mb-6">
                                                 <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest">
-                                                    <span className="text-indigo-800 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> Planilha de Conflito</span>
+                                                    <span className="text-indigo-800 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> Planilha de Divergências</span>
                                                 </div>
                                                 <div className="grid grid-cols-2 gap-3 mt-3">
                                                     <div className="bg-slate-50 border border-slate-100 rounded-lg p-3">
@@ -4545,7 +4545,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 <div className="flex items-center justify-between">
                                     <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 flex items-center gap-2">
                                         <Upload className="w-4 h-4 text-indigo-500" />
-                                        Planilha de Divergências (Opcional)
+                                        Planilha de Divergências
                                     </h4>
                                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Gera resumo financeiro no PDF</span>
                                 </div>
