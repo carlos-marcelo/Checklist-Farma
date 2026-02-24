@@ -2193,18 +2193,42 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     : 'Conveniência';
 
                 // Normaliza o código da coluna B para o mesmo formato do lookup
-                const normalizedCode = normalizeBarcode(code);
-                const registries = productLookup.get(normalizedCode) || [];
+                let normalizedCode = normalizeBarcode(code);
+                let registries = productLookup.get(normalizedCode) || [];
+                let localCadastroEntry = cadastroLookup.get(normalizedCode);
+                let universalEntry = universalRegistry.get(normalizedCode);
+
+                // Multi-match agressivo: Se não achou pelas vias normais na coluna B, vasculha A até F
+                if (registries.length === 0 && !localCadastroEntry && !universalEntry) {
+                    for (let c = 0; c <= 5; c++) {
+                        if (c === 1) continue; // já testou
+                        const testCode = normalizeBarcode(row[c]);
+                        if (testCode) {
+                            if (productLookup.has(testCode)) {
+                                normalizedCode = testCode;
+                                registries = productLookup.get(testCode) || [];
+                                break;
+                            }
+                            if (cadastroLookup.has(testCode)) {
+                                normalizedCode = testCode;
+                                localCadastroEntry = cadastroLookup.get(testCode);
+                                break;
+                            }
+                            if (universalRegistry.has(testCode)) {
+                                normalizedCode = testCode;
+                                universalEntry = universalRegistry.get(testCode);
+                                break;
+                            }
+                        }
+                    }
+                }
 
                 // Prioritize finding the item ALREADY in the current group's stock
                 const contextRegistryEntry = registries.find(r => normalizeText(r.groupName) === normalizeText(termGroupName));
                 const globalRegistryEntry = registries[0];
 
-                // If not in current stock, try the local cadastro file lookup
-                const localCadastroEntry = cadastroLookup.get(normalizedCode);
-
                 // Fallback to other groups' stock OR universalRegistry (global search)
-                const fallbackEntry = globalRegistryEntry || universalRegistry.get(normalizedCode);
+                const fallbackEntry = globalRegistryEntry || universalEntry;
 
                 const hierarchy = {
                     groupName: termGroupName, // ALWAYS force current group context
