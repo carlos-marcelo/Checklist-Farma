@@ -13,12 +13,14 @@ import {
 import {
     fetchLatestAudit,
     upsertAuditSession,
-    insertAppEventLog
+    insertAppEventLog,
+    fetchLatestAuditMetadata,
+    type DbGlobalBaseFile,
+    type DbAuditSession
 } from '../../supabaseService';
 import { CadastrosBaseService } from '../../src/cadastrosBase/cadastrosBaseService';
 import { CacheService } from '../../src/cacheService';
 import * as AuditStorage from '../../src/auditoria/storage';
-import type { DbGlobalBaseFile } from '../../supabaseService';
 import ProgressBar from './ProgressBar';
 import Breadcrumbs from './Breadcrumbs';
 import SignaturePad from '../SignaturePad';
@@ -327,6 +329,61 @@ interface TermForm {
     };
 }
 
+const ExcelMetricsDashboard: React.FC<{
+    metrics: {
+        sysQty: number;
+        sysCost: number;
+        countedQty: number;
+        countedCost: number;
+        diffQty: number;
+        diffCost: number;
+    }
+}> = ({ metrics }) => {
+    if (!metrics || typeof metrics.diffQty !== 'number') return null;
+
+    return (
+        <div className="mt-4 pt-4 border-t border-indigo-100/50">
+            <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest mb-3">
+                <span className="text-indigo-800 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> Planilha de Divergências</span>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Est. Sist (Qtde)</span>
+                    <span className="text-[11px] font-black text-slate-600">{Math.round(metrics.sysQty).toLocaleString('pt-BR')} un.</span>
+                </div>
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Est. Físico (Qtde)</span>
+                    <span className="text-[11px] font-black text-slate-600">{Math.round(metrics.countedQty).toLocaleString('pt-BR')} un.</span>
+                </div>
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Diferença (Qtde)</span>
+                    <span className={`text-[11px] font-black ${metrics.diffQty < 0 ? 'text-red-600' : metrics.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                        {metrics.diffQty > 0 ? '+' : ''}{Math.round(metrics.diffQty).toLocaleString('pt-BR')} un.
+                    </span>
+                </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2 mt-2">
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Custo Sist</span>
+                    <span className="text-[11px] font-black text-slate-600">{metrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                </div>
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Custo Físico</span>
+                    <span className="text-[11px] font-black text-slate-600">{metrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                </div>
+                <div className={`border rounded-lg p-2 ${metrics.diffCost < 0 ? 'bg-red-50 border-red-200' : metrics.diffCost > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-100'}`}>
+                    <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Resultado Fin.</span>
+                    <span className={`text-[11px] font-black ${metrics.diffCost < 0 ? 'text-red-700' : metrics.diffCost > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
+                        {metrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                    </span>
+                    {metrics.diffCost < 0 && <span className="text-[7px] font-black text-red-500 uppercase block">Prejuízo</span>}
+                    {metrics.diffCost > 0 && <span className="text-[7px] font-black text-emerald-600 uppercase block">Sobra</span>}
+                </div>
+            </div>
+        </div>
+    );
+};
+
 interface AuditModuleProps {
     userEmail: string;
     userName: string;
@@ -380,7 +437,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         try {
             // Se for polling silencioso, busca apenas metadados para economizar banda e processamento
             if (silent) {
-                const meta = await SupabaseService.fetchLatestAuditMetadata(selectedFilial);
+                const meta = await fetchLatestAuditMetadata(selectedFilial);
                 if (!meta) return;
 
                 // Se a data de atualização for a mesma, não faz nada
@@ -392,7 +449,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 lastAuditUpdateRef.current = meta.updated_at;
             }
 
-            const latest = await CacheService.fetchWithCache(`audit_session_${selectedFilial}`, () => fetchLatestAudit(selectedFilial), (newData) => {
+            const latest = await CacheService.fetchWithCache<DbAuditSession>(`audit_session_${selectedFilial}`, () => fetchLatestAudit(selectedFilial), (newData) => {
                 // Se a sessão for a mesma, atualizamos os dados em background silenciosamente
                 if (newData && dbSessionId === newData.id && newData.data) {
                     // Update data directly instead of recursive call
@@ -501,7 +558,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 }
                             }
                             // Marca esta sessão como confirmada para não perguntar novamente
-                            sessionStorage.setItem(CONFIRMED_SESSION_KEY, latest.id);
+                            if (latest.id) sessionStorage.setItem(CONFIRMED_SESSION_KEY, latest.id);
                             setView({ level: 'groups' });
                         } else {
                             setIsUpdatingStock(false);
@@ -512,7 +569,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 alert(`ENTRANDO EM MODO CONSULTA.\n\nAviso: O estoque exibido reflete a última carga realizada pelo usuário Master em ${lastLoadStr} e pode estar desatualizado.`);
                             }
                             // Marca como confirmada
-                            sessionStorage.setItem(CONFIRMED_SESSION_KEY, latest.id);
+                            if (latest.id) sessionStorage.setItem(CONFIRMED_SESSION_KEY, latest.id);
                         }
                     } else if (!data) {
                         // Se for polling mas não estávamos em uma auditoria, entra automaticamente
@@ -839,6 +896,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     };
 
     const parseStockNumber = (val: any): number => {
+        return Number(parseDecimalCell(val));
+    };
+
+    const normalizeText = (text?: string) => {
+        if (!text) return '';
+        return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    };
+
+    const parseDecimalCell = (val: any): number => {
         if (val === null || val === undefined) return 0;
         if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
         const raw = String(val).trim();
@@ -1657,6 +1723,53 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         return [scope.type, scope.groupId || '', scope.deptId || '', scope.catId || ''].join('|');
     };
 
+    const getScopedMetrics = useCallback((scope: { type: 'group' | 'department' | 'category', groupId: string, deptId?: string, catId?: string }) => {
+        const tk = buildTermKey(scope as any);
+        const draftMetrics = termDrafts[tk]?.excelMetrics;
+        // Prioridade: Rascunho do Termo > Bucket do Grupo
+        const base = draftMetrics ||
+            data?.sharedGroupExcelMetrics?.[normalizeScopeId(scope.groupId)];
+
+        if (!base || !base.groupedDifferences) return null;
+
+        const group = data?.groups?.find(g => normalizeScopeId(g.id) === normalizeScopeId(scope.groupId));
+        if (!group) return null;
+
+        const gName = normalizeText(group.name);
+        let dName = '';
+        let cName = '';
+
+        if (scope.deptId) {
+            const dept = group.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(scope.deptId!));
+            if (dept) dName = normalizeText(dept.name);
+        }
+        if (scope.catId && scope.deptId) {
+            const dept = group.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(scope.deptId!));
+            const cat = dept?.categories.find(c => normalizeScopeId(c.id) === normalizeScopeId(scope.catId!));
+            if (cat) cName = normalizeText(cat.name);
+        }
+
+        const filtered = base.groupedDifferences.filter((d: any) => {
+            const matchG = normalizeText(d.groupName) === gName;
+            if (scope.type === 'group') return matchG;
+            const matchD = normalizeText(d.deptName) === dName;
+            if (scope.type === 'department') return matchG && matchD;
+            const matchC = normalizeText(d.catName) === cName;
+            return matchG && matchD && matchC;
+        });
+
+        if (filtered.length === 0) return null;
+
+        return filtered.reduce((acc: any, curr: any) => ({
+            sysQty: (acc.sysQty || 0) + (curr.sysQty || 0),
+            sysCost: (acc.sysCost || 0) + (curr.sysCost || 0),
+            countedQty: (acc.countedQty || 0) + (curr.countedQty || 0),
+            countedCost: (acc.countedCost || 0) + (curr.countedCost || 0),
+            diffQty: (acc.diffQty || 0) + (curr.diffQty || 0),
+            diffCost: (acc.diffCost || 0) + (curr.diffCost || 0)
+        }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0 });
+    }, [data, termDrafts, buildTermKey]);
+
     const createDefaultTermForm = (): TermForm => ({
         inventoryNumber: inventoryNumber || data?.inventoryNumber || '',
         date: new Date().toLocaleDateString('pt-BR'),
@@ -1683,9 +1796,66 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             : createDefaultTermForm();
         setTermModal(scope);
         setTermForm(nextForm);
-        const nextMetrics = draft?.excelMetrics
-            ? { ...draft.excelMetrics }
-            : (data?.sharedExcelMetrics ? { ...data.sharedExcelMetrics } : null);
+
+        // Prioridade real: Bucket do draft > Bucket do grupo
+        const rawPool = draft?.excelMetrics || (scope.groupId ? data?.sharedGroupExcelMetrics?.[normalizeScopeId(scope.groupId)] : null);
+
+        let nextMetrics = null;
+
+        if (rawPool?.groupedDifferences && scope.groupId) {
+            const group = data?.groups?.find(g => normalizeScopeId(g.id) === normalizeScopeId(scope.groupId));
+            if (group) {
+                const gName = normalizeText(group.name);
+                let dName = '';
+                let cName = '';
+
+                if (scope.deptId) {
+                    const dept = group.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(scope.deptId!));
+                    if (dept) dName = normalizeText(dept.name);
+                }
+                if (scope.catId && scope.deptId) {
+                    const dept = group.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(scope.deptId!));
+                    const cat = dept?.categories.find(c => normalizeScopeId(c.id) === normalizeScopeId(scope.catId!));
+                    if (cat) cName = normalizeText(cat.name);
+                }
+
+                const filteredGrouped = rawPool.groupedDifferences.filter((d: any) => {
+                    const matchG = normalizeText(d.groupName) === gName;
+                    if (scope.type === 'group') return matchG;
+                    const matchD = normalizeText(d.deptName) === dName;
+                    if (scope.type === 'department') return matchG && matchD;
+                    const matchC = normalizeText(d.catName) === cName;
+                    return matchG && matchD && matchC;
+                });
+
+                if (filteredGrouped.length > 0) {
+                    const filteredItems = (rawPool.items || []).filter((it: any) => {
+                        const matchG = normalizeText(it.groupName) === gName;
+                        if (scope.type === 'group') return matchG;
+                        const matchD = normalizeText(it.deptName) === dName;
+                        if (scope.type === 'department') return matchG && matchD;
+                        const matchC = normalizeText(it.catName) === cName;
+                        return matchG && matchD && matchC;
+                    });
+
+                    const aggregated = filteredGrouped.reduce((acc: any, curr: any) => ({
+                        sysQty: (acc.sysQty || 0) + (curr.sysQty || 0),
+                        sysCost: (acc.sysCost || 0) + (curr.sysCost || 0),
+                        countedQty: (acc.countedQty || 0) + (curr.countedQty || 0),
+                        countedCost: (acc.countedCost || 0) + (curr.countedCost || 0),
+                        diffQty: (acc.diffQty || 0) + (curr.diffQty || 0),
+                        diffCost: (acc.diffCost || 0) + (curr.diffCost || 0)
+                    }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0 });
+
+                    nextMetrics = {
+                        ...aggregated,
+                        items: filteredItems,
+                        groupedDifferences: filteredGrouped
+                    };
+                }
+            }
+        }
+
         // Corrigir apenas groupName e tentar upgrade de DIVERSOS via data.groups
         // NÃO re-classifica itens que já têm dept/cat válidos — apenas corrige o grupo
         if (nextMetrics && scope.groupId) {
@@ -1739,12 +1909,26 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
             // Re-aggregate groupedDifferences from corrected items
             if (nextMetrics.items) {
-                const gMap: Record<string, { groupName: string; deptName: string; catName: string; diffCost: number; diffQty: number }> = {};
+                const gMap: Record<string, { groupName: string; deptName: string; catName: string; sysQty: number; sysCost: number; countedQty: number; countedCost: number; diffCost: number; diffQty: number }> = {};
                 nextMetrics.items.forEach((item: any) => {
                     const key = `${item.groupName}|${item.deptName}|${item.catName}`;
                     if (!gMap[key]) {
-                        gMap[key] = { groupName: item.groupName, deptName: item.deptName, catName: item.catName, diffCost: 0, diffQty: 0 };
+                        gMap[key] = {
+                            groupName: item.groupName,
+                            deptName: item.deptName,
+                            catName: item.catName,
+                            sysQty: 0,
+                            sysCost: 0,
+                            countedQty: 0,
+                            countedCost: 0,
+                            diffCost: 0,
+                            diffQty: 0
+                        };
                     }
+                    gMap[key].sysQty += (item.sysQty || 0);
+                    gMap[key].sysCost += (item.sysCost || 0);
+                    gMap[key].countedQty += (item.countedQty || 0);
+                    gMap[key].countedCost += (item.countedCost || 0);
                     gMap[key].diffCost += (item.diffCost || 0);
                     gMap[key].diffQty += (item.diffQty || 0);
                 });
@@ -1870,30 +2054,29 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             await loadUniversalRegistry();
 
             // Pre-build hierarchy lookup for fast cross-referencing Col B (código reduzido)
-            // Indexed by normalizeBarcode(reducedCode || code) — same normalization applied when looking up
-            const productLookup = new Map<string, { groupName: string, deptName: string, catName: string }>();
+            // Can contain multiple hierarchies if the item spans groups
+            const productLookup = new Map<string, { groupName: string, deptName: string, catName: string }[]>();
             if (data?.groups) {
                 data.groups.forEach(g => {
                     g.departments.forEach(d => {
                         d.categories.forEach(c => {
                             c.products.forEach(p => {
-                                // Index by reduced code (código reduzido) which is what Col B contains
                                 const key = normalizeBarcode(p.reducedCode || p.code);
                                 if (key) {
-                                    productLookup.set(key, {
-                                        groupName: g.name,
-                                        deptName: d.name,
-                                        catName: c.name
-                                    });
+                                    const ex = productLookup.get(key) || [];
+                                    // Prevent strict duplicates
+                                    if (!ex.find(e => e.groupName === g.name && e.deptName === d.name && e.catName === c.name)) {
+                                        ex.push({ groupName: g.name, deptName: d.name, catName: c.name });
+                                    }
+                                    productLookup.set(key, ex);
                                 }
-                                // Also index by full code as fallback
                                 const altKey = normalizeBarcode(p.code);
-                                if (altKey && altKey !== key && !productLookup.has(altKey)) {
-                                    productLookup.set(altKey, {
-                                        groupName: g.name,
-                                        deptName: d.name,
-                                        catName: c.name
-                                    });
+                                if (altKey && altKey !== key) {
+                                    const ex = productLookup.get(altKey) || [];
+                                    if (!ex.find(e => e.groupName === g.name && e.deptName === d.name && e.catName === c.name)) {
+                                        ex.push({ groupName: g.name, deptName: d.name, catName: c.name });
+                                    }
+                                    productLookup.set(altKey, ex);
                                 }
                             });
                         });
@@ -1953,13 +2136,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 const inCadastro = cadastroLookup.get(c);
                 const inUniversal = universalRegistry.get(c);
                 console.log(`[DebugClassification] Código ${c}:
-                    Stock: ${inProduct ? 'OK' : 'FAIL'}
+                    Stock: ${inProduct ? `OK (${inProduct.map(x => x.groupName).join(',')})` : 'FAIL'}
                     Local: ${inCadastro ? 'OK' : 'FAIL'}
                     Global: ${inUniversal ? 'OK (' + inUniversal.groupName + ')' : 'FAIL'}`);
             });
 
 
-            const groupedMap: Record<string, { groupName: string, deptName: string, catName: string, diffCost: number, diffQty: number }> = {};
+            const groupedMap: Record<string, { groupName: string, deptName: string, catName: string, sysQty: number, sysCost: number, countedQty: number, countedCost: number, diffQty: number, diffCost: number }> = {};
 
             // Skip header (row 0), process data rows
             for (let i = 1; i < rows.length; i++) {
@@ -2011,14 +2194,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                 // Normaliza o código da coluna B para o mesmo formato do lookup
                 const normalizedCode = normalizeBarcode(code);
-                const registryEntry = productLookup.get(normalizedCode);
-                const cadastroEntry = !registryEntry ? cadastroLookup.get(normalizedCode) : null;
-                const universalEntry = (!registryEntry && !cadastroEntry) ? universalRegistry.get(normalizedCode) : null;
+                const registries = productLookup.get(normalizedCode) || [];
+
+                // Prioritize finding the item ALREADY in the current group's stock
+                const contextRegistryEntry = registries.find(r => normalizeText(r.groupName) === normalizeText(termGroupName));
+                const globalRegistryEntry = registries[0];
+
+                // If not in current stock, try the local cadastro file lookup
+                const localCadastroEntry = cadastroLookup.get(normalizedCode);
+
+                // Fallback to other groups' stock OR universalRegistry (global search)
+                const fallbackEntry = globalRegistryEntry || universalRegistry.get(normalizedCode);
 
                 const hierarchy = {
-                    groupName: registryEntry?.groupName || universalEntry?.groupName || termGroupName,
-                    deptName: registryEntry?.deptName || cadastroEntry?.deptName || universalEntry?.deptName || 'DIVERSOS (SEM DEPARTAMENTO)',
-                    catName: registryEntry?.catName || cadastroEntry?.catName || universalEntry?.catName || 'DIVERSOS (SEM CATEGORIA)'
+                    groupName: termGroupName, // ALWAYS force current group context
+                    deptName: contextRegistryEntry?.deptName || localCadastroEntry?.deptName || fallbackEntry?.deptName || 'DIVERSOS (SEM DEPARTAMENTO)',
+                    catName: contextRegistryEntry?.catName || localCadastroEntry?.catName || fallbackEntry?.catName || 'DIVERSOS (SEM CATEGORIA)'
                 };
 
                 const groupKey = `${hierarchy.groupName}|${hierarchy.deptName}|${hierarchy.catName}`;
@@ -2027,12 +2218,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         groupName: hierarchy.groupName,
                         deptName: hierarchy.deptName,
                         catName: hierarchy.catName,
-                        diffCost: 0,
-                        diffQty: 0
+                        sysQty: 0,
+                        sysCost: 0,
+                        countedQty: 0,
+                        countedCost: 0,
+                        diffQty: 0,
+                        diffCost: 0
                     };
                 }
-                groupedMap[groupKey].diffCost += costDiff;
+                groupedMap[groupKey].sysQty += sq;
+                groupedMap[groupKey].sysCost += sc;
+                groupedMap[groupKey].countedQty += cq;
+                groupedMap[groupKey].countedCost += cc;
                 groupedMap[groupKey].diffQty += dq;
+                groupedMap[groupKey].diffCost += costDiff;
 
                 items.push({
                     code,
@@ -2064,9 +2263,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
             setTermComparisonMetrics(payload);
 
-            // Salvamento Global para compartilhamento entre outros termos
-            if (data) {
-                const nextData = { ...data, sharedExcelMetrics: payload };
+            // Salvamento Global isolado por grupo
+            if (data && termModal?.groupId) {
+                const sid = normalizeScopeId(termModal.groupId);
+                const nextData = {
+                    ...data,
+                    sharedGroupExcelMetrics: {
+                        ...(data.sharedGroupExcelMetrics || {}),
+                        [sid]: payload
+                    }
+                };
                 setData(nextData);
                 upsertAuditSession({
                     id: dbSessionId,
@@ -2076,7 +2282,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     data: nextData,
                     progress: calculateProgress(nextData),
                     user_email: userEmail
-                }).catch(err => console.error("Error saving shared excel metrics:", err));
+                }).catch(err => console.error("Error saving shared group excel metrics:", err));
             }
 
             // Auto-Save do Excel no Termo Draft corrente
@@ -2110,12 +2316,24 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const removeTermComparisonExcel = () => {
         setTermComparisonMetrics(null);
         if (termModal && termForm) {
-            const key = buildTermKey(termModal);
+            const tk = buildTermKey(termModal);
             setTermDrafts(current => {
                 const next = { ...current };
-                if (next[key]) next[key] = { ...next[key], excelMetrics: undefined };
+                if (next[tk]) next[tk] = { ...next[tk], excelMetrics: undefined };
                 return next;
             });
+
+            if (data && termModal.groupId) {
+                const sid = normalizeScopeId(termModal.groupId);
+                const nextData = {
+                    ...data,
+                    sharedGroupExcelMetrics: {
+                        ...(data.sharedGroupExcelMetrics || {}),
+                        [sid]: undefined
+                    }
+                };
+                setData(nextData);
+            }
         }
     };
 
@@ -3951,51 +4169,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                                     {/* Injeção do Dashboard de Excel (Geral) — usa os TOTAIS das excelMetrics */}
                                     {(() => {
-                                        const tk = buildTermKey({ type: 'group', groupId: group.id });
-                                        const metrics = termDrafts[tk]?.excelMetrics;
-                                        if (!metrics || typeof metrics.diffQty !== 'number') return null;
-
-                                        return (
-                                            <div className="mt-4 pt-4 border-t border-indigo-100/50">
-                                                <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest mb-3">
-                                                    <span className="text-indigo-800 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> Planilha de Divergências</span>
-                                                </div>
-                                                <div className="grid grid-cols-3 gap-2">
-                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
-                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Est. Sist (Qtde)</span>
-                                                        <span className="text-[11px] font-black text-slate-600">{Math.round(metrics.sysQty).toLocaleString('pt-BR')} un.</span>
-                                                    </div>
-                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
-                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Est. Físico (Qtde)</span>
-                                                        <span className="text-[11px] font-black text-slate-600">{Math.round(metrics.countedQty).toLocaleString('pt-BR')} un.</span>
-                                                    </div>
-                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
-                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Diferença (Qtde)</span>
-                                                        <span className={`text-[11px] font-black ${metrics.diffQty < 0 ? 'text-red-600' : metrics.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
-                                                            {metrics.diffQty > 0 ? '+' : ''}{Math.round(metrics.diffQty).toLocaleString('pt-BR')} un.
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                                <div className="grid grid-cols-3 gap-2 mt-2">
-                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
-                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Custo Sist</span>
-                                                        <span className="text-[11px] font-black text-slate-600">{metrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                                                    </div>
-                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
-                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Custo Físico</span>
-                                                        <span className="text-[11px] font-black text-slate-600">{metrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
-                                                    </div>
-                                                    <div className={`border rounded-lg p-2 ${metrics.diffCost < 0 ? 'bg-red-50 border-red-200' : metrics.diffCost > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-100'}`}>
-                                                        <span className="text-[7px] text-slate-400 font-bold uppercase tracking-widest block mb-0.5">Resultado Fin.</span>
-                                                        <span className={`text-[11px] font-black ${metrics.diffCost < 0 ? 'text-red-700' : metrics.diffCost > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
-                                                            {metrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                                        </span>
-                                                        {metrics.diffCost < 0 && <span className="text-[7px] font-black text-red-500 uppercase block">Prejuízo</span>}
-                                                        {metrics.diffCost > 0 && <span className="text-[7px] font-black text-emerald-600 uppercase block">Sobra</span>}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
+                                        const metrics = getScopedMetrics({ type: 'group', groupId: group.id });
+                                        if (!metrics) return null;
+                                        return <ExcelMetricsDashboard metrics={metrics} />;
                                     })()}
 
                                     <div className="mt-6">
@@ -4067,42 +4243,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Custo Aud.</span><span className="text-xl font-black text-emerald-600 tabular-nums">R$ {m.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
                                     </div>
 
-                                    {/* Injeção do Dashboard de Excel (Departamento) */}
                                     {(() => {
-                                        const tk = buildTermKey({ type: 'department', groupId: selectedGroup!.id, deptId: dept.id });
-                                        const metrics = termDrafts[tk]?.excelMetrics;
-                                        if (!metrics || !metrics.groupedDifferences) return null;
-
-                                        const dDiffs = metrics.groupedDifferences.filter((d: any) =>
-                                            d.deptName?.toLowerCase() === dept.name?.toLowerCase() &&
-                                            d.groupName?.toLowerCase() === selectedGroup!.name?.toLowerCase()
-                                        );
-                                        if (dDiffs.length === 0) return null;
-
-                                        const totDDiffQty = dDiffs.reduce((acc, curr) => acc + curr.diffQty, 0);
-                                        const totDDiffCost = dDiffs.reduce((acc, curr) => acc + curr.diffCost, 0);
-
-                                        return (
-                                            <div className="mt-4 pt-4 border-t border-indigo-100/50 mb-6">
-                                                <div className="flex justify-between items-center text-[10px] font-black uppercase tracking-widest">
-                                                    <span className="text-indigo-800 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> Planilha de Divergências</span>
-                                                </div>
-                                                <div className="grid grid-cols-2 gap-3 mt-3">
-                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-3">
-                                                        <span className="text-[8px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Dif. Qtde Total</span>
-                                                        <span className={`text-[13px] font-black ${totDDiffQty < 0 ? 'text-red-600' : totDDiffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
-                                                            {totDDiffQty > 0 ? '+' : ''}{Math.round(totDDiffQty).toLocaleString('pt-BR')} un.
-                                                        </span>
-                                                    </div>
-                                                    <div className="bg-slate-50 border border-slate-100 rounded-lg p-3">
-                                                        <span className="text-[8px] text-slate-400 font-bold uppercase tracking-widest block mb-1">Resultado Financeiro</span>
-                                                        <span className={`text-[13px] font-black ${totDDiffCost < 0 ? 'text-red-700' : totDDiffCost > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
-                                                            {totDDiffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                                        </span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        );
+                                        const metrics = getScopedMetrics({ type: 'department', groupId: selectedGroup!.id, deptId: dept.id });
+                                        if (!metrics) return null;
+                                        return <ExcelMetricsDashboard metrics={metrics} />;
                                     })()}
 
                                     <ProgressBar percentage={deptProgressValue} size="md" label={`Status do Departamento`} tone={deptAllDone ? 'green' : deptHasInProgress ? 'blue' : 'auto'} />
@@ -4135,39 +4279,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             <span className="text-md font-black text-emerald-600 tabular-nums leading-none whitespace-nowrap">R$ {cat.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
                                         </div>
 
-                                        {/* Injeção do Dashboard de Excel (Categoria) */}
-                                        {(() => {
-                                            const tk = buildTermKey({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id });
-                                            const metrics = termDrafts[tk]?.excelMetrics;
-                                            if (!metrics || !metrics.groupedDifferences) return null;
-
-                                            const cDiff = metrics.groupedDifferences.find((d: any) =>
-                                                d.catName?.toLowerCase() === cat.name?.toLowerCase() &&
-                                                d.deptName?.toLowerCase() === selectedDept!.name?.toLowerCase() &&
-                                                d.groupName?.toLowerCase() === selectedGroup!.name?.toLowerCase()
-                                            );
-                                            if (!cDiff) return null;
-
-                                            return (
-                                                <>
-                                                    <div className="w-px h-6 bg-indigo-100"></div>
-                                                    <div className="flex items-center gap-6 bg-indigo-50/30 px-4 py-2 rounded-2xl border border-indigo-100/50">
-                                                        <div className="flex flex-col">
-                                                            <span className="text-[8px] font-black text-indigo-400 uppercase italic">Diferença Excel</span>
-                                                            <div className="flex items-center gap-3">
-                                                                <span className={`text-[12px] font-black ${cDiff.diffQty < 0 ? 'text-red-500' : cDiff.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
-                                                                    {cDiff.diffQty > 0 ? '+' : ''}{Math.round(cDiff.diffQty).toLocaleString('pt-BR')} un.
-                                                                </span>
-                                                                <span className={`text-[12px] font-black ${cDiff.diffCost < 0 ? 'text-red-600' : cDiff.diffCost > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
-                                                                    {cDiff.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                                                </span>
-                                                            </div>
-                                                        </div>
-                                                    </div>
-                                                </>
-                                            );
-                                        })()}
                                     </div>
+                                    {(() => {
+                                        const metrics = getScopedMetrics({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id });
+                                        if (!metrics) return null;
+                                        return <ExcelMetricsDashboard metrics={metrics} />;
+                                    })()}
                                 </div>
                                 <div className="flex gap-4">
                                     <button
