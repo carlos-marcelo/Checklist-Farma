@@ -353,10 +353,11 @@ const mergeTermDraftMaps = (
             base[key] = incomingDraft;
             return;
         }
-        const preservedMetrics = incomingDraft?.excelMetrics ?? currentDraft?.excelMetrics;
+        const preservedMetrics = currentDraft?.excelMetrics ?? incomingDraft?.excelMetrics;
+        const preservedRemovedAt = currentDraft?.excelMetricsRemovedAt ?? incomingDraft?.excelMetricsRemovedAt;
         base[key] = preservedMetrics
-            ? { ...currentDraft, ...incomingDraft, excelMetrics: preservedMetrics }
-            : { ...currentDraft, ...incomingDraft };
+            ? { ...currentDraft, ...incomingDraft, excelMetrics: preservedMetrics, excelMetricsRemovedAt: preservedRemovedAt }
+            : { ...currentDraft, ...incomingDraft, excelMetricsRemovedAt: preservedRemovedAt };
     });
     return base;
 };
@@ -375,6 +376,19 @@ const mergeExcelMetricsPools = (pools: any[]): any | null => {
         items: [...(acc.items || []), ...(curr.items || [])],
         groupedDifferences: [...(acc.groupedDifferences || []), ...(curr.groupedDifferences || [])]
     }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0, items: [], groupedDifferences: [] });
+};
+
+const draftKeyTouchesGroup = (draftKey: string, groupId?: string | number): boolean => {
+    const target = normalizeScopeId(groupId);
+    if (!target) return false;
+    if (draftKey.startsWith('custom|')) {
+        const match = draftKey.match(/^custom\|[^|]*\|(.*)$/);
+        const scopesPart = match?.[1] || '';
+        const scopedKeys = scopesPart.split(',').filter(Boolean);
+        return scopedKeys.some(scopeKey => normalizeScopeId(scopeKey.split('|')[0]) === target);
+    }
+    const parts = draftKey.split('|');
+    return normalizeScopeId(parts[1]) === target;
 };
 
 const getFinancialRepresentativity = (auditedBaseCost?: number, diffCost?: number): number | null => {
@@ -509,7 +523,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     return;
                 }
 
-                console.log('🔄 Mudança detectada na auditoria, carregando dados completos...');
                 lastAuditUpdateRef.current = meta.updated_at;
             }
 
@@ -1794,9 +1807,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const getScopedMetrics = useCallback((scope: { type: 'group' | 'department' | 'category', groupId: string, deptId?: string, catId?: string }) => {
         const tk = buildTermKey(scope as any);
         const draftMetrics = termDrafts[tk]?.excelMetrics;
+        const hasDraftForGroup = Object.entries(termDrafts || {}).some(([key, draft]) =>
+            !!draft?.excelMetrics && draftKeyTouchesGroup(key, scope.groupId)
+        );
         // Prioridade: Rascunho do Termo > Bucket do Grupo
         const base = draftMetrics ||
-            data?.sharedGroupExcelMetrics?.[normalizeScopeId(scope.groupId)];
+            (hasDraftForGroup ? data?.sharedGroupExcelMetrics?.[normalizeScopeId(scope.groupId)] : null);
 
         if (!base || !base.groupedDifferences) return null;
 
@@ -1871,7 +1887,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setTermForm(nextForm);
 
         const scopeGroupIds = getScopeGroupIds(scope);
+        const scopedGroupsWithDraft = scopeGroupIds.filter(groupId =>
+            Object.entries(termDrafts || {}).some(([key, draft]) =>
+                !!draft?.excelMetrics && draftKeyTouchesGroup(key, groupId)
+            )
+        );
         const sharedPools = scopeGroupIds
+            .filter(id => scopedGroupsWithDraft.includes(id))
             .map(id => data?.sharedGroupExcelMetrics?.[normalizeScopeId(id)])
             .filter(Boolean);
         const isExcelExplicitlyCleared = !!draft?.excelMetricsRemovedAt;
@@ -1879,7 +1901,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const rawPool = isExcelExplicitlyCleared ? null : (draft?.excelMetrics || (
             scope.type === 'custom'
                 ? mergeExcelMetricsPools(sharedPools as any[])
-                : (scope.groupId ? data?.sharedGroupExcelMetrics?.[normalizeScopeId(scope.groupId)] : null)
+                : (scope.groupId && scopedGroupsWithDraft.includes(scope.groupId)
+                    ? data?.sharedGroupExcelMetrics?.[normalizeScopeId(scope.groupId)]
+                    : null)
         ));
 
         let nextMetrics = null;
@@ -2214,11 +2238,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 }
                             });
                         });
-                    } catch (err) {
-                        console.warn(`[UniversalRegistry] Error reading group ${groupId}:`, err);
-                    }
+                    } catch (err) { }
                 }
-                console.log(`[UniversalRegistry] Total entries: ${universalRegistry.size}`);
             };
 
             await loadUniversalRegistry();
@@ -2263,9 +2284,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 if (cadastroFile) {
                     try {
                         const cadastroRows = await readExcel(cadastroFile);
-                        // Debug: log total rows found
-                        console.log(`[CadastroLookup] Arquivo do grupo ${groupIdKey}: ${cadastroRows.length} linhas`);
-
                         cadastroRows.forEach((row: any[]) => {
                             if (!row || row.length < 4) return;
 
@@ -2290,26 +2308,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             }
                         });
 
-                        console.log(`[CadastroLookup] Total de entradas no lookup: ${cadastroLookup.size}`);
-                    } catch (err) {
-                        console.warn('[CadastroLookup] Erro ao ler cadastro:', err);
-                    }
-                } else {
-                    console.warn(`[CadastroLookup] Nenhum arquivo de cadastro encontrado para grupo ${groupIdKey}`);
+                    } catch (err) { }
                 }
             }
-
-            // Debug target codes
-            const debugTargetCodes = ['49522', '49525', '78269', '78670', '81547', '84011', '84345', '84856', '85186'];
-            debugTargetCodes.forEach(c => {
-                const inProduct = productLookup.get(c);
-                const inCadastro = cadastroLookup.get(c);
-                const inUniversal = universalRegistry.get(c);
-                console.log(`[DebugClassification] Código ${c}:
-                    Stock: ${inProduct ? `OK (${inProduct.map(x => x.groupName).join(',')})` : 'FAIL'}
-                    Local: ${inCadastro ? 'OK' : 'FAIL'}
-                    Global: ${inUniversal ? 'OK (' + inUniversal.groupName + ')' : 'FAIL'}`);
-            });
 
 
             const groupedMap: Record<string, { groupName: string, deptName: string, catName: string, sysQty: number, sysCost: number, countedQty: number, countedCost: number, diffQty: number, diffCost: number }> = {};
@@ -2467,42 +2468,60 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             setTermComparisonMetrics(payload);
             setTermForm(prev => (prev ? { ...prev, excelMetrics: payload, excelMetricsRemovedAt: undefined } : prev));
 
-            // Salvamento Global isolado por grupo
-            if (data && scopeGroupIds.length > 0) {
-                const nextShared = { ...(data.sharedGroupExcelMetrics || {}) } as Record<string, any>;
-                scopeGroupIds.forEach(groupId => {
-                    const sid = normalizeScopeId(groupId);
-                    if (sid) nextShared[sid] = payload;
-                });
-                const nextData = {
-                    ...data,
-                    sharedGroupExcelMetrics: nextShared
+            let nextDrafts: Record<string, TermForm> | null = null;
+            if (termModal && termForm) {
+                const key = buildTermKey(termModal);
+                removedExcelDraftKeysRef.current.delete(key);
+                nextDrafts = {
+                    ...termDrafts,
+                    [key]: { ...termForm, excelMetrics: payload, excelMetricsRemovedAt: undefined }
                 };
-                setData(nextData);
-                upsertAuditSession({
+                setTermDrafts(nextDrafts);
+            }
+
+            // Salvamento Global isolado por grupo
+            if (data) {
+                const nextShared = { ...(data.sharedGroupExcelMetrics || {}) } as Record<string, any>;
+                if (scopeGroupIds.length > 0) {
+                    scopeGroupIds.forEach(groupId => {
+                        const sid = normalizeScopeId(groupId);
+                        if (sid) nextShared[sid] = payload;
+                    });
+                }
+                const nextData = scopeGroupIds.length > 0
+                    ? {
+                        ...data,
+                        sharedGroupExcelMetrics: nextShared
+                    }
+                    : data;
+                if (scopeGroupIds.length > 0) setData(nextData);
+
+                const savedSession = await upsertAuditSession({
                     id: dbSessionId,
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
                     status: 'open',
-                    data: nextData,
+                    data: {
+                        ...nextData,
+                        termDrafts: nextDrafts || ((nextData as any)?.termDrafts || termDrafts || {})
+                    } as any,
                     progress: calculateProgress(nextData),
                     user_email: userEmail
-                }).catch(err => console.error("Error saving shared group excel metrics:", err));
-            }
-
-            // Auto-Save do Excel no Termo Draft corrente
-            if (termModal && termForm) {
-                const key = buildTermKey(termModal);
-                removedExcelDraftKeysRef.current.delete(key);
-                setTermDrafts(current => ({
-                    ...current,
-                    [key]: { ...termForm, excelMetrics: payload, excelMetricsRemovedAt: undefined }
-                }));
+                });
+                if (!savedSession) {
+                    throw new Error("Falha ao salvar atualização do Excel no Supabase.");
+                }
+                await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+                setDbSessionId(savedSession.id);
+                setNextAuditNumber(savedSession.audit_number);
+                const savedData = (savedSession.data as AuditData) || nextData;
+                setData(savedData);
+                setTermDrafts(current => mergeTermDraftMaps(current, ((savedData as any)?.termDrafts || nextDrafts || {}) as any));
             }
 
         } catch (err) {
             console.error("Erro ao processar Excel do Termo:", err);
-            alert("Erro ao ler o arquivo Excel.");
+            alert("Erro ao ler/salvar o arquivo Excel.");
             setTermComparisonMetrics(null);
 
             if (termModal && termForm) {

@@ -79,7 +79,6 @@ export const CacheService = {
         // Se tem cache, retorna o cache e deixa o remoto rodando em background
         // Se NÃO tem cache, espera pelo remoto
         if (cachedData !== null) {
-            console.log(`[CacheService] Cache HIT para ${key}`);
             // Não bloqueia o retorno do cache
             return cachedData;
         }
