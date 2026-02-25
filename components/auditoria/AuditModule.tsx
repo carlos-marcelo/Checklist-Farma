@@ -1951,7 +1951,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             }
             return false;
         };
-        const preferredBatchId = (data as any)?.lastPartialBatchId || undefined;
         const scopedEntries = Object.entries(termDrafts || {})
             .filter(([draftKey, draft]) => {
                 if (!draft?.excelMetrics || draft?.excelMetricsRemovedAt) return false;
@@ -1959,18 +1958,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 return true;
             })
             .map(([draftKey, draft]) => ({ draftKey, draft: draft! }));
-        const hasPreferredBatchCustom = !!preferredBatchId && scopedEntries.some(({ draftKey }) => {
-            if (!draftKey.startsWith('custom|')) return false;
-            const meta = parseCustomDraftKey(draftKey);
-            return !!meta?.batchId && meta.batchId === preferredBatchId;
-        });
         const scopedPools = scopedEntries
-            .filter(({ draftKey }) => {
-                if (!hasPreferredBatchCustom) return true;
-                if (!draftKey.startsWith('custom|')) return true;
-                const meta = parseCustomDraftKey(draftKey);
-                return !!meta?.batchId && meta.batchId === preferredBatchId;
-            })
             .map(({ draft }) => draft.excelMetrics)
             .filter(Boolean);
         // Prioridade: Rascunho do próprio termo > Soma dos termos do mesmo grupo
@@ -2078,7 +2066,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     }
                     return false;
                 };
-                const preferredBatchId = (data as any)?.lastPartialBatchId || undefined;
                 const scopedEntries = Object.entries(termDrafts || {})
                     .filter(([draftKey, draft]) => {
                         if (!draft?.excelMetrics || draft?.excelMetricsRemovedAt) return false;
@@ -2086,18 +2073,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         return true;
                     })
                     .map(([draftKey, draft]) => ({ draftKey, draft: draft! }));
-                const hasPreferredBatchCustom = !!preferredBatchId && scopedEntries.some(({ draftKey }) => {
-                    if (!draftKey.startsWith('custom|')) return false;
-                    const meta = parseCustomDraftKey(draftKey);
-                    return !!meta?.batchId && meta.batchId === preferredBatchId;
-                });
                 return scopedEntries
-                    .filter(({ draftKey }) => {
-                        if (!hasPreferredBatchCustom) return true;
-                        if (!draftKey.startsWith('custom|')) return true;
-                        const meta = parseCustomDraftKey(draftKey);
-                        return !!meta?.batchId && meta.batchId === preferredBatchId;
-                    })
                     .map(({ draft }) => draft.excelMetrics)
                     .filter(Boolean);
             })();
