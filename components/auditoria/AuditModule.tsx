@@ -392,6 +392,20 @@ const draftKeyTouchesGroup = (draftKey: string, groupId?: string | number): bool
     return normalizeScopeId(parts[1]) === target;
 };
 
+const getExcelPoolsByGroupFromDrafts = (
+    drafts: Record<string, TermForm> | undefined,
+    groupId?: string | number
+) => {
+    return Object.entries(drafts || {})
+        .filter(([key, draft]) =>
+            !!draft?.excelMetrics &&
+            !draft?.excelMetricsRemovedAt &&
+            draftKeyTouchesGroup(key, groupId)
+        )
+        .map(([, draft]) => draft!.excelMetrics)
+        .filter(Boolean);
+};
+
 const getFinancialRepresentativity = (auditedBaseCost?: number, diffCost?: number): number | null => {
     const base = Math.abs(Number(auditedBaseCost || 0));
     if (!base || !Number.isFinite(base)) return null;
@@ -510,15 +524,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [isUpdatingStock, setIsUpdatingStock] = useState(false);
 
     const lastAuditUpdateRef = useRef<string | null>(null);
+    const activeFilialRef = useRef<string>('');
+
+    useEffect(() => {
+        activeFilialRef.current = selectedFilial || '';
+    }, [selectedFilial]);
 
     const loadAuditNum = useCallback(async (silent: boolean = false) => {
         if (!selectedFilial) return;
+        const requestedFilial = selectedFilial;
+        const isStaleRequest = () => activeFilialRef.current !== requestedFilial;
         try {
             let forceFreshFetch = false;
             // Se for polling silencioso, busca apenas metadados para economizar banda e processamento
             if (silent) {
                 const meta = await fetchLatestAuditMetadata(selectedFilial);
-                if (!meta) return;
+                if (!meta || isStaleRequest()) return;
 
                 // Se a data de atualização for a mesma, não faz nada
                 if (lastAuditUpdateRef.current === meta.updated_at) {
@@ -536,12 +557,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 if (newData && dbSessionId === newData.id && newData.data) {
                     // Update data directly instead of recursive call
                     setData(newData.data);
-                    setTermDrafts(current => mergeTermDraftMaps(current, (newData.data as any).termDrafts || {}));
+                    setTermDrafts(((newData.data as any).termDrafts || {}) as Record<string, TermForm>);
                     lastAuditUpdateRef.current = newData.updated_at || null;
                 }
             });
 
             // Polling silencioso com mesma sessão → atualiza dados sem popups
+            if (isStaleRequest()) return;
             if (silent && latest && dbSessionId === latest.id && latest.data) {
                 lastAuditUpdateRef.current = latest.updated_at || null;
                 // Normaliza e aplica os dados frescos do banco para todos os usuários
@@ -573,15 +595,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     });
                 }
                 setData(latest.data);
-                setTermDrafts(current => mergeTermDraftMaps(current, (latest.data as any).termDrafts || {}));
+                setTermDrafts(((latest.data as any).termDrafts || {}) as Record<string, TermForm>);
                 return; // Dados atualizados silenciosamente, sem popups
             }
 
+            if (isStaleRequest()) return;
             if (latest && latest.status !== 'completed') {
                 setNextAuditNumber(latest.audit_number);
                 setDbSessionId(latest.id);
 
                 if (latest.data) {
+                    if (isStaleRequest()) return;
                     if ((latest.data as any).partialStart && !(latest.data as any).partialStarts) {
                         (latest.data as any).partialStarts = [(latest.data as any).partialStart];
                     }
@@ -617,8 +641,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         });
                     }
                     setData(latest.data);
-                    const draftsFromData = (latest.data as any).termDrafts || {};
-                    setTermDrafts(current => mergeTermDraftMaps(current, draftsFromData));
+                    const draftsFromData = ((latest.data as any).termDrafts || {}) as Record<string, TermForm>;
+                    setTermDrafts(draftsFromData);
                     setDbSessionId(latest.id);
 
                     if (!silent) {
@@ -676,10 +700,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 // Mas como o fetchLatestAudit pode retornar null em erros de rede (500), vamos ser menos agressivos:
                 // Só alertar se não houver erro. O `latest` ser null aqui pode ser um falso negativo de conexão caída.
                 if (latest !== undefined) {
+                    if (isStaleRequest()) return;
                     setNextAuditNumber(latest ? latest.audit_number + 1 : 1);
                     setDbSessionId(undefined);
                     if (!silent) {
                         setData(null);
+                        setTermDrafts({});
                     } else if (data) {
                         // Evita limpar sessão local se foi só um erro 500 passageiro.
                         // Só desloga se explicitamente a session de fechamento for retornada ou sumiu.
@@ -696,6 +722,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     // Carga Inicial
     useEffect(() => {
+        setData(null);
+        setTermDrafts({});
+        setDbSessionId(undefined);
+        setIsUpdatingStock(false);
+        setTermModal(null);
+        setTermForm(null);
+        setTermComparisonMetrics(null);
+        removedExcelDraftKeysRef.current.clear();
+        lastAuditUpdateRef.current = null;
         if (selectedFilial) {
             loadAuditNum();
         }
@@ -1848,12 +1883,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const getScopedMetrics = useCallback((scope: { type: 'group' | 'department' | 'category', groupId: string, deptId?: string, catId?: string }) => {
         const tk = buildTermKey(scope as any);
         const draftMetrics = termDrafts[tk]?.excelMetrics;
-        const hasDraftForGroup = Object.entries(termDrafts || {}).some(([key, draft]) =>
-            !!draft?.excelMetrics && draftKeyTouchesGroup(key, scope.groupId)
-        );
-        // Prioridade: Rascunho do Termo > Bucket do Grupo
-        const base = draftMetrics ||
-            (hasDraftForGroup ? data?.sharedGroupExcelMetrics?.[normalizeScopeId(scope.groupId)] : null);
+        const scopedPools = getExcelPoolsByGroupFromDrafts(termDrafts, scope.groupId);
+        // Prioridade: Rascunho do próprio termo > Soma dos termos do mesmo grupo
+        const base = draftMetrics || mergeExcelMetricsPools(scopedPools as any[]);
 
         if (!base || !base.groupedDifferences) return null;
 
@@ -1928,24 +1960,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setTermForm(nextForm);
 
         const scopeGroupIds = getScopeGroupIds(scope);
-        const scopedGroupsWithDraft = scopeGroupIds.filter(groupId =>
-            Object.entries(termDrafts || {}).some(([key, draft]) =>
-                !!draft?.excelMetrics && draftKeyTouchesGroup(key, groupId)
-            )
-        );
-        const sharedPools = scopeGroupIds
-            .filter(id => scopedGroupsWithDraft.includes(id))
-            .map(id => data?.sharedGroupExcelMetrics?.[normalizeScopeId(id)])
-            .filter(Boolean);
-        const isExcelExplicitlyCleared = !!draft?.excelMetricsRemovedAt;
-        // Prioridade real: Bucket do draft > Buckets compartilhados do escopo
-        const rawPool = isExcelExplicitlyCleared ? null : (draft?.excelMetrics || (
-            scope.type === 'custom'
-                ? mergeExcelMetricsPools(sharedPools as any[])
-                : (scope.groupId && scopedGroupsWithDraft.includes(scope.groupId)
-                    ? data?.sharedGroupExcelMetrics?.[normalizeScopeId(scope.groupId)]
-                    : null)
-        ));
+        const fallbackPools = scope.type === 'custom'
+            ? scopeGroupIds.flatMap(groupId => getExcelPoolsByGroupFromDrafts(termDrafts, groupId))
+            : getExcelPoolsByGroupFromDrafts(termDrafts, scope.groupId);
+        // Termos dependentes devem refletir o termo origem do mesmo escopo/grupo:
+        // prioriza excel do próprio termo; sem ele, agrega os termos compatíveis da filial.
+        const rawPool = draft?.excelMetrics || mergeExcelMetricsPools(fallbackPools as any[]);
 
         let nextMetrics = null;
 
@@ -2028,17 +2048,45 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     return matchG && matchD && matchC;
                 });
 
-                if (filteredGrouped.length > 0) {
-                    const filteredItems = (rawPool.items || []).filter((it: any) => {
-                        const matchG = normalizeText(it.groupName) === gName;
-                        if (scope.type === 'group') return matchG;
-                        const matchD = normalizeText(it.deptName) === dName;
-                        if (scope.type === 'department') return matchG && matchD;
-                        const matchC = normalizeText(it.catName) === cName;
-                        return matchG && matchD && matchC;
-                    });
+                const filteredItems = (rawPool.items || []).filter((it: any) => {
+                    const matchG = normalizeText(it.groupName) === gName;
+                    if (scope.type === 'group') return matchG;
+                    const matchD = normalizeText(it.deptName) === dName;
+                    if (scope.type === 'department') return matchG && matchD;
+                    const matchC = normalizeText(it.catName) === cName;
+                    return matchG && matchD && matchC;
+                });
 
-                    const aggregated = filteredGrouped.reduce((acc: any, curr: any) => ({
+                if (filteredGrouped.length > 0 || filteredItems.length > 0) {
+                    const groupedSource = filteredGrouped.length > 0
+                        ? filteredGrouped
+                        : (filteredItems || []).reduce((acc: any[], it: any) => {
+                            const key = `${it.groupName}|${it.deptName}|${it.catName}`;
+                            const existing = acc.find(x => `${x.groupName}|${x.deptName}|${x.catName}` === key);
+                            if (existing) {
+                                existing.sysQty += it.sysQty || 0;
+                                existing.sysCost += it.sysCost || 0;
+                                existing.countedQty += it.countedQty || 0;
+                                existing.countedCost += it.countedCost || 0;
+                                existing.diffQty += it.diffQty || 0;
+                                existing.diffCost += it.diffCost || 0;
+                            } else {
+                                acc.push({
+                                    groupName: it.groupName,
+                                    deptName: it.deptName,
+                                    catName: it.catName,
+                                    sysQty: it.sysQty || 0,
+                                    sysCost: it.sysCost || 0,
+                                    countedQty: it.countedQty || 0,
+                                    countedCost: it.countedCost || 0,
+                                    diffQty: it.diffQty || 0,
+                                    diffCost: it.diffCost || 0
+                                });
+                            }
+                            return acc;
+                        }, []);
+
+                    const aggregated = groupedSource.reduce((acc: any, curr: any) => ({
                         sysQty: (acc.sysQty || 0) + (curr.sysQty || 0),
                         sysCost: (acc.sysCost || 0) + (curr.sysCost || 0),
                         countedQty: (acc.countedQty || 0) + (curr.countedQty || 0),
@@ -2050,7 +2098,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     nextMetrics = {
                         ...aggregated,
                         items: filteredItems,
-                        groupedDifferences: filteredGrouped
+                        groupedDifferences: groupedSource
                     };
                 }
             }
@@ -2522,22 +2570,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 setTermDrafts(nextDrafts);
             }
 
-            // Salvamento Global isolado por grupo
             if (data) {
-                const nextShared = { ...(data.sharedGroupExcelMetrics || {}) } as Record<string, any>;
-                if (scopeGroupIds.length > 0) {
-                    scopeGroupIds.forEach(groupId => {
-                        const sid = normalizeScopeId(groupId);
-                        if (sid) nextShared[sid] = payload;
-                    });
-                }
-                const nextData = scopeGroupIds.length > 0
-                    ? {
-                        ...data,
-                        sharedGroupExcelMetrics: nextShared
-                    }
-                    : data;
-                if (scopeGroupIds.length > 0) setData(nextData);
+                const nextData = data;
 
                 const savedSession = await upsertAuditSession({
                     id: dbSessionId,
@@ -2559,7 +2593,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 setNextAuditNumber(savedSession.audit_number);
                 const savedData = (savedSession.data as AuditData) || nextData;
                 setData(savedData);
-                setTermDrafts(current => mergeTermDraftMaps(current, ((savedData as any)?.termDrafts || nextDrafts || {}) as any));
+                setTermDrafts((((savedData as any)?.termDrafts || nextDrafts || {}) as Record<string, TermForm>));
             }
 
         } catch (err) {
@@ -2586,7 +2620,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const removedAt = new Date().toISOString();
         setTermForm(prev => (prev ? { ...prev, excelMetrics: undefined, excelMetricsRemovedAt: removedAt } : prev));
         if (termModal && termForm) {
-            const scopeGroupIds = getScopeGroupIds(termModal);
             const tk = buildTermKey(termModal);
             const nextDrafts = { ...termDrafts };
             const makeCatKey = (groupId?: string | number, deptId?: string | number, catId?: string | number) =>
@@ -2637,19 +2670,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             removedExcelDraftKeysRef.current.add(tk);
             setTermDrafts(nextDrafts);
 
-            const nextShared = { ...((data?.sharedGroupExcelMetrics || {}) as Record<string, any>) };
-            if (scopeGroupIds.length > 0) {
-                scopeGroupIds.forEach(groupId => {
-                    const sid = normalizeScopeId(groupId);
-                    if (sid) nextShared[sid] = undefined;
-                });
-            }
-            const nextData = data
-                ? {
-                    ...data,
-                    sharedGroupExcelMetrics: nextShared
-                }
-                : null;
+            const nextData = data ? { ...data } : null;
             if (nextData) setData(nextData);
 
             if (isMaster && nextData) {
@@ -2666,7 +2687,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
                     const savedData = (savedSession.data as AuditData) || nextData;
                     setData(savedData);
-                    setTermDrafts(current => mergeTermDraftMaps(current, ((savedData as any)?.termDrafts || nextDrafts || {}) as any));
+                    setTermDrafts((((savedData as any)?.termDrafts || nextDrafts || {}) as Record<string, TermForm>));
                 } else {
                     throw new Error("Erro ao salvar remoção do Excel.");
                 }
@@ -3468,12 +3489,37 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id })
             )
         );
+        const makeCatKey = (g?: string | number, d?: string | number, c?: string | number) =>
+            partialScopeKey({ groupId: g, deptId: d, catId: c });
         const entryTouchesTargetScope = (entry: { groupId?: string; deptId?: string; catId?: string }) => {
             if (targetScopeCatKeys.size === 0) return scopeContainsPartial(entry, groupId, deptId, catId);
             const expanded = getScopeCategories(entry.groupId, entry.deptId, entry.catId);
             for (const { group, dept, cat } of expanded) {
                 const key = partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id });
                 if (targetScopeCatKeys.has(key)) return true;
+            }
+            return false;
+        };
+        const draftTouchesTargetScope = (draftKey: string) => {
+            if (targetScopeCatKeys.size === 0) return false;
+            if (draftKey.startsWith('custom|')) {
+                const match = draftKey.match(/^custom\|[^|]*\|(.*)$/);
+                const scopesPart = match?.[1] || '';
+                const scopedKeys = scopesPart.split(',').filter(Boolean);
+                for (const scopeKey of scopedKeys) {
+                    const [g, d, c] = scopeKey.split('|');
+                    const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+                    for (const { group, dept, cat } of expanded) {
+                        if (targetScopeCatKeys.has(makeCatKey(group.id, dept.id, cat.id))) return true;
+                    }
+                }
+                return false;
+            }
+            const [type, g, d, c] = draftKey.split('|');
+            if (!type || type === 'custom') return false;
+            const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+            for (const { group, dept, cat } of expanded) {
+                if (targetScopeCatKeys.has(makeCatKey(group.id, dept.id, cat.id))) return true;
             }
             return false;
         };
@@ -3532,23 +3578,40 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         };
 
         const nextData = applyPartialScopes(nextDataRaw, filteredPartials);
+        const removedAt = new Date().toISOString();
+        let nextDrafts = termDrafts;
+        if (allDone) {
+            const mutableDrafts: Record<string, TermForm> = { ...(termDrafts || {}) };
+            Object.keys(mutableDrafts).forEach(draftKey => {
+                if (!draftTouchesTargetScope(draftKey)) return;
+                mutableDrafts[draftKey] = {
+                    ...mutableDrafts[draftKey],
+                    excelMetrics: undefined,
+                    excelMetricsRemovedAt: removedAt
+                };
+            });
+            nextDrafts = mutableDrafts;
+            setTermDrafts(nextDrafts);
+            setTermComparisonMetrics(null);
+        }
 
-        setData(nextData);
+        const nextDataWithTerms = { ...nextData, termDrafts: nextDrafts } as any;
+        setData(nextDataWithTerms);
 
         try {
-            const progress = calculateProgress(nextData);
+            const progress = calculateProgress(nextDataWithTerms);
             await upsertAuditSession({
                 id: dbSessionId,
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || (data as any)?.termDrafts || termDrafts || {}) } as any,
+                data: nextDataWithTerms,
                 progress: progress,
                 user_email: userEmail
             });
             // Update localStorage immediately
             localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                ...nextData,
+                ...nextDataWithTerms,
                 filial: selectedFilial,
                 inventoryNumber
             }));
@@ -3932,9 +3995,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }
         if (!window.confirm("Tem certeza que deseja zerar TODAS as contagens concluídas e termos personalizados desta auditoria?")) return;
 
-        const filteredDrafts = Object.fromEntries(
-            Object.entries(termDrafts || {}).filter(([key]) => !key.startsWith('custom|'))
-        );
+        const filteredDrafts: Record<string, TermForm> = {};
 
         const resetGroups = data.groups.map(g => ({
             ...g,
@@ -3959,6 +4020,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setTermDrafts(filteredDrafts);
         setData(nextData);
         setInitialDoneUnits(0);
+        setTermModal(null);
+        setTermForm(null);
+        setTermComparisonMetrics(null);
 
         try {
             // Persistence consolidated in audit_sessions (data field)
