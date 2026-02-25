@@ -1469,6 +1469,7 @@ const App: React.FC = () => {
     const [isBulkSessionActionRunning, setIsBulkSessionActionRunning] = useState(false);
     const [pendingSessionCommands, setPendingSessionCommands] = useState<Record<string, { command: 'FORCE_LOGOUT' | 'RELOAD'; startedAt: number }>>({});
     const forcedSessionCleanupRef = useRef<Set<string>>(new Set());
+    const logoutInFlightRef = useRef(false);
     const [remoteForceLogoutDeadline, setRemoteForceLogoutDeadline] = useState<number | null>(null);
     const [remoteForceLogoutTick, setRemoteForceLogoutTick] = useState(0);
     const [hasLoadedLogsForMetrics, setHasLoadedLogsForMetrics] = useState(false);
@@ -2532,27 +2533,41 @@ const App: React.FC = () => {
             }
         }).catch(() => { });
     };
-    const handleLogout = () => {
-        if (currentUser?.email) {
+    const handleLogout = useCallback(async () => {
+        if (logoutInFlightRef.current) return;
+        logoutInFlightRef.current = true;
+        const userSnapshot = currentUser;
+        const viewSnapshot = currentView;
+
+        if (userSnapshot?.email) {
             SupabaseService.insertAppEventLog({
-                company_id: currentUser.company_id || null,
-                branch: currentUser.filial || null,
-                area: currentUser.area || null,
-                user_email: currentUser.email,
-                user_name: currentUser.name,
+                company_id: userSnapshot.company_id || null,
+                branch: userSnapshot.filial || null,
+                area: userSnapshot.area || null,
+                user_email: userSnapshot.email,
+                user_name: userSnapshot.name,
                 app: 'sistema',
                 event_type: 'logout',
                 status: 'success',
                 success: true,
                 source: window.location.pathname || 'web',
-                event_meta: { view: currentView }
+                event_meta: { view: viewSnapshot }
             }).catch(() => { });
         }
+
+        // Hard logout: remove active session immediately (not only via useEffect cleanup)
+        try {
+            await SupabaseService.sendSessionCommand(clientIdRef.current, null);
+            await SupabaseService.deleteActiveSession(clientIdRef.current);
+        } catch { }
+
         // Clear persisted session on logout
         localStorage.removeItem('APP_CURRENT_EMAIL');
         localStorage.removeItem('APP_CURRENT_VIEW');
         localStorage.removeItem('APP_VIEWING_REPORT_ID');
         localStorage.removeItem('APP_VIEWING_STOCK_REPORT_ID');
+        localStorage.removeItem('APP_VIEW_HISTORY_ITEM');
+        localStorage.removeItem('APP_VIEW_STOCK_REPORT');
 
         setBranchPromptCheckedForUser(null);
         setShowBranchSelectionModal(false);
@@ -2564,14 +2579,15 @@ const App: React.FC = () => {
         setViewingStockConferenceReport(null);
         setRemoteForceLogoutDeadline(null);
         setCurrentView('dashboard');
-    };
+        logoutInFlightRef.current = false;
+    }, [currentUser, currentView]);
 
     const handleRemoteForceLogoutNow = useCallback(async () => {
         setRemoteForceLogoutDeadline(null);
         try {
             await SupabaseService.deleteActiveSession(clientIdRef.current);
         } catch { }
-        handleLogout();
+        await handleLogout();
     }, [handleLogout]);
 
     // --- SESSION MANAGEMENT & HEARTBEAT ---

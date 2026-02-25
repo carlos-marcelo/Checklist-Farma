@@ -200,6 +200,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   const [isLoadingInventoryReport, setIsLoadingInventoryReport] = useState(false);
   const [hasInitialHydrationCompleted, setHasInitialHydrationCompleted] = useState(false);
   const [hydrationDelayDone, setHydrationDelayDone] = useState(false);
+  const [hasLoadedInitialBranchRecords, setHasLoadedInitialBranchRecords] = useState(false);
   const [historyRecords, setHistoryRecords] = useState<DbPVSalesHistory[]>([]);
   const [salesUploads, setSalesUploads] = useState<DbPVSalesUpload[]>([]);
   const [analysisReports, setAnalysisReports] = useState<Record<string, AnalysisReportPayload>>({});
@@ -417,6 +418,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   useEffect(() => {
     setHasInitialHydrationCompleted(false);
     setHydrationDelayDone(false);
+    setHasLoadedInitialBranchRecords(false);
     setIsInitialSyncDone(false);
     setReportsReady(false);
     setReportsSyncStatus('idle');
@@ -1034,6 +1036,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         } else {
           setConnectionStatus('offline');
         }
+      } finally {
+        if (isMounted) setHasLoadedInitialBranchRecords(true);
       }
     };
 
@@ -3235,24 +3239,25 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         : `Sem vencimentos ${expiryAlert.periodLabel}`;
   const headerInfo = sessionInfo || setupDraftInfo;
   const hasBranchContext = !!(sessionInfo?.companyId && sessionInfo?.filial);
+  const hasReportsContext = !!(
+    setupDraftInfo?.companyId ||
+    sessionInfo?.companyId
+  ) && !!(
+    setupDraftInfo?.filial ||
+    sessionInfo?.filial
+  );
   const shouldWaitSetupPrefetch = currentView === AppView.SETUP && !!(setupDraftInfo?.companyId && setupDraftInfo?.filial);
   const initialHydrationReady = useMemo(() => {
     if (!userEmail) return true;
     if (isLoadingSession) return false;
-
-    const hasReportsContext = !!(
-      setupDraftInfo?.companyId ||
-      sessionInfo?.companyId
-    ) && !!(
-      setupDraftInfo?.filial ||
-      sessionInfo?.filial
-    );
 
     // Se já existe contexto de filial/empresa, só libera após carregar tudo.
     if (hasReportsContext) {
       if (!isInitialSyncDone) return false;
       if (reportsSyncStatus !== 'ready') return false;
     }
+
+    if (hasBranchContext && !hasLoadedInitialBranchRecords) return false;
 
     // Setup Draft needs its branch prefetch
     if (shouldWaitSetupPrefetch && isBranchPrefetching) return false;
@@ -3263,13 +3268,35 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     isLoadingSession,
     isInitialSyncDone,
     reportsSyncStatus,
-    setupDraftInfo?.companyId,
-    setupDraftInfo?.filial,
-    sessionInfo?.companyId,
-    sessionInfo?.filial,
+    hasReportsContext,
+    hasBranchContext,
+    hasLoadedInitialBranchRecords,
     shouldWaitSetupPrefetch,
     isBranchPrefetching
   ]);
+
+  useEffect(() => {
+    // Se o contexto surge depois e ainda não está pronto, volta para a tela de sincronização.
+    if (
+      hasInitialHydrationCompleted &&
+      hasReportsContext &&
+      (!isInitialSyncDone || reportsSyncStatus !== 'ready')
+    ) {
+      setHasInitialHydrationCompleted(false);
+      setHydrationDelayDone(false);
+    }
+  }, [hasInitialHydrationCompleted, hasReportsContext, isInitialSyncDone, reportsSyncStatus]);
+
+  useEffect(() => {
+    if (
+      hasInitialHydrationCompleted &&
+      hasBranchContext &&
+      !hasLoadedInitialBranchRecords
+    ) {
+      setHasInitialHydrationCompleted(false);
+      setHydrationDelayDone(false);
+    }
+  }, [hasInitialHydrationCompleted, hasBranchContext, hasLoadedInitialBranchRecords]);
 
   useEffect(() => {
     if (hasInitialHydrationCompleted) return;
