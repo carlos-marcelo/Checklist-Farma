@@ -2498,3 +2498,24 @@ export async function deleteActiveSession(clientId: string): Promise<boolean> {
     return false;
   }
 }
+
+export async function forceExpireActiveSession(clientId: string): Promise<boolean> {
+  try {
+    const stalePing = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from('active_sessions')
+      .update({
+        command: 'FORCE_LOGOUT',
+        last_ping: stalePing,
+        updated_at: new Date().toISOString()
+      })
+      .eq('client_id', clientId)
+      .select('client_id');
+
+    if (error) throw error;
+    return Array.isArray(data) && data.length > 0;
+  } catch (error) {
+    console.error('Error force-expiring active session:', error);
+    return false;
+  }
+}

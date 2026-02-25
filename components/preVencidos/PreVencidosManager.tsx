@@ -219,6 +219,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   const globalBaseInFlightRef = useRef<Map<string, Promise<DbGlobalBaseFile[]>>>(new Map());
   const reportsSyncLastRunRef = useRef<Map<string, number>>(new Map());
   const reportsSyncInFlightRef = useRef<Set<string>>(new Set());
+  const reportsSyncContextKeyRef = useRef<string>('');
   const branchFetchLastRunRef = useRef<Map<string, number>>(new Map());
   const branchFetchInFlightRef = useRef<Set<string>>(new Set());
   const [connectionStatus, setConnectionStatus] = useState<'online' | 'offline' | 'syncing'>('online');
@@ -669,14 +670,35 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     if (!userEmail) return;
     let cancelled = false;
 
-    const syncReports = async () => {
+    const syncReports = async (attempt = 0) => {
       const reportLookupCompanyId = setupDraftInfo?.companyId || sessionInfo?.companyId || null;
       const reportLookupBranch = setupDraftInfo?.filial || sessionInfo?.filial || null;
+      // Em primeiro acesso (novo usuário/máquina), ainda não há contexto de filial.
+      // Não bloqueia a hidratação global aguardando sync remoto sem filtro.
+      if (!reportLookupCompanyId || !reportLookupBranch) {
+        if (!cancelled) {
+          setReportsSyncStatus('idle');
+          setReportsReady(false);
+          setIsInitialSyncDone(true);
+        }
+        return;
+      }
       const syncKey = `${userEmail}|${reportLookupCompanyId || ''}|${reportLookupBranch || ''}`;
+      if (reportsSyncContextKeyRef.current !== syncKey) {
+        reportsSyncContextKeyRef.current = syncKey;
+        // Novo contexto (empresa/filial) deve sincronizar imediatamente,
+        // sem herdar cooldown anterior que pode mascarar dados até F5.
+        reportsSyncLastRunRef.current.delete(syncKey);
+        if (!cancelled) {
+          setIsInitialSyncDone(false);
+          setReportsSyncStatus('idle');
+        }
+      }
       const lastRun = reportsSyncLastRunRef.current.get(syncKey) || 0;
       const now = Date.now();
       const isCooldown = now - lastRun < BRANCH_FETCH_COOLDOWN_MS;
-      if (reportsSyncInFlightRef.current.has(syncKey) || isCooldown) {
+      const shouldBypassCooldown = !reportsReady || reportsSyncStatus === 'missing' || reportsSyncStatus === 'error';
+      if (reportsSyncInFlightRef.current.has(syncKey) || (isCooldown && !shouldBypassCooldown)) {
         if (!cancelled) setIsInitialSyncDone(true);
         return;
       }
@@ -707,10 +729,15 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
         // 2. Continua buscando do Supabase em background para garantir sincronia
         console.log('🔄 [PV Sync] Buscando relatórios do Supabase para:', userEmail);
-        const dbReports = await fetchPVReports(userEmail, {
-          companyId: reportLookupCompanyId,
-          branch: reportLookupBranch
-        });
+        const dbReports = await Promise.race([
+          fetchPVReports(userEmail, {
+            companyId: reportLookupCompanyId,
+            branch: reportLookupBranch
+          }),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('Timeout ao sincronizar relatórios PV')), 10000);
+          })
+        ]);
         if (cancelled) return;
 
         const systemReport = dbReports.find(r => r.report_type === 'system');
@@ -824,11 +851,23 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         const ready = (hasDbSystem && hasDbDcb) || (hasEffectiveSystem && hasEffectiveDcb);
         setReportsReady(ready);
         setReportsSyncStatus(ready ? 'ready' : 'missing');
+        // Replicação eventual: em alguns acessos iniciais o DB responde "vazio" e
+        // segundos depois os arquivos aparecem (cenário que hoje só normaliza com F5).
+        if (!ready && !cancelled && attempt < 8) {
+          setTimeout(() => {
+            if (!cancelled) void syncReports(attempt + 1);
+          }, 1200);
+        }
       } catch (error) {
         console.error('Erro ao sincronizar relatórios PV:', error);
         if (!cancelled) {
           setReportsReady(false);
           setReportsSyncStatus('error');
+          if (attempt < 2) {
+            setTimeout(() => {
+              if (!cancelled) void syncReports(attempt + 1);
+            }, 1200);
+          }
         }
       } finally {
         reportsSyncInFlightRef.current.delete(syncKey);
@@ -3201,8 +3240,19 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     if (!userEmail) return true;
     if (isLoadingSession) return false;
 
-    // Check if report syncing is still a blocker
-    if (!isInitialSyncDone || reportsSyncStatus === 'loading') return false;
+    const hasReportsContext = !!(
+      setupDraftInfo?.companyId ||
+      sessionInfo?.companyId
+    ) && !!(
+      setupDraftInfo?.filial ||
+      sessionInfo?.filial
+    );
+
+    // Se já existe contexto de filial/empresa, só libera após carregar tudo.
+    if (hasReportsContext) {
+      if (!isInitialSyncDone) return false;
+      if (reportsSyncStatus !== 'ready') return false;
+    }
 
     // Setup Draft needs its branch prefetch
     if (shouldWaitSetupPrefetch && isBranchPrefetching) return false;
@@ -3213,6 +3263,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     isLoadingSession,
     isInitialSyncDone,
     reportsSyncStatus,
+    setupDraftInfo?.companyId,
+    setupDraftInfo?.filial,
+    sessionInfo?.companyId,
+    sessionInfo?.filial,
     shouldWaitSetupPrefetch,
     isBranchPrefetching
   ]);

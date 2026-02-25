@@ -1469,6 +1469,10 @@ const App: React.FC = () => {
     const [isBulkSessionActionRunning, setIsBulkSessionActionRunning] = useState(false);
     const [pendingSessionCommands, setPendingSessionCommands] = useState<Record<string, { command: 'FORCE_LOGOUT' | 'RELOAD'; startedAt: number }>>({});
     const forcedSessionCleanupRef = useRef<Set<string>>(new Set());
+    const [remoteForceLogoutDeadline, setRemoteForceLogoutDeadline] = useState<number | null>(null);
+    const [remoteForceLogoutTick, setRemoteForceLogoutTick] = useState(0);
+    const [hasLoadedLogsForMetrics, setHasLoadedLogsForMetrics] = useState(false);
+    const [hasLoadedSessionsForMetrics, setHasLoadedSessionsForMetrics] = useState(false);
 
     useEffect(() => {
         const handleOnline = () => setIsOnline(true);
@@ -2558,14 +2562,24 @@ const App: React.FC = () => {
         setSignatures({});
         setViewHistoryItem(null);
         setViewingStockConferenceReport(null);
+        setRemoteForceLogoutDeadline(null);
         setCurrentView('dashboard');
     };
+
+    const handleRemoteForceLogoutNow = useCallback(async () => {
+        setRemoteForceLogoutDeadline(null);
+        try {
+            await SupabaseService.deleteActiveSession(clientIdRef.current);
+        } catch { }
+        handleLogout();
+    }, [handleLogout]);
 
     // --- SESSION MANAGEMENT & HEARTBEAT ---
     useEffect(() => {
         if (!currentUser) return;
 
         const performHeartbeat = async () => {
+            if (remoteForceLogoutDeadline) return;
             try {
                 await SupabaseService.upsertActiveSession({
                     client_id: clientIdRef.current,
@@ -2595,7 +2609,20 @@ const App: React.FC = () => {
             window.removeEventListener('focus', handleWakeHeartbeat);
             SupabaseService.deleteActiveSession(clientIdRef.current).catch(() => { });
         };
-    }, [currentUser?.email, currentView]);
+    }, [currentUser?.email, currentView, remoteForceLogoutDeadline]);
+
+    useEffect(() => {
+        if (!currentUser || !remoteForceLogoutDeadline) return;
+        const timer = setInterval(() => {
+            if (Date.now() >= remoteForceLogoutDeadline) {
+                clearInterval(timer);
+                void handleRemoteForceLogoutNow();
+                return;
+            }
+            setRemoteForceLogoutTick(prev => prev + 1);
+        }, 250);
+        return () => clearInterval(timer);
+    }, [currentUser?.email, remoteForceLogoutDeadline, handleRemoteForceLogoutNow]);
 
     useEffect(() => {
         if (!currentUser) return;
@@ -2607,9 +2634,10 @@ const App: React.FC = () => {
                 const mySession = await SupabaseService.fetchActiveSessionByClientId(clientIdRef.current);
 
                 if (mySession?.command === 'FORCE_LOGOUT') {
-                    await SupabaseService.sendSessionCommand(clientIdRef.current, null);
-                    alert('⚠️ Sua sessão foi encerrada remotamente por um administrador.');
-                    handleLogout();
+                    if (!remoteForceLogoutDeadline) {
+                        setRemoteForceLogoutDeadline(Date.now() + 10000);
+                        setRemoteForceLogoutTick(0);
+                    }
                 } else if (mySession?.command === 'RELOAD') {
                     await SupabaseService.sendSessionCommand(clientIdRef.current, null);
                     window.location.reload();
@@ -2622,7 +2650,7 @@ const App: React.FC = () => {
         };
 
         checkSessionCommand();
-        const commandInterval = setInterval(checkSessionCommand, 5000);
+        const commandInterval = setInterval(checkSessionCommand, 2000);
         const handleWakeCommandCheck = () => {
             if (!document.hidden) checkSessionCommand();
         };
@@ -2634,7 +2662,7 @@ const App: React.FC = () => {
             document.removeEventListener('visibilitychange', handleWakeCommandCheck);
             window.removeEventListener('focus', handleWakeCommandCheck);
         };
-    }, [currentUser?.email, handleLogout]);
+    }, [currentUser?.email, handleLogout, remoteForceLogoutDeadline]);
 
     const handleRegister = async (newUser: User) => {
         try {
@@ -3982,7 +4010,10 @@ const App: React.FC = () => {
                     setLogsBranchFilter(currentUser.filial);
                 }
             })
-            .finally(() => setIsLoadingLogs(false));
+            .finally(() => {
+                setIsLoadingLogs(false);
+                setHasLoadedLogsForMetrics(true);
+            });
     }, [currentView, currentUser?.company_id, currentUser?.filial, currentUser?.role, logsDateRange]);
 
     const refreshActiveSessions = useCallback(async () => {
@@ -3993,7 +4024,16 @@ const App: React.FC = () => {
             const activeClientIds = new Set((sessions || []).map(s => s.client_id));
             setPendingSessionCommands(prev => {
                 const next: Record<string, { command: 'FORCE_LOGOUT' | 'RELOAD'; startedAt: number }> = {};
+                const now = Date.now();
                 Object.entries(prev).forEach(([clientId, meta]) => {
+                    // Mantém FORCE_LOGOUT por até 60s mesmo que a sessão suma temporariamente,
+                    // para evitar reentrada imediata sem receber o comando.
+                    if (meta.command === 'FORCE_LOGOUT') {
+                        if (now - meta.startedAt <= 60000 || activeClientIds.has(clientId)) {
+                            next[clientId] = meta;
+                        }
+                        return;
+                    }
                     if (activeClientIds.has(clientId)) next[clientId] = meta;
                 });
                 return next;
@@ -4002,8 +4042,16 @@ const App: React.FC = () => {
             console.error('Error fetching active sessions:', error);
         } finally {
             setIsLoadingSessions(false);
+            setHasLoadedSessionsForMetrics(true);
         }
     }, []);
+
+    useEffect(() => {
+        if (currentView === 'logs' && currentUser?.role === 'MASTER') {
+            setHasLoadedLogsForMetrics(false);
+            setHasLoadedSessionsForMetrics(false);
+        }
+    }, [currentView, currentUser?.role, currentUser?.company_id]);
 
     useEffect(() => {
         if (currentView !== 'logs' || currentUser?.role !== 'MASTER' || !currentUser?.company_id) return;
@@ -4033,7 +4081,7 @@ const App: React.FC = () => {
 
             staleForceLogoutIds.forEach(clientId => forcedSessionCleanupRef.current.add(clientId));
             try {
-                await Promise.all(staleForceLogoutIds.map(clientId => SupabaseService.deleteActiveSession(clientId)));
+                await Promise.all(staleForceLogoutIds.map(clientId => SupabaseService.forceExpireActiveSession(clientId)));
             } finally {
                 staleForceLogoutIds.forEach(clientId => forcedSessionCleanupRef.current.delete(clientId));
                 await refreshActiveSessions();
@@ -4144,6 +4192,15 @@ const App: React.FC = () => {
     useEffect(() => {
         setEventsDisplayLimit(50);
     }, [logsBranchFilter, logsAreaFilter, logsAppFilter, logsUserFilter, logsEventFilter, logsGroupRepeats]);
+
+    const isMetricsInitialHydrating =
+        currentView === 'logs' &&
+        currentUser?.role === 'MASTER' &&
+        (!hasLoadedLogsForMetrics || !hasLoadedSessionsForMetrics);
+    const remoteForceLogoutSecondsRemaining = remoteForceLogoutDeadline
+        ? Math.max(0, Math.ceil((remoteForceLogoutDeadline - Date.now()) / 1000))
+        : 0;
+    void remoteForceLogoutTick;
 
     const logsBranches = useMemo(() => {
         const map = new Map<string, { branch: string; count: number; lastAt: number; users: Set<string> }>();
@@ -5897,6 +5954,16 @@ const App: React.FC = () => {
                     {/* --- LOGS & EVENTOS VIEW --- */}
                     {currentView === 'logs' && currentUser?.role === 'MASTER' && (
                         <div className="max-w-6xl mx-auto space-y-10 animate-fade-in pb-24">
+                            {isMetricsInitialHydrating ? (
+                                <div className="min-h-[320px] bg-white rounded-3xl border border-slate-200 shadow-sm flex items-center justify-center">
+                                    <div className="px-8 py-6 flex flex-col items-center gap-3">
+                                        <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin"></div>
+                                        <p className="text-sm font-black text-slate-700 uppercase tracking-wider">Sincronizando Métricas</p>
+                                        <p className="text-xs text-slate-500 font-semibold">Carregando eventos e sessões ativas em tempo real...</p>
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
                             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
                                 <div>
                                     <h1 className="text-3xl font-black text-gray-900 tracking-tight">Métricas Gerenciais</h1>
@@ -6815,6 +6882,8 @@ const App: React.FC = () => {
                                     </table>
                                 </div>
                             </div>
+                                </>
+                            )}
                         </div>
                     )}
                     {currentView === 'logs' && currentUser?.role !== 'MASTER' && (
@@ -8863,6 +8932,38 @@ const App: React.FC = () => {
                                         className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-70 disabled:cursor-wait"
                                     >
                                         {isSavingChecklistDefinition ? 'Salvando...' : 'Salvar checklist'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {remoteForceLogoutDeadline && currentUser && (
+                        <div className="fixed inset-0 z-[9998] bg-slate-950/45 backdrop-blur-[2px] flex items-center justify-center p-4">
+                            <div className="w-full max-w-md rounded-3xl border border-red-200 bg-white shadow-2xl p-6">
+                                <div className="flex items-start gap-3">
+                                    <div className="h-10 w-10 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                                        <UserX size={18} />
+                                    </div>
+                                    <div>
+                                        <p className="text-[10px] uppercase tracking-widest text-red-500 font-black">Encerramento Remoto</p>
+                                        <h3 className="text-lg font-black text-slate-900">Sua sessão será encerrada</h3>
+                                        <p className="text-sm text-slate-600 mt-1">
+                                            Um administrador solicitou o encerramento desta sessão.
+                                        </p>
+                                    </div>
+                                </div>
+                                <div className="mt-5 rounded-2xl border border-red-100 bg-red-50 px-4 py-3 flex items-center justify-between">
+                                    <span className="text-xs font-black uppercase tracking-wider text-red-600">Tempo restante</span>
+                                    <span className="text-xl font-black text-red-700">{remoteForceLogoutSecondsRemaining}s</span>
+                                </div>
+                                <div className="mt-5 flex justify-end">
+                                    <button
+                                        type="button"
+                                        onClick={() => { void handleRemoteForceLogoutNow(); }}
+                                        className="px-4 py-2 rounded-xl bg-red-600 text-white text-xs font-black uppercase tracking-wider hover:bg-red-700 transition"
+                                    >
+                                        Sair Agora
                                     </button>
                                 </div>
                             </div>

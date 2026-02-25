@@ -431,6 +431,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const [lastSavedReportId, setLastSavedReportId] = useState<string | null>(null);
   const [lastSavedSummary, setLastSavedSummary] = useState<StockSummaryPayload | null>(null);
   const manualSessionStartedRef = useRef(false);
+  const previousUserEmailRef = useRef<string | null>(null);
   const lastSyncTimestampRef = useRef<number>(0);
   const lastConflictCheckRef = useRef<number>(0);
   const signatureHashRef = useRef('');
@@ -598,8 +599,13 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       console.log("🔍 Attempting to load session for:", userEmail, "manualStarted:", manualSessionStartedRef.current);
 
       if (manualSessionStartedRef.current) {
-        console.log("ℹ️ Skipping load - manual session already started");
-        return;
+        const hasInMemorySession = Boolean(sessionId) || masterProducts.size > 0 || inventory.size > 0;
+        if (hasInMemorySession) {
+          console.log("ℹ️ Skipping load - manual session already started with in-memory data");
+          return;
+        }
+        console.warn("⚠️ Manual session flag was set without in-memory data. Unlocking auto-restore.");
+        manualSessionStartedRef.current = false;
       }
 
       let supabaseSession: SupabaseService.DbStockConferenceSession | null = null;
@@ -664,7 +670,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     return () => {
       isMounted = false;
     };
-  }, [userEmail, companies]);
+  }, [userEmail, companies, sessionId, masterProducts.size, inventory.size]);
 
   const persistSession = async (options?: {
     step?: AppStep;
@@ -773,10 +779,17 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   };
 
   const resetConferenceState = () => {
+    setBranch('');
+    setSelectedCompanyId('');
+    setSelectedAreaName('');
+    setPharmacist('');
+    setManager('');
     setMasterProducts(new Map());
     setBarcodeIndex(new Map());
     setInventory(new Map());
     setRecountTargets(new Set());
+    setPharmSignature(null);
+    setManagerSignature(null);
     setActiveItem(null);
     setLastScanned(null);
     setAccumulationMode(false);
@@ -789,6 +802,28 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     setErrorMsg('');
     manualSessionStartedRef.current = false;
   };
+
+  useEffect(() => {
+    const currentUser = userEmail || null;
+    const previousUser = previousUserEmailRef.current;
+    if (previousUser === null) {
+      previousUserEmailRef.current = currentUser;
+      return;
+    }
+
+    if (previousUser !== currentUser) {
+      resetConferenceState();
+      setIsLoading(false);
+      setIsSavingSession(false);
+      setIsDirty(false);
+      setErrorMsg('');
+      lastSyncTimestampRef.current = 0;
+      lastConflictCheckRef.current = 0;
+      signatureHashRef.current = '';
+    }
+
+    previousUserEmailRef.current = currentUser;
+  }, [userEmail]);
 
   const handleRestartSession = async () => {
     if (!window.confirm('Atenção: recomeçar a contagem perderá todos os itens bipados. Deseja continuar?')) {
@@ -993,6 +1028,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       } catch (e: any) {
         console.error("Erro:", e);
         setErrorMsg(e.message || "Erro desconhecido.");
+        manualSessionStartedRef.current = false;
       } finally {
         setIsLoading(false);
       }
