@@ -58,7 +58,6 @@ const AUDIT_DEPT_IDS_GLOBAL_KEY = 'audit_ids_departamento';
 const AUDIT_CAT_IDS_GLOBAL_KEY = 'audit_ids_categoria';
 const ALLOWED_IDS = GROUP_UPLOAD_IDS.map(id => Number(id));
 const FILIAIS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18];
-const STORAGE_KEY = 'audit_flow_v72_master';
 
 const GROUP_CONFIG_DEFAULTS: Record<string, string> = {
     "2000": "Medicamentos Similar",
@@ -379,16 +378,21 @@ const mergeExcelMetricsPools = (pools: any[]): any | null => {
     }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0, items: [], groupedDifferences: [] });
 };
 
+const parseCustomDraftKeyMeta = (draftKey: string): null | { batchId?: string; scopesPart: string } => {
+    const match = draftKey.match(/^custom\|([^|]*)(?:\|(.*))?$/);
+    if (!match) return null;
+    const hasNewFormat = typeof match[2] === 'string';
+    if (hasNewFormat) return { batchId: (match[1] || '').trim() || undefined, scopesPart: match[2] || '' };
+    return { batchId: undefined, scopesPart: match[1] || '' };
+};
+
 const draftKeyTouchesGroup = (draftKey: string, groupId?: string | number): boolean => {
     const target = normalizeScopeId(groupId);
     if (!target) return false;
     if (draftKey.startsWith('custom|')) {
-        // Compatibilidade: formato novo "custom|<batchId>|<scopes>"
-        // e legado "custom|<scopes>"
-        const match = draftKey.match(/^custom\|([^|]*)(?:\|(.*))?$/);
-        const scopesPart = typeof match?.[2] === 'string'
-            ? match[2]
-            : (match?.[1] || '');
+        // Compatibilidade: formato novo "custom|<batchId>|<scopes>" e legado "custom|<scopes>"
+        const meta = parseCustomDraftKeyMeta(draftKey);
+        const scopesPart = meta?.scopesPart || '';
         const scopedKeys = scopesPart.split(',').filter(Boolean);
         return scopedKeys.some(scopeKey => normalizeScopeId(scopeKey.split('|')[0]) === target);
     }
@@ -398,14 +402,20 @@ const draftKeyTouchesGroup = (draftKey: string, groupId?: string | number): bool
 
 const getExcelPoolsByGroupFromDrafts = (
     drafts: Record<string, TermForm> | undefined,
-    groupId?: string | number
+    groupId?: string | number,
+    options?: { batchId?: string }
 ) => {
+    const targetBatch = normalizeScopeId(options?.batchId);
     return Object.entries(drafts || {})
-        .filter(([key, draft]) =>
-            !!draft?.excelMetrics &&
-            !draft?.excelMetricsRemovedAt &&
-            draftKeyTouchesGroup(key, groupId)
-        )
+        .filter(([key, draft]) => {
+            if (!draft?.excelMetrics || draft?.excelMetricsRemovedAt) return false;
+            if (!draftKeyTouchesGroup(key, groupId)) return false;
+            if (!targetBatch) return true;
+            if (!key.startsWith('custom|')) return false;
+            const meta = parseCustomDraftKeyMeta(key);
+            const draftBatch = normalizeScopeId(meta?.batchId);
+            return draftBatch === targetBatch;
+        })
         .map(([, draft]) => draft!.excelMetrics)
         .filter(Boolean);
 };
@@ -558,17 +568,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 forceFreshFetch = true;
             }
 
-            const latest = forceFreshFetch
-                ? await fetchLatestAudit(selectedFilial)
-                : await CacheService.fetchWithCache<DbAuditSession>(`audit_session_${selectedFilial}`, () => fetchLatestAudit(selectedFilial), (newData) => {
-                // Se a sessão for a mesma, atualizamos os dados em background silenciosamente
-                if (newData && dbSessionId === newData.id && newData.data) {
-                    // Update data directly instead of recursive call
-                    setData(newData.data);
-                    setTermDrafts(((newData.data as any).termDrafts || {}) as Record<string, TermForm>);
-                    lastAuditUpdateRef.current = newData.updated_at || null;
-                }
-            });
+            const cacheKey = `audit_session_${selectedFilial}`;
+            const latestFromDb = await fetchLatestAudit(selectedFilial);
+            if (latestFromDb) {
+                await CacheService.set(cacheKey, latestFromDb as any);
+            }
+            const latest = latestFromDb || (!silent ? await CacheService.get<DbAuditSession>(cacheKey) : null);
 
             // Polling silencioso com mesma sessão → atualiza dados sem popups
             if (isStaleRequest()) return;
@@ -918,6 +923,42 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }
     }, [data]);
 
+    const persistAuditSession = useCallback(async (session: DbAuditSession): Promise<DbAuditSession | null> => {
+        const branch = String(session.branch || '');
+        if (!branch || !session.audit_number) return null;
+
+        const latestMeta = await fetchLatestAuditMetadata(branch);
+        const baseUpdatedAt = session.updated_at || lastAuditUpdateRef.current || null;
+        const isSameAudit = !!latestMeta && latestMeta.audit_number === session.audit_number;
+
+        if (isSameAudit && latestMeta?.updated_at && baseUpdatedAt) {
+            const remoteTs = new Date(latestMeta.updated_at).getTime();
+            const baseTs = new Date(baseUpdatedAt).getTime();
+            if (Number.isFinite(remoteTs) && Number.isFinite(baseTs) && remoteTs > baseTs + 1000) {
+                const fresh = await fetchLatestAudit(branch);
+                if (fresh?.data) {
+                    setData(fresh.data);
+                    setTermDrafts(((fresh.data as any).termDrafts || {}) as Record<string, TermForm>);
+                    setDbSessionId(fresh.id);
+                    setNextAuditNumber(fresh.audit_number);
+                    lastAuditUpdateRef.current = fresh.updated_at || latestMeta.updated_at || null;
+                    await CacheService.set(`audit_session_${branch}`, fresh as any);
+                }
+                alert("A auditoria foi atualizada por outro usuário/aba. Recarregamos os dados mais novos para evitar sobrescrita.");
+                return null;
+            }
+        }
+
+        const saved = await upsertAuditSession({
+            ...session,
+            updated_at: baseUpdatedAt || undefined
+        });
+        if (saved?.updated_at) {
+            lastAuditUpdateRef.current = saved.updated_at;
+        }
+        return saved;
+    }, []);
+
     const handleSafeExit = async () => {
         if (!selectedFilial) {
             setData(null);
@@ -949,7 +990,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 const progress = calculateProgress(data!);
 
                 // Save to Supabase
-                await upsertAuditSession({
+                const savedSession = await persistAuditSession({
                     id: dbSessionId,
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
@@ -958,6 +999,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     progress: progress,
                     user_email: userEmail
                 });
+                if (savedSession) {
+                    await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+                }
 
                 // Clear local view state to 'exit'
                 await AuditStorage.clearLocalAuditSession();
@@ -994,7 +1038,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         if (window.confirm(`ATENÇÃO: Você está prestes a FINALIZAR a auditoria Nº ${nextAuditNumber}.\n\nIsso irá concluir o processo e não permitirá mais edições.\n\nDeseja continuar?`)) {
             try {
                 setIsProcessing(true);
-                await upsertAuditSession({
+                const savedSession = await persistAuditSession({
                     id: dbSessionId,
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
@@ -1003,6 +1047,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     progress: 100,
                     user_email: userEmail
                 });
+                if (savedSession) {
+                    await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+                }
 
                 alert("Auditoria finalizada com sucesso!");
 
@@ -1290,7 +1337,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 const basePersistedData = { ...newData, termDrafts: preservedTermDrafts, sourceFiles: nextSourceFiles } as any;
                 const persistedData = applyPartialScopes(basePersistedData, safePartialStarts);
                 const progress = calculateProgress(persistedData as AuditData);
-                const savedSession = await upsertAuditSession({
+                const savedSession = await persistAuditSession({
                     id: dbSessionId,
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
@@ -1612,7 +1659,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 shouldReclassifyOpen ? safePartialStarts : []
             );
             const progress = calculateProgress(finalData);
-            const savedSession = await upsertAuditSession({
+            const savedSession = await persistAuditSession({
                 id: dbSessionId,
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
@@ -1689,7 +1736,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 termDrafts: preservedTermDrafts
             };
             const progress = calculateProgress(nextData as AuditData);
-            const savedSession = await upsertAuditSession({
+            const savedSession = await persistAuditSession({
                 id: dbSessionId,
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
@@ -2031,7 +2078,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         const scopeGroupIds = getScopeGroupIds(scope);
         const fallbackPools = scope.type === 'custom'
-            ? scopeGroupIds.flatMap(groupId => getExcelPoolsByGroupFromDrafts(termDrafts, groupId))
+            ? (scope.batchId
+                ? scopeGroupIds.flatMap(groupId => getExcelPoolsByGroupFromDrafts(termDrafts, groupId, { batchId: scope.batchId }))
+                : [])
             : (() => {
                 const targetCatKeys = new Set(
                     getScopeCategories(scope.groupId, scope.deptId, scope.catId)
@@ -2362,7 +2411,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     )
                 );
                 const progress = skus > 0 ? (doneSkus / skus) * 100 : 0;
-                const savedSession = await upsertAuditSession({
+                const savedSession = await persistAuditSession({
                     id: dbSessionId,
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
@@ -2741,7 +2790,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             if (data) {
                 const nextData = data;
 
-                const savedSession = await upsertAuditSession({
+                const savedSession = await persistAuditSession({
                     id: dbSessionId,
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
@@ -2851,7 +2900,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             if (nextData) setData(nextData);
 
             if (isMaster && nextData) {
-                const savedSession = await upsertAuditSession({
+                const savedSession = await persistAuditSession({
                     id: dbSessionId,
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
@@ -3050,7 +3099,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             try {
                 // Persistence consolidated in audit_sessions (data field)
                 const progress = calculateProgress(data || {} as any);
-                await upsertAuditSession({
+                const savedSession = await persistAuditSession({
                     id: dbSessionId,
                     branch: selectedFilial,
                     audit_number: nextAuditNumber,
@@ -3059,6 +3108,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     progress: progress,
                     user_email: userEmail
                 });
+                if (savedSession) {
+                    await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+                }
             } catch (err) {
                 console.error("Error saving term draft:", err);
             }
@@ -3409,7 +3461,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setData(nextData);
         try {
             const progress = calculateProgress(nextData);
-            await upsertAuditSession({
+            const savedSession = await persistAuditSession({
                 id: dbSessionId,
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
@@ -3418,12 +3470,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 progress: progress,
                 user_email: userEmail
             });
-            // Update localStorage immediately
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                ...nextData,
-                filial: selectedFilial,
-                inventoryNumber
-            }));
+            if (savedSession) {
+                await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+            }
             insertAppEventLog({
                 company_id: selectedCompany?.id || null,
                 branch: selectedFilial || null,
@@ -3503,7 +3552,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         try {
             // Persistence consolidated in audit_sessions (data field)
             const progress = calculateProgress(nextData);
-            await upsertAuditSession({
+            const savedSession = await persistAuditSession({
                 id: dbSessionId,
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
@@ -3512,12 +3561,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 progress: progress,
                 user_email: userEmail
             });
-            // Update localStorage immediately with the clean state
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                ...nextData,
-                filial: selectedFilial,
-                inventoryNumber
-            }));
+            if (savedSession) {
+                await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+            }
             insertAppEventLog({
                 company_id: selectedCompany?.id || null,
                 branch: selectedFilial || null,
@@ -3600,7 +3646,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         try {
             const progress = calculateProgress(nextData);
-            await upsertAuditSession({
+            const savedSession = await persistAuditSession({
                 id: dbSessionId,
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
@@ -3609,6 +3655,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 progress: progress,
                 user_email: userEmail
             });
+            if (savedSession) {
+                await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+            }
             insertAppEventLog({
                 company_id: selectedCompany?.id || null,
                 branch: selectedFilial || null,
@@ -3787,7 +3836,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         try {
             const progress = calculateProgress(nextDataWithTerms);
-            await upsertAuditSession({
+            const savedSession = await persistAuditSession({
                 id: dbSessionId,
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
@@ -3796,12 +3845,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 progress: progress,
                 user_email: userEmail
             });
-            // Update localStorage immediately
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                ...nextDataWithTerms,
-                filial: selectedFilial,
-                inventoryNumber
-            }));
+            if (savedSession) {
+                await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+            }
             insertAppEventLog({
                 company_id: selectedCompany?.id || null,
                 branch: selectedFilial || null,
@@ -4196,7 +4242,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         try {
             // Persistence consolidated in audit_sessions (data field)
             const progress = calculateProgress(nextData);
-            await upsertAuditSession({
+            const savedSession = await persistAuditSession({
                 id: dbSessionId,
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
@@ -4205,12 +4251,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 progress: progress,
                 user_email: userEmail
             });
-            // Update localStorage immediately
-            localStorage.setItem(STORAGE_KEY, JSON.stringify({
-                ...nextData,
-                filial: selectedFilial,
-                inventoryNumber
-            }));
+            if (savedSession) {
+                await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+            }
             alert("Contagens concluídas e termos personalizados zerados.");
 
         } catch (err) {
@@ -5596,3 +5639,4 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 };
 
 export default AuditModule;
+

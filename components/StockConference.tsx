@@ -1326,10 +1326,12 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       items: inventorySnapshot
     };
 
+    let reportSaved = false;
     setIsSavingStockReport(true);
     try {
       const saved = await SupabaseService.createStockConferenceReport(payload);
       if (saved) {
+        reportSaved = true;
         setLastSavedReportId(saved.id || null);
         setLastSavedSummary(summary);
         if (onReportSaved) {
@@ -1355,20 +1357,22 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       }
     } catch (error) {
       console.error('Erro ao salvar conferência de estoque:', error);
-      alert('Não foi possível salvar o relatório no Supabase. O resultado será exibido localmente.');
+      alert('Não foi possível salvar o relatório no Supabase. A conferência NÃO será descartada; tente finalizar novamente.');
     } finally {
       setIsSavingStockReport(false);
-      manualSessionStartedRef.current = false;
-      setSessionId(null);
-      if (userEmail) {
-        await StockStorage.clearLocalStockSession(userEmail);
-        try {
-          await SupabaseService.deleteStockConferenceSession(userEmail);
-        } catch (deleteError) {
-          console.warn('Falha ao limpar sessão local após finalização:', deleteError);
+      if (reportSaved) {
+        manualSessionStartedRef.current = false;
+        setSessionId(null);
+        if (userEmail) {
+          await StockStorage.clearLocalStockSession(userEmail);
+          try {
+            await SupabaseService.deleteStockConferenceSession(userEmail);
+          } catch (deleteError) {
+            console.warn('Falha ao limpar sessão local após finalização:', deleteError);
+          }
         }
+        setStep('report');
       }
-      setStep('report');
     }
   };
 
