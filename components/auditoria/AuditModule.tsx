@@ -522,6 +522,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         () => sessionStorage.getItem(CONFIRMED_SESSION_KEY) || undefined
     );
     const [isUpdatingStock, setIsUpdatingStock] = useState(false);
+    const PARTIAL_EXPIRED_ALERT_KEY = useMemo(
+        () => `audit_partial_expired_alert_${dbSessionId || selectedFilial || 'unknown'}`,
+        [dbSessionId, selectedFilial]
+    );
 
     const lastAuditUpdateRef = useRef<string | null>(null);
     const activeFilialRef = useRef<string>('');
@@ -677,9 +681,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             // Marca como confirmada
                             if (latest.id) sessionStorage.setItem(CONFIRMED_SESSION_KEY, latest.id);
                         }
-                    } else if (!data) {
+                    } else if (!data && !isUpdatingStock) {
                         // Se for polling mas não estávamos em uma auditoria, entra automaticamente
-                        setIsUpdatingStock(false);
                         setView({ level: 'groups' });
                     }
 
@@ -718,7 +721,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             console.error('Error loading audit info:', error);
             // Em caso de erro de conexão, NÃO expulsa o usuário.
         }
-    }, [selectedFilial, dbSessionId, isMaster, data]);
+    }, [selectedFilial, dbSessionId, isMaster, data, isUpdatingStock]);
 
     // Carga Inicial
     useEffect(() => {
@@ -3219,7 +3222,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         };
     }, []);
 
-    const clearPartialProgress = useCallback(async (reason?: 'expired' | 'manual' | 'invalid', discardCompleted = false) => {
+    const clearPartialProgress = useCallback(async (
+        reason?: 'expired' | 'manual' | 'invalid',
+        discardCompleted = false,
+        suppressExpiredAlert = false
+    ) => {
         if (!data?.partialStarts || data.partialStarts.length === 0) return;
         const nextData = applyPartialScopes(
             discardCompleted ? { ...data, partialCompleted: [] } : data,
@@ -3259,13 +3266,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 event_meta: { reason: reason || 'manual', discarded_completed: discardCompleted }
             }).catch(() => { });
 
-            if (reason === 'expired') {
-                alert("Contagem parcial expirada. Inicie novamente para continuar.");
+            if (reason === 'expired' && !suppressExpiredAlert && !isUpdatingStock) {
+                if (sessionStorage.getItem(PARTIAL_EXPIRED_ALERT_KEY) !== '1') {
+                    sessionStorage.setItem(PARTIAL_EXPIRED_ALERT_KEY, '1');
+                    alert("Contagem parcial expirada. Inicie novamente para continuar.");
+                }
+            } else if (reason !== 'expired') {
+                sessionStorage.removeItem(PARTIAL_EXPIRED_ALERT_KEY);
             }
         } catch (err) {
             console.error("Error clearing partial:", err);
         }
-    }, [data, dbSessionId, selectedFilial, nextAuditNumber, applyPartialScopes]);
+    }, [data, dbSessionId, selectedFilial, nextAuditNumber, applyPartialScopes, calculateProgress, isUpdatingStock, PARTIAL_EXPIRED_ALERT_KEY]);
 
     const finalizeActivePartials = useCallback(async () => {
         if (!data?.partialStarts || data.partialStarts.length === 0) return;
@@ -3363,6 +3375,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const startScopeAudit = async (groupId?: string, deptId?: string, catId?: string) => {
         if (!data) return;
+        sessionStorage.removeItem(PARTIAL_EXPIRED_ALERT_KEY);
         const scopeCatsGuard = getScopeCategories(groupId, deptId, catId).map(s => s.cat);
         const scopeAllDone = scopeCatsGuard.length > 0 && scopeCatsGuard.every(c => isDoneStatus(c.status));
         if (scopeAllDone) {
@@ -3932,25 +3945,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             return startedAt.toDateString() === now.toDateString();
         });
         if (valid.length !== data.partialStarts.length) {
-            const nextData = applyPartialScopes(data, valid);
-            setData(nextData);
-            (async () => {
-                try {
-                    const progress = calculateProgress(nextData);
-                    await upsertAuditSession({
-                        id: dbSessionId,
-                        branch: selectedFilial,
-                        audit_number: nextAuditNumber,
-                        status: 'open',
-                        data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || (data as any)?.termDrafts || termDrafts || {}) } as any,
-                        progress: progress,
-                        user_email: userEmail
-                    });
-                    alert("Contagem parcial expirada. Inicie novamente para continuar.");
-                } catch (err) {
-                    console.error("Error clearing partial:", err);
-                }
-            })();
+            void clearPartialProgress('expired', false, isUpdatingStock);
         }
 
         const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
@@ -3959,7 +3954,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             clearPartialProgress('expired');
         }, Math.max(1000, timeoutMs));
         return () => window.clearTimeout(timer);
-    }, [data?.partialStarts, applyPartialScopes, dbSessionId, selectedFilial, nextAuditNumber, clearPartialProgress, calculateProgress]);
+    }, [data?.partialStarts, clearPartialProgress, isUpdatingStock]);
 
     const openPartialTerm = (scope: { groupId?: string; deptId?: string; catId?: string }) => {
         if (!scope.groupId) return;
