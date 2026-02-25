@@ -383,8 +383,12 @@ const draftKeyTouchesGroup = (draftKey: string, groupId?: string | number): bool
     const target = normalizeScopeId(groupId);
     if (!target) return false;
     if (draftKey.startsWith('custom|')) {
-        const match = draftKey.match(/^custom\|[^|]*\|(.*)$/);
-        const scopesPart = match?.[1] || '';
+        // Compatibilidade: formato novo "custom|<batchId>|<scopes>"
+        // e legado "custom|<scopes>"
+        const match = draftKey.match(/^custom\|([^|]*)(?:\|(.*))?$/);
+        const scopesPart = typeof match?.[2] === 'string'
+            ? match[2]
+            : (match?.[1] || '');
         const scopedKeys = scopesPart.split(',').filter(Boolean);
         return scopedKeys.some(scopeKey => normalizeScopeId(scopeKey.split('|')[0]) === target);
     }
@@ -1883,10 +1887,92 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         return [scope.type, scope.groupId || '', scope.deptId || '', scope.catId || ''].join('|');
     };
 
+    const getLegacyCustomTermKey = (scope: TermScope) => {
+        if (scope.type !== 'custom') return '';
+        const customKey = (scope.customScopes || [])
+            .map(s => partialScopeKey(s))
+            .filter(Boolean)
+            .sort()
+            .join(',');
+        return customKey ? `custom|${customKey}` : '';
+    };
+
+    const upsertScopeDraft = (
+        sourceDrafts: Record<string, TermForm>,
+        scope: TermScope,
+        draft: TermForm
+    ) => {
+        const key = buildTermKey(scope);
+        const nextDrafts = { ...(sourceDrafts || {}), [key]: draft };
+        const legacyKey = getLegacyCustomTermKey(scope);
+        if (legacyKey && legacyKey !== key) {
+            delete nextDrafts[legacyKey];
+        }
+        return nextDrafts;
+    };
+
     const getScopedMetrics = useCallback((scope: { type: 'group' | 'department' | 'category', groupId: string, deptId?: string, catId?: string }) => {
         const tk = buildTermKey(scope as any);
-        const draftMetrics = termDrafts[tk]?.excelMetrics;
-        const scopedPools = getExcelPoolsByGroupFromDrafts(termDrafts, scope.groupId);
+        const directDraft = termDrafts[tk];
+        if (directDraft?.excelMetricsRemovedAt && !directDraft?.excelMetrics) return null;
+        const draftMetrics = directDraft?.excelMetrics;
+        const makeScopeCatKeys = (s: { groupId?: string; deptId?: string; catId?: string }) =>
+            new Set(
+                getScopeCategories(s.groupId, s.deptId, s.catId)
+                    .map(({ group, dept, cat }) => partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }))
+            );
+        const targetCatKeys = makeScopeCatKeys(scope as any);
+        const parseCustomDraftKey = (draftKey: string) => {
+            const match = draftKey.match(/^custom\|([^|]*)(?:\|(.*))?$/);
+            if (!match) return null as null | { batchId?: string; scopesPart: string };
+            const hasNewFormat = typeof match[2] === 'string';
+            if (hasNewFormat) return { batchId: (match[1] || '').trim() || undefined, scopesPart: match[2] || '' };
+            return { batchId: undefined, scopesPart: match[1] || '' }; // legado
+        };
+        const draftTouchesScope = (draftKey: string) => {
+            if (targetCatKeys.size === 0) return false;
+            if (draftKey.startsWith('custom|')) {
+                const meta = parseCustomDraftKey(draftKey);
+                const scopedKeys = (meta?.scopesPart || '').split(',').filter(Boolean);
+                for (const scopeKey of scopedKeys) {
+                    const [g, d, c] = scopeKey.split('|');
+                    const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+                    for (const { group, dept, cat } of expanded) {
+                        if (targetCatKeys.has(partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }))) return true;
+                    }
+                }
+                return false;
+            }
+            const [type, g, d, c] = draftKey.split('|');
+            if (!type || type === 'custom') return false;
+            const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+            for (const { group, dept, cat } of expanded) {
+                if (targetCatKeys.has(partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }))) return true;
+            }
+            return false;
+        };
+        const preferredBatchId = (data as any)?.lastPartialBatchId || undefined;
+        const scopedEntries = Object.entries(termDrafts || {})
+            .filter(([draftKey, draft]) => {
+                if (!draft?.excelMetrics || draft?.excelMetricsRemovedAt) return false;
+                if (!draftTouchesScope(draftKey)) return false;
+                return true;
+            })
+            .map(([draftKey, draft]) => ({ draftKey, draft: draft! }));
+        const hasPreferredBatchCustom = !!preferredBatchId && scopedEntries.some(({ draftKey }) => {
+            if (!draftKey.startsWith('custom|')) return false;
+            const meta = parseCustomDraftKey(draftKey);
+            return !!meta?.batchId && meta.batchId === preferredBatchId;
+        });
+        const scopedPools = scopedEntries
+            .filter(({ draftKey }) => {
+                if (!hasPreferredBatchCustom) return true;
+                if (!draftKey.startsWith('custom|')) return true;
+                const meta = parseCustomDraftKey(draftKey);
+                return !!meta?.batchId && meta.batchId === preferredBatchId;
+            })
+            .map(({ draft }) => draft.excelMetrics)
+            .filter(Boolean);
         // Prioridade: Rascunho do próprio termo > Soma dos termos do mesmo grupo
         const base = draftMetrics || mergeExcelMetricsPools(scopedPools as any[]);
 
@@ -1928,7 +2014,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             diffQty: (acc.diffQty || 0) + (curr.diffQty || 0),
             diffCost: (acc.diffCost || 0) + (curr.diffCost || 0)
         }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0 });
-    }, [data, termDrafts, buildTermKey]);
+    }, [data, termDrafts, buildTermKey, getScopeCategories]);
 
     const createDefaultTermForm = (): TermForm => ({
         inventoryNumber: inventoryNumber || data?.inventoryNumber || '',
@@ -1945,15 +2031,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const openTermModal = (scope: TermScope) => {
         const key = buildTermKey(scope);
         let draft = termDrafts[key];
-        if (!draft && scope.type === 'custom' && scope.batchId) {
-            const legacyCustomKey = (scope.customScopes || [])
-                .map(s => partialScopeKey(s))
-                .filter(Boolean)
-                .sort()
-                .join(',');
-            const legacyKey = `custom|${legacyCustomKey}`;
-            draft = termDrafts[legacyKey];
-        }
+        const legacyKey = getLegacyCustomTermKey(scope);
+        if (!draft && scope.type === 'custom' && scope.batchId && legacyKey) draft = termDrafts[legacyKey];
         const nextForm = draft
             ? (!draft.inventoryNumber && (inventoryNumber || data?.inventoryNumber)
                 ? { ...draft, inventoryNumber: inventoryNumber || data?.inventoryNumber || '' }
@@ -1965,10 +2044,69 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const scopeGroupIds = getScopeGroupIds(scope);
         const fallbackPools = scope.type === 'custom'
             ? scopeGroupIds.flatMap(groupId => getExcelPoolsByGroupFromDrafts(termDrafts, groupId))
-            : getExcelPoolsByGroupFromDrafts(termDrafts, scope.groupId);
+            : (() => {
+                const targetCatKeys = new Set(
+                    getScopeCategories(scope.groupId, scope.deptId, scope.catId)
+                        .map(({ group, dept, cat }) => partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }))
+                );
+                const parseCustomDraftKey = (draftKey: string) => {
+                    const match = draftKey.match(/^custom\|([^|]*)(?:\|(.*))?$/);
+                    if (!match) return null as null | { batchId?: string; scopesPart: string };
+                    const hasNewFormat = typeof match[2] === 'string';
+                    if (hasNewFormat) return { batchId: (match[1] || '').trim() || undefined, scopesPart: match[2] || '' };
+                    return { batchId: undefined, scopesPart: match[1] || '' };
+                };
+                const draftTouchesScope = (draftKey: string) => {
+                    if (targetCatKeys.size === 0) return false;
+                    if (draftKey.startsWith('custom|')) {
+                        const meta = parseCustomDraftKey(draftKey);
+                        const scopedKeys = (meta?.scopesPart || '').split(',').filter(Boolean);
+                        for (const scopeKey of scopedKeys) {
+                            const [g, d, c] = scopeKey.split('|');
+                            const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+                            for (const { group, dept, cat } of expanded) {
+                                if (targetCatKeys.has(partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }))) return true;
+                            }
+                        }
+                        return false;
+                    }
+                    const [type, g, d, c] = draftKey.split('|');
+                    if (!type || type === 'custom') return false;
+                    const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+                    for (const { group, dept, cat } of expanded) {
+                        if (targetCatKeys.has(partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }))) return true;
+                    }
+                    return false;
+                };
+                const preferredBatchId = (data as any)?.lastPartialBatchId || undefined;
+                const scopedEntries = Object.entries(termDrafts || {})
+                    .filter(([draftKey, draft]) => {
+                        if (!draft?.excelMetrics || draft?.excelMetricsRemovedAt) return false;
+                        if (!draftTouchesScope(draftKey)) return false;
+                        return true;
+                    })
+                    .map(([draftKey, draft]) => ({ draftKey, draft: draft! }));
+                const hasPreferredBatchCustom = !!preferredBatchId && scopedEntries.some(({ draftKey }) => {
+                    if (!draftKey.startsWith('custom|')) return false;
+                    const meta = parseCustomDraftKey(draftKey);
+                    return !!meta?.batchId && meta.batchId === preferredBatchId;
+                });
+                return scopedEntries
+                    .filter(({ draftKey }) => {
+                        if (!hasPreferredBatchCustom) return true;
+                        if (!draftKey.startsWith('custom|')) return true;
+                        const meta = parseCustomDraftKey(draftKey);
+                        return !!meta?.batchId && meta.batchId === preferredBatchId;
+                    })
+                    .map(({ draft }) => draft.excelMetrics)
+                    .filter(Boolean);
+            })();
         // Termos dependentes devem refletir o termo origem do mesmo escopo/grupo:
         // prioriza excel do próprio termo; sem ele, agrega os termos compatíveis da filial.
-        const rawPool = draft?.excelMetrics || mergeExcelMetricsPools(fallbackPools as any[]);
+        const hasExplicitRemoval = !!(draft?.excelMetricsRemovedAt && !draft?.excelMetrics);
+        const rawPool = hasExplicitRemoval
+            ? null
+            : (draft?.excelMetrics || mergeExcelMetricsPools(fallbackPools as any[]));
 
         let nextMetrics = null;
 
@@ -2192,7 +2330,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const formToSave = nextMetrics
             ? { ...nextForm, excelMetrics: nextMetrics }
             : nextForm;
-        setTermDrafts(current => ({ ...current, [key]: formToSave }));
+        setTermDrafts(current => upsertScopeDraft(current, scope as any, formToSave));
     };
 
     const updateTermForm = (updater: (prev: TermForm) => TermForm) => {
@@ -2206,10 +2344,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         termComparisonMetrics ||
                         next.excelMetrics ||
                         current[key]?.excelMetrics;
-                    return {
-                        ...current,
-                        [key]: persistedMetrics ? { ...next, excelMetrics: persistedMetrics } : next
-                    };
+                    return upsertScopeDraft(
+                        current,
+                        termModal,
+                        persistedMetrics ? { ...next, excelMetrics: persistedMetrics } : next
+                    );
                 });
             }
             return next;
@@ -2231,7 +2370,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const formToSave = persistedMetrics
                 ? { ...currentForm, excelMetrics: persistedMetrics }
                 : currentForm;
-            const nextDrafts = { ...termDrafts, [key]: formToSave };
+            const nextDrafts = upsertScopeDraft(termDrafts, currentScope, formToSave);
             const nextDataWithTerms = { ...data, termDrafts: nextDrafts } as any;
             setTermDrafts(nextDrafts);
             setData(nextDataWithTerms as AuditData);
@@ -2566,10 +2705,60 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             if (termModal && termForm) {
                 const key = buildTermKey(termModal);
                 removedExcelDraftKeysRef.current.delete(key);
-                nextDrafts = {
-                    ...termDrafts,
-                    [key]: { ...termForm, excelMetrics: payload, excelMetricsRemovedAt: undefined }
+                const mutableDrafts: Record<string, TermForm> = { ...(termDrafts || {}) };
+                const makeCatKey = (groupId?: string | number, deptId?: string | number, catId?: string | number) =>
+                    partialScopeKey({ groupId, deptId, catId });
+                const collectScopeCatKeys = (scope: { groupId?: string; deptId?: string; catId?: string }) =>
+                    getScopeCategories(scope.groupId, scope.deptId, scope.catId)
+                        .map(({ group, dept, cat }) => makeCatKey(group.id, dept.id, cat.id));
+                const targetCatKeys = new Set<string>();
+                if (termModal.type === 'custom') {
+                    (termModal.customScopes || []).forEach(scope => {
+                        collectScopeCatKeys(scope).forEach(k => targetCatKeys.add(k));
+                    });
+                } else {
+                    collectScopeCatKeys(termModal).forEach(k => targetCatKeys.add(k));
+                }
+                const keyTouchesTarget = (draftKey: string) => {
+                    if (targetCatKeys.size === 0) return draftKey === key;
+                    if (draftKey.startsWith('custom|')) {
+                        const match = draftKey.match(/^custom\|([^|]*)(?:\|(.*))?$/);
+                        const scopesPart = typeof match?.[2] === 'string'
+                            ? match[2]
+                            : (match?.[1] || '');
+                        const scopedKeys = scopesPart.split(',').filter(Boolean);
+                        for (const scopeKey of scopedKeys) {
+                            const [g, d, c] = scopeKey.split('|');
+                            const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+                            for (const { group, dept, cat } of expanded) {
+                                if (targetCatKeys.has(makeCatKey(group.id, dept.id, cat.id))) return true;
+                            }
+                        }
+                        return false;
+                    }
+                    const [type, g, d, c] = draftKey.split('|');
+                    if (!type || type === 'custom') return false;
+                    const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+                    for (const { group, dept, cat } of expanded) {
+                        if (targetCatKeys.has(makeCatKey(group.id, dept.id, cat.id))) return true;
+                    }
+                    return false;
                 };
+
+                Object.keys(mutableDrafts).forEach(draftKey => {
+                    const current = mutableDrafts[draftKey];
+                    if (!current || !keyTouchesTarget(draftKey)) return;
+                    if (current.excelMetricsRemovedAt && !current.excelMetrics) {
+                        mutableDrafts[draftKey] = { ...current, excelMetricsRemovedAt: undefined };
+                    }
+                    removedExcelDraftKeysRef.current.delete(draftKey);
+                });
+
+                nextDrafts = upsertScopeDraft(
+                    mutableDrafts,
+                    termModal,
+                    { ...termForm, excelMetrics: payload, excelMetricsRemovedAt: undefined }
+                );
                 setTermDrafts(nextDrafts);
             }
 
@@ -2641,8 +2830,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const keyTouchesTarget = (draftKey: string) => {
                 if (targetCatKeys.size === 0) return draftKey === tk;
                 if (draftKey.startsWith('custom|')) {
-                    const match = draftKey.match(/^custom\|[^|]*\|(.*)$/);
-                    const scopesPart = match?.[1] || '';
+                    // Compatibilidade: formato novo "custom|<batchId>|<scopes>"
+                    // e legado "custom|<scopes>"
+                    const match = draftKey.match(/^custom\|([^|]*)(?:\|(.*))?$/);
+                    const scopesPart = typeof match?.[2] === 'string'
+                        ? match[2]
+                        : (match?.[1] || '');
                     const scopedKeys = scopesPart.split(',').filter(Boolean);
                     for (const scopeKey of scopedKeys) {
                         const [g, d, c] = scopeKey.split('|');
@@ -2671,6 +2864,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             if (!nextDrafts[tk]) nextDrafts[tk] = { ...termForm, excelMetrics: undefined, excelMetricsRemovedAt: removedAt };
             else nextDrafts[tk] = { ...nextDrafts[tk], excelMetrics: undefined, excelMetricsRemovedAt: removedAt };
             removedExcelDraftKeysRef.current.add(tk);
+            const legacyKey = getLegacyCustomTermKey(termModal);
+            if (legacyKey && nextDrafts[legacyKey]) {
+                nextDrafts[legacyKey] = { ...nextDrafts[legacyKey], excelMetrics: undefined, excelMetricsRemovedAt: removedAt };
+                removedExcelDraftKeysRef.current.add(legacyKey);
+            }
             setTermDrafts(nextDrafts);
 
             const nextData = data ? { ...data } : null;
@@ -2871,7 +3069,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const formToPersist = persistedMetrics
                 ? { ...termForm, excelMetrics: persistedMetrics }
                 : termForm;
-            const nextDrafts = { ...termDrafts, [key]: formToPersist };
+            const nextDrafts = upsertScopeDraft(termDrafts, termModal, formToPersist);
             setTermDrafts(nextDrafts);
             try {
                 // Persistence consolidated in audit_sessions (data field)
