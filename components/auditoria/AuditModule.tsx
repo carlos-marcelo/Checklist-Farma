@@ -366,7 +366,82 @@ const mergeExcelMetricsPools = (pools: any[]): any | null => {
     const validPools = (pools || []).filter(Boolean);
     if (validPools.length === 0) return null;
     if (validPools.length === 1) return validPools[0];
-    return validPools.reduce((acc: any, curr: any) => ({
+
+    const normText = (value: unknown) =>
+        String(value ?? '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim();
+    const normCode = (value: unknown) => String(value ?? '').replace(/\D/g, '').replace(/^0+/, '');
+
+    const uniqueItems = new Map<string, any>();
+    validPools.forEach((pool) => {
+        (Array.isArray(pool.items) ? pool.items : []).forEach((it: any) => {
+            const keyObj = {
+                code: normCode(it?.code),
+                groupName: normText(it?.groupName),
+                deptName: normText(it?.deptName),
+                catName: normText(it?.catName),
+                sysQty: Number(it?.sysQty || 0),
+                countedQty: Number(it?.countedQty || 0),
+                diffQty: Number(it?.diffQty || 0),
+                sysCost: Number(it?.sysCost || 0),
+                countedCost: Number(it?.countedCost || 0),
+                diffCost: Number(it?.diffCost || 0)
+            };
+            const key = JSON.stringify(keyObj);
+            if (!uniqueItems.has(key)) uniqueItems.set(key, it);
+        });
+    });
+
+    if (uniqueItems.size > 0) {
+        const items = Array.from(uniqueItems.values());
+        const totals = items.reduce((acc: any, it: any) => ({
+            sysQty: (acc.sysQty || 0) + Number(it?.sysQty || 0),
+            sysCost: (acc.sysCost || 0) + Number(it?.sysCost || 0),
+            countedQty: (acc.countedQty || 0) + Number(it?.countedQty || 0),
+            countedCost: (acc.countedCost || 0) + Number(it?.countedCost || 0),
+            diffQty: (acc.diffQty || 0) + Number(it?.diffQty || 0),
+            diffCost: (acc.diffCost || 0) + Number(it?.diffCost || 0)
+        }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0 });
+
+        const groupedMap: Record<string, any> = {};
+        items.forEach((it: any) => {
+            const g = it?.groupName || '';
+            const d = it?.deptName || '';
+            const c = it?.catName || '';
+            const gKey = `${g}|${d}|${c}`;
+            if (!groupedMap[gKey]) {
+                groupedMap[gKey] = {
+                    groupName: g,
+                    deptName: d,
+                    catName: c,
+                    sysQty: 0,
+                    sysCost: 0,
+                    countedQty: 0,
+                    countedCost: 0,
+                    diffQty: 0,
+                    diffCost: 0
+                };
+            }
+            groupedMap[gKey].sysQty += Number(it?.sysQty || 0);
+            groupedMap[gKey].sysCost += Number(it?.sysCost || 0);
+            groupedMap[gKey].countedQty += Number(it?.countedQty || 0);
+            groupedMap[gKey].countedCost += Number(it?.countedCost || 0);
+            groupedMap[gKey].diffQty += Number(it?.diffQty || 0);
+            groupedMap[gKey].diffCost += Number(it?.diffCost || 0);
+        });
+
+        return {
+            ...totals,
+            items,
+            groupedDifferences: Object.values(groupedMap)
+        };
+    }
+
+    const fallback = validPools.reduce((acc: any, curr: any) => ({
         sysQty: (acc.sysQty || 0) + (curr.sysQty || 0),
         sysCost: (acc.sysCost || 0) + (curr.sysCost || 0),
         countedQty: (acc.countedQty || 0) + (curr.countedQty || 0),
@@ -376,6 +451,8 @@ const mergeExcelMetricsPools = (pools: any[]): any | null => {
         items: [...(acc.items || []), ...(curr.items || [])],
         groupedDifferences: [...(acc.groupedDifferences || []), ...(curr.groupedDifferences || [])]
     }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0, items: [], groupedDifferences: [] });
+
+    return fallback;
 };
 
 const parseCustomDraftKeyMeta = (draftKey: string): null | { batchId?: string; scopesPart: string } => {
