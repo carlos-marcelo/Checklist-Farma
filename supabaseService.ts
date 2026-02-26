@@ -758,8 +758,69 @@ export async function fetchStockConferenceReports(page: number = 0, pageSize: nu
   }
 }
 
+const normalizeConferenceString = (value?: string | null): string => (value || '').trim().toLowerCase();
+
+const normalizeConferenceSummary = (summary: DbStockConferenceReport['summary']) => ({
+  total: Number(summary?.total || 0),
+  matched: Number(summary?.matched || 0),
+  divergent: Number(summary?.divergent || 0),
+  pending: Number(summary?.pending || 0),
+  percent: Number(summary?.percent || 0),
+  started_at: summary?.started_at || summary?.startedAt || null,
+  ended_at: summary?.ended_at || summary?.endedAt || null
+});
+
+const normalizeConferenceItems = (items: DbStockConferenceReport['items'] = []) =>
+  items.map(item => ({
+    reduced_code: item.reduced_code,
+    barcode: item.barcode || null,
+    description: item.description || null,
+    system_qty: Number(item.system_qty || 0),
+    counted_qty: Number(item.counted_qty || 0),
+    status: item.status,
+    difference: Number(item.difference || 0),
+    last_updated: item.last_updated || null
+  }));
+
+const isDuplicatedStockConferenceReport = (candidate: DbStockConferenceReport, incoming: DbStockConferenceReport): boolean => {
+  if (normalizeConferenceString(candidate.user_email) !== normalizeConferenceString(incoming.user_email)) return false;
+  if (normalizeConferenceString(candidate.branch) !== normalizeConferenceString(incoming.branch)) return false;
+  if (normalizeConferenceString(candidate.area || null) !== normalizeConferenceString(incoming.area || null)) return false;
+  if (normalizeConferenceString(candidate.pharmacist) !== normalizeConferenceString(incoming.pharmacist)) return false;
+  if (normalizeConferenceString(candidate.manager) !== normalizeConferenceString(incoming.manager)) return false;
+
+  const candidateSummary = JSON.stringify(normalizeConferenceSummary(candidate.summary));
+  const incomingSummary = JSON.stringify(normalizeConferenceSummary(incoming.summary));
+  if (candidateSummary !== incomingSummary) return false;
+
+  const candidateItems = JSON.stringify(normalizeConferenceItems(candidate.items || []));
+  const incomingItems = JSON.stringify(normalizeConferenceItems(incoming.items || []));
+  return candidateItems === incomingItems;
+};
+
 export async function createStockConferenceReport(report: DbStockConferenceReport): Promise<DbStockConferenceReport | null> {
   try {
+    const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const { data: recentReports, error: recentError } = await supabase
+      .from('stock_conference_reports')
+      .select('*')
+      .eq('user_email', report.user_email)
+      .eq('branch', report.branch)
+      .gte('created_at', tenMinutesAgo)
+      .order('created_at', { ascending: false })
+      .limit(20);
+
+    if (recentError) throw recentError;
+
+    const duplicated = (recentReports || []).find(existing =>
+      isDuplicatedStockConferenceReport(existing as DbStockConferenceReport, report)
+    ) as DbStockConferenceReport | undefined;
+
+    if (duplicated) {
+      console.warn('⚠️ Duplicate stock conference report detected. Returning existing row:', duplicated.id);
+      return duplicated;
+    }
+
     const { data, error } = await supabase
       .from('stock_conference_reports')
       .insert([{

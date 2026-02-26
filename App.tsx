@@ -1555,12 +1555,36 @@ const App: React.FC = () => {
             const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
             return bTime - aTime;
         });
+        const dedupeById = (items: SupabaseService.DbStockConferenceReport[]) => {
+            const map = new Map<string, SupabaseService.DbStockConferenceReport>();
+            items.forEach(item => {
+                const key = String(item.id || '').trim();
+                if (!key) return;
+                const existing = map.get(key);
+                if (!existing) {
+                    map.set(key, item);
+                    return;
+                }
+                const existingTime = existing.created_at ? new Date(existing.created_at).getTime() : 0;
+                const incomingTime = item.created_at ? new Date(item.created_at).getTime() : 0;
+                if (incomingTime >= existingTime) {
+                    map.set(key, item);
+                }
+            });
+            return Array.from(map.values()).sort((a, b) => {
+                const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+                const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+                return bTime - aTime;
+            });
+        };
         if (append) {
-            setStockConferenceHistory(prev => [...prev, ...mapStockConferenceReports(sortedReports)]);
-            setStockConferenceReportsRaw(prev => [...prev, ...sortedReports]);
+            const merged = dedupeById([...stockConferenceReportsRaw, ...sortedReports]);
+            setStockConferenceHistory(mapStockConferenceReports(merged));
+            setStockConferenceReportsRaw(merged);
         } else {
-            setStockConferenceHistory(mapStockConferenceReports(sortedReports));
-            setStockConferenceReportsRaw(sortedReports);
+            const deduped = dedupeById(sortedReports);
+            setStockConferenceHistory(mapStockConferenceReports(deduped));
+            setStockConferenceReportsRaw(deduped);
         }
     };
 

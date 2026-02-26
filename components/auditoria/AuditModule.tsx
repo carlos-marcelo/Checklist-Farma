@@ -505,6 +505,35 @@ const getFinancialRepresentativity = (auditedBaseCost?: number, diffCost?: numbe
     return (diff / base) * 100;
 };
 
+const getAuditDataStrength = (auditData: AuditData | null | undefined): number => {
+    if (!auditData) return 0;
+    const groupsCount = Array.isArray(auditData.groups) ? auditData.groups.length : 0;
+    let categoriesCount = 0;
+    let productsCount = 0;
+    let doneCategories = 0;
+    (auditData.groups || []).forEach((g) => {
+        g.departments.forEach((d) => {
+            categoriesCount += d.categories.length;
+            d.categories.forEach((c) => {
+                productsCount += c.products.length;
+                if (isDoneStatus(c.status)) doneCategories += 1;
+            });
+        });
+    });
+    const termDraftsCount = Object.keys(((auditData as any)?.termDrafts || {})).length;
+    const partialStartsCount = Array.isArray((auditData as any)?.partialStarts) ? (auditData as any).partialStarts.length : 0;
+    const partialCompletedCount = Array.isArray((auditData as any)?.partialCompleted) ? (auditData as any).partialCompleted.length : 0;
+    return (
+        groupsCount * 1000 +
+        categoriesCount * 100 +
+        doneCategories * 80 +
+        productsCount +
+        termDraftsCount * 30 +
+        partialStartsCount * 20 +
+        partialCompletedCount * 20
+    );
+};
+
 const reconcileAuditStateFromCompletedScopes = (input: AuditData): AuditData => {
     const completed = Array.isArray((input as any)?.partialCompleted) ? (input as any).partialCompleted : [];
     if (!Array.isArray(input?.groups) || completed.length === 0) return input;
@@ -522,27 +551,9 @@ const reconcileAuditStateFromCompletedScopes = (input: AuditData): AuditData => 
         }))
     }));
 
-    const normalizedStarts = Array.isArray((input as any)?.partialStarts) ? (input as any).partialStarts : [];
-    const isScopeStillOpen = (scope: { groupId?: string; deptId?: string; catId?: string }) => {
-        let hasMatch = false;
-        let hasOpen = false;
-        nextGroups.forEach((g) => {
-            g.departments.forEach((d) => {
-                d.categories.forEach((c) => {
-                    if (!isPartialScopeMatch(scope, g.id, d.id, c.id)) return;
-                    hasMatch = true;
-                    if (!isDoneStatus(c.status)) hasOpen = true;
-                });
-            });
-        });
-        return hasMatch && hasOpen;
-    };
-    const sanitizedStarts = normalizedStarts.filter(isScopeStillOpen);
-
     return {
         ...input,
-        groups: nextGroups,
-        partialStarts: sanitizedStarts
+        groups: nextGroups
     };
 };
 
@@ -687,11 +698,30 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             }
 
             const cacheKey = `audit_session_${selectedFilial}`;
+            const backupKey = `audit_session_lastgood_${selectedFilial}`;
             const latestFromDb = await fetchLatestAudit(selectedFilial);
             if (latestFromDb) {
                 await CacheService.set(cacheKey, latestFromDb as any);
+                if (latestFromDb.data && getAuditDataStrength(latestFromDb.data as AuditData) > 0) {
+                    await CacheService.set(backupKey, latestFromDb as any);
+                }
             }
-            const latest = latestFromDb || (!silent ? await CacheService.get<DbAuditSession>(cacheKey) : null);
+            const cachedCurrent = !silent ? await CacheService.get<DbAuditSession>(cacheKey) : null;
+            const cachedBackup = await CacheService.get<DbAuditSession>(backupKey);
+
+            const candidates = [latestFromDb, cachedCurrent, cachedBackup].filter(Boolean) as DbAuditSession[];
+            let latest: DbAuditSession | null = null;
+            if (candidates.length > 0) {
+                latest = candidates.sort((a, b) => {
+                    if (a.audit_number !== b.audit_number) return b.audit_number - a.audit_number;
+                    const aStrength = getAuditDataStrength((a.data as AuditData) || null);
+                    const bStrength = getAuditDataStrength((b.data as AuditData) || null);
+                    if (aStrength !== bStrength) return bStrength - aStrength;
+                    const aTs = new Date(a.updated_at || 0).getTime();
+                    const bTs = new Date(b.updated_at || 0).getTime();
+                    return bTs - aTs;
+                })[0];
+            }
 
             // Polling silencioso com mesma sessão → atualiza dados sem popups
             if (isStaleRequest()) return;
@@ -728,6 +758,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 const reconciled = reconcileAuditStateFromCompletedScopes(latest.data as AuditData);
                 setData(reconciled);
                 setTermDrafts(((reconciled as any).termDrafts || {}) as Record<string, TermForm>);
+                if (getAuditDataStrength(reconciled) > 0) {
+                    await CacheService.set(backupKey, { ...latest, data: reconciled } as any);
+                }
                 return; // Dados atualizados silenciosamente, sem popups
             }
 
@@ -776,6 +809,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     setData(reconciled);
                     const draftsFromData = ((reconciled as any).termDrafts || {}) as Record<string, TermForm>;
                     setTermDrafts(draftsFromData);
+                    if (getAuditDataStrength(reconciled) > 0) {
+                        await CacheService.set(backupKey, { ...latest, data: reconciled } as any);
+                    }
                     setDbSessionId(latest.id);
 
                     if (!silent) {
@@ -1056,11 +1092,37 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const allowProgressRegression = !!options?.allowProgressRegression;
 
         const freshLatest = isSameAudit ? await fetchLatestAudit(branch) : null;
+        const incomingData = (session.data as AuditData) || null;
+        const incomingStrength = getAuditDataStrength(incomingData);
+        const remoteStrength = getAuditDataStrength((freshLatest?.data as AuditData) || null);
+        const incomingGroupsCount = Array.isArray(incomingData?.groups) ? incomingData.groups.length : 0;
+        const incomingProgress = Number(session.progress || 0);
         if (
             !allowProgressRegression &&
             freshLatest &&
             freshLatest.audit_number === session.audit_number &&
-            Number(session.progress || 0) + 0.001 < Number(freshLatest.progress || 0)
+            remoteStrength > 0 &&
+            incomingStrength < remoteStrength &&
+            (incomingStrength <= 0 || incomingGroupsCount === 0 || incomingProgress <= 0.1)
+        ) {
+            const recovered = reconcileAuditStateFromCompletedScopes(freshLatest.data as AuditData);
+            setData(recovered);
+            setTermDrafts(((recovered as any).termDrafts || {}) as Record<string, TermForm>);
+            setDbSessionId(freshLatest.id);
+            setNextAuditNumber(freshLatest.audit_number);
+            lastAuditUpdateRef.current = freshLatest.updated_at || latestMeta?.updated_at || null;
+            await CacheService.set(`audit_session_${branch}`, { ...freshLatest, data: recovered } as any);
+            await CacheService.set(`audit_session_lastgood_${branch}`, { ...freshLatest, data: recovered } as any);
+            alert("Bloqueamos uma sobrescrita de dados parciais para proteger os dados já gravados.");
+            return null;
+        }
+        if (
+            !allowProgressRegression &&
+            freshLatest &&
+            freshLatest.audit_number === session.audit_number &&
+            incomingProgress <= 0.1 &&
+            Number(freshLatest.progress || 0) >= 1 &&
+            incomingProgress + 0.001 < Number(freshLatest.progress || 0)
         ) {
             if (freshLatest?.data) {
                 const recovered = reconcileAuditStateFromCompletedScopes(freshLatest.data as AuditData);
@@ -1088,6 +1150,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     setNextAuditNumber(fresh.audit_number);
                     lastAuditUpdateRef.current = fresh.updated_at || latestMeta.updated_at || null;
                     await CacheService.set(`audit_session_${branch}`, { ...fresh, data: recovered } as any);
+                    await CacheService.set(`audit_session_lastgood_${branch}`, { ...fresh, data: recovered } as any);
                 }
                 alert("A auditoria foi atualizada por outro usuário/aba. Recarregamos os dados mais novos para evitar sobrescrita.");
                 return null;
@@ -1100,20 +1163,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         });
         if (saved?.updated_at) {
             lastAuditUpdateRef.current = saved.updated_at;
+            const reconciled = saved.data ? reconcileAuditStateFromCompletedScopes(saved.data as AuditData) : null;
+            if (reconciled && getAuditDataStrength(reconciled) > 0) {
+                await CacheService.set(`audit_session_lastgood_${branch}`, { ...saved, data: reconciled } as any);
+            }
         }
         return saved;
     }, []);
 
     const handleSafeExit = async () => {
-        if (!selectedFilial) {
-            setData(null);
-            setView({ level: 'groups' });
-            return;
-        }
-
-        // Se não for Master, não precisa confirmar nem salvar (já que não salvou nada)
-        if (!isMaster) {
-            await AuditStorage.clearLocalAuditSession();
+        const resetAuditUi = () => {
             sessionStorage.removeItem(CONFIRMED_SESSION_KEY);
             setData(null);
             setDbSessionId(undefined);
@@ -1125,48 +1184,53 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             setInitialDoneUnits(0);
             setSessionStartTime(Date.now());
             setView({ level: 'groups' });
+        };
+
+        if (!selectedFilial) {
+            resetAuditUi();
+            return;
+        }
+
+        // Se não for Master, não precisa confirmar nem salvar (já que não salvou nada)
+        if (!isMaster) {
+            resetAuditUi();
+            void AuditStorage.clearLocalAuditSession();
             return;
         }
 
         if (window.confirm("Deseja sair da auditoria? Seu progresso será salvo automaticamente e você poderá retomar depois.")) {
-            try {
-                setIsProcessing(true);
-                // Calculate current progress
-                const progress = calculateProgress(data!);
+            const snapshotData = data
+                ? ({ ...data, termDrafts: ((data as any)?.termDrafts || termDrafts || {}) } as any)
+                : null;
+            const snapshotSessionId = dbSessionId;
+            const snapshotBranch = selectedFilial;
+            const snapshotAudit = nextAuditNumber;
+            const snapshotProgress = data ? calculateProgress(data) : 0;
 
-                // Save to Supabase
-                const savedSession = await persistAuditSession({
-                    id: dbSessionId,
-                    branch: selectedFilial,
-                    audit_number: nextAuditNumber,
-                    status: 'open',
-                    data: { ...data, termDrafts: ((data as any)?.termDrafts || termDrafts || {}) } as any,
-                    progress: progress,
-                    user_email: userEmail
-                });
-                if (savedSession) {
-                    await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+            // Fecha imediatamente; persistência roda em background.
+            resetAuditUi();
+
+            if (!snapshotData || !snapshotBranch) return;
+
+            void (async () => {
+                try {
+                    const savedSession = await persistAuditSession({
+                        id: snapshotSessionId,
+                        branch: snapshotBranch,
+                        audit_number: snapshotAudit,
+                        status: 'open',
+                        data: snapshotData,
+                        progress: snapshotProgress,
+                        user_email: userEmail
+                    });
+                    if (savedSession) {
+                        await CacheService.set(`audit_session_${snapshotBranch}`, savedSession as any);
+                        await AuditStorage.clearLocalAuditSession();
+                    }
+                } catch (err) {
+                    console.error("Error saving session in background:", err);
                 }
-
-                // Clear local view state to 'exit'
-                await AuditStorage.clearLocalAuditSession();
-                sessionStorage.removeItem(CONFIRMED_SESSION_KEY);
-                setData(null);
-                setDbSessionId(undefined);
-                setSelectedFilial("");
-                setGroupFiles(createInitialGroupFiles());
-                setFileStock(null);
-                setFileDeptIds(null);
-                setFileCatIds(null);
-                setInitialDoneUnits(0);
-                setSessionStartTime(Date.now());
-                setView({ level: 'groups' });
-            } catch (err) {
-                console.error("Error saving session:", err);
-                alert("Erro ao salvar sessão. Tente novamente.");
-            } finally {
-                setIsProcessing(false);
-            }
+            })();
         }
     };
 
@@ -2525,59 +2589,67 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         });
     };
 
-    const closeTermModal = useCallback(async () => {
+    const closeTermModal = useCallback(() => {
         const currentScope = termModal;
         const currentForm = termForm;
-        if (isMaster && currentScope && currentForm && data) {
+        const currentData = data;
+        const currentDrafts = termDrafts;
+        const currentMetrics = termComparisonMetrics;
+
+        // Fecha instantaneamente; persistência roda em background.
+        setTermModal(null);
+        setTermForm(null);
+        setTermComparisonMetrics(null);
+
+        if (isMaster && currentScope && currentForm && currentData) {
             const key = buildTermKey(currentScope);
             const forceCleared = removedExcelDraftKeysRef.current.has(key);
             const persistedMetrics =
                 forceCleared
                     ? undefined
-                    : (termComparisonMetrics ||
+                    : (currentMetrics ||
                         currentForm.excelMetrics ||
-                        termDrafts[key]?.excelMetrics);
+                        currentDrafts[key]?.excelMetrics);
             const formToSave = persistedMetrics
                 ? { ...currentForm, excelMetrics: persistedMetrics }
                 : currentForm;
-            const nextDrafts = upsertScopeDraft(termDrafts, currentScope, formToSave);
-            const nextDataWithTerms = { ...data, termDrafts: nextDrafts } as any;
+            const nextDrafts = upsertScopeDraft(currentDrafts, currentScope, formToSave);
+            const nextDataWithTerms = { ...currentData, termDrafts: nextDrafts } as any;
             setTermDrafts(nextDrafts);
             setData(nextDataWithTerms as AuditData);
-            try {
-                let skus = 0;
-                let doneSkus = 0;
-                (nextDataWithTerms.groups || []).forEach((g: any) =>
-                    (g.departments || []).forEach((d: any) =>
-                        (d.categories || []).forEach((c: any) => {
-                            skus += Number(c.itemsCount || 0);
-                            if (isDoneStatus(c.status)) doneSkus += Number(c.itemsCount || 0);
-                        })
-                    )
-                );
-                const progress = skus > 0 ? (doneSkus / skus) * 100 : 0;
-                const savedSession = await persistAuditSession({
-                    id: dbSessionId,
-                    branch: selectedFilial,
-                    audit_number: nextAuditNumber,
-                    status: 'open',
-                    data: nextDataWithTerms,
-                    progress: progress,
-                    user_email: userEmail
-                });
-                if (savedSession) {
-                    await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+            void (async () => {
+                try {
+                    let skus = 0;
+                    let doneSkus = 0;
+                    (nextDataWithTerms.groups || []).forEach((g: any) =>
+                        (g.departments || []).forEach((d: any) =>
+                            (d.categories || []).forEach((c: any) => {
+                                skus += Number(c.itemsCount || 0);
+                                if (isDoneStatus(c.status)) doneSkus += Number(c.itemsCount || 0);
+                            })
+                        )
+                    );
+                    const progress = skus > 0 ? (doneSkus / skus) * 100 : 0;
+                    const savedSession = await persistAuditSession({
+                        id: dbSessionId,
+                        branch: selectedFilial,
+                        audit_number: nextAuditNumber,
+                        status: 'open',
+                        data: nextDataWithTerms,
+                        progress: progress,
+                        user_email: userEmail
+                    });
+                    if (savedSession) {
+                        await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
+                    }
+                } catch (err) {
+                    console.error("Error autosaving term draft on close:", err);
                 }
-            } catch (err) {
-                console.error("Error autosaving term draft on close:", err);
-            }
+            })();
             if (forceCleared) {
                 removedExcelDraftKeysRef.current.delete(key);
             }
         }
-        setTermModal(null);
-        setTermForm(null);
-        setTermComparisonMetrics(null);
     }, [termModal, termForm, termComparisonMetrics, isMaster, data, termDrafts, dbSessionId, selectedFilial, nextAuditNumber, userEmail]);
 
     const handleProcessTermComparisonExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -3621,7 +3693,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || (data as any)?.termDrafts || termDrafts || {}) } as any,
                 progress: progress,
                 user_email: userEmail
-            });
+            }, { allowProgressRegression: true });
             if (savedSession) {
                 await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
             }
@@ -3712,7 +3784,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || (data as any)?.termDrafts || termDrafts || {}) } as any,
                 progress: progress,
                 user_email: userEmail
-            });
+            }, { allowProgressRegression: true });
             if (savedSession) {
                 await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
             }
@@ -3741,13 +3813,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const clearActivePartialsShortcut = useCallback(async () => {
         if (!data?.partialStarts || data.partialStarts.length === 0) return;
-        if (!isMaster) {
-            alert("Apenas usuário master pode desativar contagens parciais.");
-            return;
-        }
         if (!window.confirm("Deseja desfazer todas as contagens parciais ativas?")) return;
         await clearPartialProgress('manual', false);
-    }, [data, clearPartialProgress, isMaster]);
+    }, [data, clearPartialProgress]);
 
     const startScopeAudit = async (groupId?: string, deptId?: string, catId?: string) => {
         if (!data) return;
@@ -3780,11 +3848,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const scopeCats = getScopeCategories(groupId, deptId, catId);
         const scopeKeys = scopeCats.map(({ group, dept, cat }) => partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }));
         const allSelected = scopeKeys.length > 0 && scopeKeys.every(k => catMap.has(k));
-
-        if (allSelected && !isMaster) {
-            alert("Apenas usuário master pode desativar contagens parciais.");
-            return;
-        }
 
         if (allSelected) {
             scopeKeys.forEach(k => catMap.delete(k));
@@ -4642,11 +4705,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 <div className="ml-auto flex items-center gap-2">
                                     <button
                                         onClick={clearActivePartialsShortcut}
-                                        disabled={partialInfoList.length === 0 || !isMaster}
-                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-all ${partialInfoList.length === 0 || !isMaster
+                                        disabled={partialInfoList.length === 0}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-all ${partialInfoList.length === 0
                                             ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                             : 'bg-white text-red-600 border-red-200 hover:bg-red-600 hover:text-white'}`}
-                                        title={!isMaster ? 'Apenas usuário master pode desativar' : undefined}
                                     >
                                         Desfazer Ativas
                                     </button>
@@ -4909,17 +4971,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             </button>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); startScopeAudit(group.id); }}
-                                                disabled={isComplete || (groupHasInProgress && !isMaster)}
+                                                disabled={isComplete}
                                                 className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all shadow-sm ${isComplete
                                                     ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                     : groupHasInProgress
                                                         ? 'bg-blue-600 text-white border-blue-500'
                                                         : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                                title={isComplete
-                                                    ? 'Desmarque a conclusão para iniciar parcial'
-                                                    : (groupHasInProgress
-                                                        ? (isMaster ? 'Desativar contagem parcial' : 'Apenas master pode desativar parcial')
-                                                        : (groupHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
+                                                title={isComplete ? 'Desmarque a conclusão para iniciar parcial' : (groupHasInProgress ? 'Desativar contagem parcial' : (groupHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
                                             >
                                                 <Activity className="w-5 h-5" />
                                             </button>
@@ -5005,17 +5063,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             </button>
                                             <button
                                                 onClick={() => startScopeAudit(selectedGroup?.id, dept.id)}
-                                                disabled={deptAllDone || (deptHasInProgress && !isMaster)}
+                                                disabled={deptAllDone}
                                                 className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${deptAllDone
                                                     ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                     : deptHasInProgress
                                                         ? 'bg-blue-600 text-white border-blue-500'
                                                         : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                                title={deptAllDone
-                                                    ? 'Desmarque a conclusão para iniciar parcial'
-                                                    : (deptHasInProgress
-                                                        ? (isMaster ? 'Desativar contagem parcial' : 'Apenas master pode desativar parcial')
-                                                        : (deptHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
+                                                title={deptAllDone ? 'Desmarque a conclusão para iniciar parcial' : (deptHasInProgress ? 'Desativar contagem parcial' : (deptHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
                                             >
                                                 {deptHasInProgress ? 'PAUSAR' : 'INICIAR'}
                                             </button>
@@ -5093,7 +5147,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     </button>
                                     <button
                                         onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, cat.id)}
-                                        disabled={catStatus === AuditStatus.DONE || (catStatus === AuditStatus.IN_PROGRESS && !isMaster)}
+                                        disabled={catStatus === AuditStatus.DONE}
                                         className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${catStatus === AuditStatus.DONE
                                             ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                             : catStatus === AuditStatus.IN_PROGRESS
@@ -5150,7 +5204,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         </button>
                                         <button
                                             onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
-                                            disabled={catStatus === AuditStatus.DONE || (catStatus === AuditStatus.IN_PROGRESS && !isMaster)}
+                                            disabled={catStatus === AuditStatus.DONE}
                                             className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${catStatus === AuditStatus.DONE
                                                 ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                 : catStatus === AuditStatus.IN_PROGRESS

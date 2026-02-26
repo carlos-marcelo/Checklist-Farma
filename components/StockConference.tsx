@@ -431,6 +431,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const [lastSavedReportId, setLastSavedReportId] = useState<string | null>(null);
   const [lastSavedSummary, setLastSavedSummary] = useState<StockSummaryPayload | null>(null);
   const manualSessionStartedRef = useRef(false);
+  const finalizeInFlightRef = useRef(false);
   const previousUserEmailRef = useRef<string | null>(null);
   const lastSyncTimestampRef = useRef<number>(0);
   const lastConflictCheckRef = useRef<number>(0);
@@ -1251,6 +1252,10 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   };
 
   const handleFinalize = async () => {
+    if (finalizeInFlightRef.current || isSavingStockReport) {
+      return;
+    }
+
     // 1. Strict Check: Phase 1 Completion (No Pending items allowed)
     // This applies to both Phase 1 (Initial) and Phase 2 (Recount) because recount resets items to pending.
     const pendingCount = Array.from(inventory.values()).filter((i: StockItem) => i.status === 'pending').length;
@@ -1327,6 +1332,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     };
 
     let reportSaved = false;
+    finalizeInFlightRef.current = true;
     setIsSavingStockReport(true);
     try {
       const saved = await SupabaseService.createStockConferenceReport(payload);
@@ -1359,6 +1365,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       console.error('Erro ao salvar conferência de estoque:', error);
       alert('Não foi possível salvar o relatório no Supabase. A conferência NÃO será descartada; tente finalizar novamente.');
     } finally {
+      finalizeInFlightRef.current = false;
       setIsSavingStockReport(false);
       if (reportSaved) {
         manualSessionStartedRef.current = false;
