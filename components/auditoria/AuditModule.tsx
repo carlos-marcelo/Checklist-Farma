@@ -2833,6 +2833,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     };
 
     const removeTermComparisonExcel = async () => {
+        if (!isMaster) {
+            alert("Apenas usuário master pode remover planilha do termo.");
+            return;
+        }
         setTermComparisonMetrics(null);
         const removedAt = new Date().toISOString();
         setTermForm(prev => (prev ? { ...prev, excelMetrics: undefined, excelMetricsRemovedAt: removedAt } : prev));
@@ -3592,9 +3596,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const clearActivePartialsShortcut = useCallback(async () => {
         if (!data?.partialStarts || data.partialStarts.length === 0) return;
+        if (!isMaster) {
+            alert("Apenas usuário master pode desativar contagens parciais.");
+            return;
+        }
         if (!window.confirm("Deseja desfazer todas as contagens parciais ativas?")) return;
         await clearPartialProgress('manual', false);
-    }, [data, clearPartialProgress]);
+    }, [data, clearPartialProgress, isMaster]);
 
     const startScopeAudit = async (groupId?: string, deptId?: string, catId?: string) => {
         if (!data) return;
@@ -3627,6 +3635,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const scopeCats = getScopeCategories(groupId, deptId, catId);
         const scopeKeys = scopeCats.map(({ group, dept, cat }) => partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }));
         const allSelected = scopeKeys.length > 0 && scopeKeys.every(k => catMap.has(k));
+
+        if (allSelected && !isMaster) {
+            alert("Apenas usuário master pode desativar contagens parciais.");
+            return;
+        }
 
         if (allSelected) {
             scopeKeys.forEach(k => catMap.delete(k));
@@ -3685,6 +3698,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const toggleScopeStatus = async (groupId?: string, deptId?: string, catId?: string) => {
         if (!data) return;
+        if (!isMaster) {
+            alert("Apenas usuário master pode concluir ou desativar contagens parciais.");
+            return;
+        }
 
         const scopeCats: Category[] = [];
         data.groups.forEach(g => {
@@ -4480,10 +4497,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 <div className="ml-auto flex items-center gap-2">
                                     <button
                                         onClick={clearActivePartialsShortcut}
-                                        disabled={partialInfoList.length === 0}
-                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-all ${partialInfoList.length === 0
+                                        disabled={partialInfoList.length === 0 || !isMaster}
+                                        className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest border transition-all ${partialInfoList.length === 0 || !isMaster
                                             ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                             : 'bg-white text-red-600 border-red-200 hover:bg-red-600 hover:text-white'}`}
+                                        title={!isMaster ? 'Apenas usuário master pode desativar' : undefined}
                                     >
                                         Desfazer Ativas
                                     </button>
@@ -4746,13 +4764,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             </button>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); startScopeAudit(group.id); }}
-                                                disabled={isComplete}
+                                                disabled={isComplete || (groupHasInProgress && !isMaster)}
                                                 className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all shadow-sm ${isComplete
                                                     ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                     : groupHasInProgress
                                                         ? 'bg-blue-600 text-white border-blue-500'
                                                         : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                                title={isComplete ? 'Desmarque a conclusão para iniciar parcial' : (groupHasInProgress ? 'Desativar contagem parcial' : (groupHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
+                                                title={isComplete
+                                                    ? 'Desmarque a conclusão para iniciar parcial'
+                                                    : (groupHasInProgress
+                                                        ? (isMaster ? 'Desativar contagem parcial' : 'Apenas master pode desativar parcial')
+                                                        : (groupHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
                                             >
                                                 <Activity className="w-5 h-5" />
                                             </button>
@@ -4838,13 +4860,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             </button>
                                             <button
                                                 onClick={() => startScopeAudit(selectedGroup?.id, dept.id)}
-                                                disabled={deptAllDone}
+                                                disabled={deptAllDone || (deptHasInProgress && !isMaster)}
                                                 className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${deptAllDone
                                                     ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                     : deptHasInProgress
                                                         ? 'bg-blue-600 text-white border-blue-500'
                                                         : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                                title={deptAllDone ? 'Desmarque a conclusão para iniciar parcial' : (deptHasInProgress ? 'Desativar contagem parcial' : (deptHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
+                                                title={deptAllDone
+                                                    ? 'Desmarque a conclusão para iniciar parcial'
+                                                    : (deptHasInProgress
+                                                        ? (isMaster ? 'Desativar contagem parcial' : 'Apenas master pode desativar parcial')
+                                                        : (deptHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
                                             >
                                                 {deptHasInProgress ? 'PAUSAR' : 'INICIAR'}
                                             </button>
@@ -4922,7 +4948,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     </button>
                                     <button
                                         onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, cat.id)}
-                                        disabled={catStatus === AuditStatus.DONE}
+                                        disabled={catStatus === AuditStatus.DONE || (catStatus === AuditStatus.IN_PROGRESS && !isMaster)}
                                         className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${catStatus === AuditStatus.DONE
                                             ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                             : catStatus === AuditStatus.IN_PROGRESS
@@ -4979,7 +5005,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         </button>
                                         <button
                                             onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
-                                            disabled={catStatus === AuditStatus.DONE}
+                                            disabled={catStatus === AuditStatus.DONE || (catStatus === AuditStatus.IN_PROGRESS && !isMaster)}
                                             className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${catStatus === AuditStatus.DONE
                                                 ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                 : catStatus === AuditStatus.IN_PROGRESS
@@ -5321,8 +5347,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 <>
                                         <button
                                             onClick={removeTermComparisonExcel}
-                                            className="absolute top-3 right-3 text-indigo-400 hover:text-red-500 transition-colors"
+                                            className={`absolute top-3 right-3 transition-colors ${isMaster ? 'text-indigo-400 hover:text-red-500' : 'text-slate-300 cursor-not-allowed'}`}
                                             title="Remover planilha"
+                                            disabled={!isMaster}
                                         >
                                             <X className="w-4 h-4" />
                                         </button>
