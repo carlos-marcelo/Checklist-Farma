@@ -505,6 +505,47 @@ const getFinancialRepresentativity = (auditedBaseCost?: number, diffCost?: numbe
     return (diff / base) * 100;
 };
 
+const reconcileAuditStateFromCompletedScopes = (input: AuditData): AuditData => {
+    const completed = Array.isArray((input as any)?.partialCompleted) ? (input as any).partialCompleted : [];
+    if (!Array.isArray(input?.groups) || completed.length === 0) return input;
+
+    const nextGroups = input.groups.map((g) => ({
+        ...g,
+        departments: g.departments.map((d) => ({
+            ...d,
+            categories: d.categories.map((c) => {
+                const current = normalizeAuditStatus(c.status);
+                if (current === AuditStatus.DONE) return { ...c, status: current };
+                const doneByCompleted = completed.some((p: any) => isPartialScopeMatch(p, g.id, d.id, c.id));
+                return { ...c, status: doneByCompleted ? AuditStatus.DONE : current };
+            })
+        }))
+    }));
+
+    const normalizedStarts = Array.isArray((input as any)?.partialStarts) ? (input as any).partialStarts : [];
+    const isScopeStillOpen = (scope: { groupId?: string; deptId?: string; catId?: string }) => {
+        let hasMatch = false;
+        let hasOpen = false;
+        nextGroups.forEach((g) => {
+            g.departments.forEach((d) => {
+                d.categories.forEach((c) => {
+                    if (!isPartialScopeMatch(scope, g.id, d.id, c.id)) return;
+                    hasMatch = true;
+                    if (!isDoneStatus(c.status)) hasOpen = true;
+                });
+            });
+        });
+        return hasMatch && hasOpen;
+    };
+    const sanitizedStarts = normalizedStarts.filter(isScopeStillOpen);
+
+    return {
+        ...input,
+        groups: nextGroups,
+        partialStarts: sanitizedStarts
+    };
+};
+
 const ExcelMetricsDashboard: React.FC<{
     metrics: {
         sysQty: number;
@@ -684,8 +725,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         });
                     });
                 }
-                setData(latest.data);
-                setTermDrafts(((latest.data as any).termDrafts || {}) as Record<string, TermForm>);
+                const reconciled = reconcileAuditStateFromCompletedScopes(latest.data as AuditData);
+                setData(reconciled);
+                setTermDrafts(((reconciled as any).termDrafts || {}) as Record<string, TermForm>);
                 return; // Dados atualizados silenciosamente, sem popups
             }
 
@@ -730,8 +772,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             });
                         });
                     }
-                    setData(latest.data);
-                    const draftsFromData = ((latest.data as any).termDrafts || {}) as Record<string, TermForm>;
+                    const reconciled = reconcileAuditStateFromCompletedScopes(latest.data as AuditData);
+                    setData(reconciled);
+                    const draftsFromData = ((reconciled as any).termDrafts || {}) as Record<string, TermForm>;
                     setTermDrafts(draftsFromData);
                     setDbSessionId(latest.id);
 
@@ -1000,26 +1043,51 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }
     }, [data]);
 
-    const persistAuditSession = useCallback(async (session: DbAuditSession): Promise<DbAuditSession | null> => {
+    const persistAuditSession = useCallback(async (
+        session: DbAuditSession,
+        options?: { allowProgressRegression?: boolean }
+    ): Promise<DbAuditSession | null> => {
         const branch = String(session.branch || '');
         if (!branch || !session.audit_number) return null;
 
         const latestMeta = await fetchLatestAuditMetadata(branch);
         const baseUpdatedAt = session.updated_at || lastAuditUpdateRef.current || null;
         const isSameAudit = !!latestMeta && latestMeta.audit_number === session.audit_number;
+        const allowProgressRegression = !!options?.allowProgressRegression;
+
+        const freshLatest = isSameAudit ? await fetchLatestAudit(branch) : null;
+        if (
+            !allowProgressRegression &&
+            freshLatest &&
+            freshLatest.audit_number === session.audit_number &&
+            Number(session.progress || 0) + 0.001 < Number(freshLatest.progress || 0)
+        ) {
+            if (freshLatest?.data) {
+                const recovered = reconcileAuditStateFromCompletedScopes(freshLatest.data as AuditData);
+                setData(recovered);
+                setTermDrafts(((recovered as any).termDrafts || {}) as Record<string, TermForm>);
+                setDbSessionId(freshLatest.id);
+                setNextAuditNumber(freshLatest.audit_number);
+                lastAuditUpdateRef.current = freshLatest.updated_at || latestMeta?.updated_at || null;
+                await CacheService.set(`audit_session_${branch}`, { ...freshLatest, data: recovered } as any);
+            }
+            alert("Bloqueamos uma sobrescrita de progresso antigo para proteger contagens finalizadas.");
+            return null;
+        }
 
         if (isSameAudit && latestMeta?.updated_at && baseUpdatedAt) {
             const remoteTs = new Date(latestMeta.updated_at).getTime();
             const baseTs = new Date(baseUpdatedAt).getTime();
             if (Number.isFinite(remoteTs) && Number.isFinite(baseTs) && remoteTs > baseTs + 1000) {
-                const fresh = await fetchLatestAudit(branch);
+                const fresh = freshLatest || await fetchLatestAudit(branch);
                 if (fresh?.data) {
-                    setData(fresh.data);
-                    setTermDrafts(((fresh.data as any).termDrafts || {}) as Record<string, TermForm>);
+                    const recovered = reconcileAuditStateFromCompletedScopes(fresh.data as AuditData);
+                    setData(recovered);
+                    setTermDrafts(((recovered as any).termDrafts || {}) as Record<string, TermForm>);
                     setDbSessionId(fresh.id);
                     setNextAuditNumber(fresh.audit_number);
                     lastAuditUpdateRef.current = fresh.updated_at || latestMeta.updated_at || null;
-                    await CacheService.set(`audit_session_${branch}`, fresh as any);
+                    await CacheService.set(`audit_session_${branch}`, { ...fresh, data: recovered } as any);
                 }
                 alert("A auditoria foi atualizada por outro usuário/aba. Recarregamos os dados mais novos para evitar sobrescrita.");
                 return null;
@@ -1744,7 +1812,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 data: persistedData,
                 progress: progress,
                 user_email: userEmail
-            });
+            }, { allowProgressRegression: !!shouldReclassifyOpen });
             if (!savedSession) {
                 throw new Error("Falha ao salvar auditoria inicial no Supabase.");
             }
@@ -3941,7 +4009,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 data: nextDataWithTerms,
                 progress: progress,
                 user_email: userEmail
-            });
+            }, { allowProgressRegression: allDone });
             if (savedSession) {
                 await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
             }
@@ -4327,7 +4395,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || termDrafts || {}) } as any,
                 progress: progress,
                 user_email: userEmail
-            });
+            }, { allowProgressRegression: true });
             if (savedSession) {
                 await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
             }

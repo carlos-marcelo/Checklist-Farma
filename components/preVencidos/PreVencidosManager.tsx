@@ -157,9 +157,12 @@ const normalizeReducedCode = (value?: string) => {
 };
 
 const buildSetupDraftKey = (email: string) => `PV_SETUP_DRAFT_${(email || '').trim().toLowerCase()}`;
-const GLOBAL_BASE_CACHE_TTL_MS = 60 * 1000;
-const BRANCH_FETCH_COOLDOWN_MS = 5 * 1000;
-const PV_GLOBAL_MODULE_KEYS = ['shared_cadastro_produtos', 'pre_dcb_base'] as const;
+  const GLOBAL_BASE_CACHE_TTL_MS = 60 * 1000;
+  const BRANCH_FETCH_COOLDOWN_MS = 5 * 1000;
+  const LOCAL_REPORTS_LOAD_TIMEOUT_MS = 1500;
+  const REPORTS_SYNC_WATCHDOG_MS = 15000;
+  const BRANCH_RECORDS_FETCH_TIMEOUT_MS = 12000;
+  const PV_GLOBAL_MODULE_KEYS = ['shared_cadastro_produtos', 'pre_dcb_base'] as const;
 
 const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   userEmail,
@@ -329,13 +332,22 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }));
   }, []);
 
+  const fetchPVBranchRecordsWithTimeout = useCallback(async (companyId: string, branch: string) => {
+    return Promise.race([
+      fetchPVBranchRecords(companyId, branch),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Timeout ao carregar registros da filial PV')), BRANCH_RECORDS_FETCH_TIMEOUT_MS);
+      })
+    ]);
+  }, []);
+
   const reloadBranchRecords = useCallback(async (companyId?: string | null, branch?: string | null) => {
     const cid = String(companyId || '').trim();
     const br = String(branch || '').trim();
     if (!cid || !br) return { ok: false, count: 0 };
     setConnectionStatus('syncing');
     try {
-      const records = await CacheService.fetchWithCache(`pv_records_${cid}_${br}`, () => fetchPVBranchRecords(cid, br), (data) => {
+      const records = await CacheService.fetchWithCache(`pv_records_${cid}_${br}`, () => fetchPVBranchRecordsWithTimeout(cid, br), (data) => {
         if (data) setPvRecords(mapDbRecordsToPV(data));
       });
       if (records) setPvRecords(mapDbRecordsToPV(records));
@@ -346,7 +358,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       setConnectionStatus('offline');
       return { ok: false, count: 0 };
     }
-  }, [mapDbRecordsToPV]);
+  }, [fetchPVBranchRecordsWithTimeout, mapDbRecordsToPV]);
 
   const decodeGlobalFileToBrowserFile = useCallback((file: {
     file_name: string;
@@ -706,8 +718,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       }
       reportsSyncInFlightRef.current.add(syncKey);
       try {
-        // 1. Tentar carregar localmente primeiro para velocidade
-        const storedReports = await loadLocalPVReports(userEmail);
+        // 1. Tentar carregar localmente primeiro para velocidade.
+        // Em alguns ambientes (tracking prevention/storage policies), leitura local pode travar.
+        // Não deixamos a sincronização presa aguardando indefinidamente.
+        let storedReports: Awaited<ReturnType<typeof loadLocalPVReports>> = null;
+        try {
+          storedReports = await Promise.race([
+            loadLocalPVReports(userEmail),
+            new Promise<null>((resolve) => {
+              setTimeout(() => resolve(null), LOCAL_REPORTS_LOAD_TIMEOUT_MS);
+            })
+          ]);
+        } catch (error) {
+          console.warn('Falha ao carregar cache local de relatórios PV:', error);
+          storedReports = null;
+        }
         if (cancelled) return;
 
         const localSystem = storedReports?.systemProducts || [];
@@ -885,6 +910,27 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     };
   }, [userEmail, setupDraftInfo?.companyId, setupDraftInfo?.filial, sessionInfo?.companyId, sessionInfo?.filial, decodeGlobalFileToBrowserFile, fetchGlobalBaseFilesCached]);
 
+  useEffect(() => {
+    const hasReportsContextForWatchdog = !!(
+      setupDraftInfo?.companyId ||
+      sessionInfo?.companyId
+    ) && !!(
+      setupDraftInfo?.filial ||
+      sessionInfo?.filial
+    );
+    if (!hasReportsContextForWatchdog) return;
+    if (isInitialSyncDone) return;
+    if (reportsSyncStatus !== 'idle' && reportsSyncStatus !== 'loading') return;
+
+    const timeout = setTimeout(() => {
+      setReportsSyncStatus('error');
+      setIsInitialSyncDone(true);
+      console.warn('[PV Sync] Watchdog: liberação de hidratação após timeout.');
+    }, REPORTS_SYNC_WATCHDOG_MS);
+
+    return () => clearTimeout(timeout);
+  }, [setupDraftInfo?.companyId, setupDraftInfo?.filial, sessionInfo?.companyId, sessionInfo?.filial, isInitialSyncDone, reportsSyncStatus]);
+
   const applySessionFromData = useCallback((session: DbPVSession, preferredView?: string) => {
     const data = session.session_data || {};
     setPvSessionId(session.id || null);
@@ -1014,7 +1060,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     const loadRecords = async () => {
       setConnectionStatus('syncing');
       try {
-        const records = await fetchPVBranchRecords(sessionInfo.companyId, sessionInfo.filial!);
+        const records = await fetchPVBranchRecordsWithTimeout(sessionInfo.companyId, sessionInfo.filial!);
         if (isMounted) {
           if (records && records.length > 0) {
             setPvRecords(mapDbRecordsToPV(records));
@@ -1044,7 +1090,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     loadRecords();
 
     return () => { isMounted = false; };
-  }, [sessionInfo?.companyId, sessionInfo?.filial, mapDbRecordsToPV]); // Depend only on context changes
+  }, [sessionInfo?.companyId, sessionInfo?.filial, fetchPVBranchRecordsWithTimeout, mapDbRecordsToPV]); // Depend only on context changes
 
   useEffect(() => {
     if (systemProducts.length > 0 || dcbBaseProducts.length > 0) {
@@ -3254,7 +3300,9 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     // Se já existe contexto de filial/empresa, só libera após carregar tudo.
     if (hasReportsContext) {
       if (!isInitialSyncDone) return false;
-      if (reportsSyncStatus !== 'ready') return false;
+      // Evita lock infinito da tela de sincronização.
+      // Se concluiu tentativa inicial (ready/missing/error), liberamos a UI.
+      if (reportsSyncStatus === 'idle' || reportsSyncStatus === 'loading') return false;
     }
 
     if (hasBranchContext && !hasLoadedInitialBranchRecords) return false;
