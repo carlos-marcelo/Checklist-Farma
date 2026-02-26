@@ -3453,6 +3453,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         discardCompleted = false,
         suppressExpiredAlert = false
     ) => {
+        // Regra de segurança: nunca mais limpar automaticamente por "expiração".
+        // Contagens finalizadas não podem ser afetadas por esse fluxo.
+        if (reason === 'expired') return;
         if (!data?.partialStarts || data.partialStarts.length === 0) return;
         const nextData = applyPartialScopes(
             discardCompleted ? { ...data, partialCompleted: [] } : data,
@@ -4155,26 +4158,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         return Array.from(byKey.values());
     }, [data]);
-
-    useEffect(() => {
-        if (!data?.partialStarts || data.partialStarts.length === 0) return;
-        const now = new Date();
-        const valid = data.partialStarts.filter(p => {
-            const startedAt = new Date(p.startedAt);
-            if (isNaN(startedAt.getTime())) return false;
-            return startedAt.toDateString() === now.toDateString();
-        });
-        if (valid.length !== data.partialStarts.length) {
-            void clearPartialProgress('expired', false, isUpdatingStock);
-        }
-
-        const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
-        const timeoutMs = midnight.getTime() - Date.now() + 1000;
-        const timer = window.setTimeout(() => {
-            clearPartialProgress('expired');
-        }, Math.max(1000, timeoutMs));
-        return () => window.clearTimeout(timer);
-    }, [data?.partialStarts, clearPartialProgress, isUpdatingStock]);
 
     const openPartialTerm = (scope: { groupId?: string; deptId?: string; catId?: string }) => {
         if (!scope.groupId) return;
