@@ -709,18 +709,24 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const cachedCurrent = !silent ? await CacheService.get<DbAuditSession>(cacheKey) : null;
             const cachedBackup = await CacheService.get<DbAuditSession>(backupKey);
 
-            const candidates = [latestFromDb, cachedCurrent, cachedBackup].filter(Boolean) as DbAuditSession[];
             let latest: DbAuditSession | null = null;
-            if (candidates.length > 0) {
-                latest = candidates.sort((a, b) => {
-                    if (a.audit_number !== b.audit_number) return b.audit_number - a.audit_number;
-                    const aStrength = getAuditDataStrength((a.data as AuditData) || null);
-                    const bStrength = getAuditDataStrength((b.data as AuditData) || null);
-                    if (aStrength !== bStrength) return bStrength - aStrength;
-                    const aTs = new Date(a.updated_at || 0).getTime();
-                    const bTs = new Date(b.updated_at || 0).getTime();
-                    return bTs - aTs;
-                })[0];
+            if (latestFromDb) {
+                // Security-first: trust the latest server snapshot and use cache only as fallback.
+                // This avoids resurrecting stale partial scopes/terms from local backups.
+                latest = latestFromDb;
+            } else {
+                const fallbackCandidates = [cachedCurrent, cachedBackup].filter(Boolean) as DbAuditSession[];
+                if (fallbackCandidates.length > 0) {
+                    latest = fallbackCandidates.sort((a, b) => {
+                        if (a.audit_number !== b.audit_number) return b.audit_number - a.audit_number;
+                        const aTs = new Date(a.updated_at || 0).getTime();
+                        const bTs = new Date(b.updated_at || 0).getTime();
+                        if (aTs !== bTs) return bTs - aTs;
+                        const aStrength = getAuditDataStrength((a.data as AuditData) || null);
+                        const bStrength = getAuditDataStrength((b.data as AuditData) || null);
+                        return bStrength - aStrength;
+                    })[0];
+                }
             }
 
             // Polling silencioso com mesma sessão → atualiza dados sem popups
@@ -3649,7 +3655,32 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     }, []);
 
     const applyPartialScopes = useCallback((base: AuditData, partials: Array<{ startedAt: string; groupId?: string; deptId?: string; catId?: string }>) => {
-        const normalizedPartials = partials.filter(p => !!p.startedAt);
+        const partialMap = new Map<string, { startedAt: string; groupId?: string; deptId?: string; catId?: string }>();
+        (partials || []).forEach(p => {
+            if (!p?.startedAt) return;
+            base.groups.forEach(g => {
+                if (!isPartialScopeMatch(p, g.id)) return;
+                g.departments.forEach(d => {
+                    if (!isPartialScopeMatch(p, g.id, d.id)) return;
+                    d.categories.forEach(c => {
+                        if (!isPartialScopeMatch(p, g.id, d.id, c.id)) return;
+                        const current = normalizeAuditStatus(c.status);
+                        if (current === AuditStatus.DONE) return;
+                        const key = partialScopeKey({ groupId: g.id, deptId: d.id, catId: c.id });
+                        const existing = partialMap.get(key);
+                        if (!existing) {
+                            partialMap.set(key, {
+                                startedAt: p.startedAt,
+                                groupId: normalizeScopeId(g.id),
+                                deptId: normalizeScopeId(d.id),
+                                catId: normalizeScopeId(c.id)
+                            });
+                        }
+                    });
+                });
+            });
+        });
+        const normalizedPartials = Array.from(partialMap.values());
         return {
             ...base,
             partialStarts: normalizedPartials,
@@ -3820,10 +3851,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const startScopeAudit = async (groupId?: string, deptId?: string, catId?: string) => {
         if (!data) return;
         sessionStorage.removeItem(PARTIAL_EXPIRED_ALERT_KEY);
-        const scopeCatsGuard = getScopeCategories(groupId, deptId, catId).map(s => s.cat);
-        const scopeAllDone = scopeCatsGuard.length > 0 && scopeCatsGuard.every(c => isDoneStatus(c.status));
-        if (scopeAllDone) {
-            alert("Para iniciar contagem parcial, primeiro desmarque a conclusão.");
+        const scopeCatsGuard = getScopeCategories(groupId, deptId, catId);
+        const scopeOpenCats = scopeCatsGuard.filter(({ cat }) => !isDoneStatus(cat.status));
+        if (scopeOpenCats.length === 0) {
+            alert("Este escopo já está 100% finalizado. A contagem parcial só pode incluir categorias pendentes.");
             return;
         }
         const nowIso = new Date().toISOString();
@@ -3833,6 +3864,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         existing.forEach(p => {
             const expanded = getScopeCategories(p.groupId, p.deptId, p.catId);
             expanded.forEach(({ group, dept, cat }) => {
+                if (isDoneStatus(cat.status)) return;
                 const key = partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id });
                 if (!catMap.has(key)) {
                     catMap.set(key, {
@@ -3845,7 +3877,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             });
         });
 
-        const scopeCats = getScopeCategories(groupId, deptId, catId);
+        const scopeCats = scopeOpenCats;
         const scopeKeys = scopeCats.map(({ group, dept, cat }) => partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }));
         const allSelected = scopeKeys.length > 0 && scopeKeys.every(k => catMap.has(k));
 
@@ -3942,19 +3974,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             });
         });
 
-        const msg = allDone
-            ? "Tem certeza que deseja desmarcar? Isso vai remover os termos e zerar no Supabase."
-            : "Tem certeza que deseja finalizar e gravar o estoque no Supabase?";
-
-        if (!window.confirm(msg)) return;
+        const isUnmarkFlow = allDone;
+        if (isUnmarkFlow) {
+            if (!window.confirm("Tem certeza que deseja desmarcar este escopo finalizado?")) return;
+            const typed = window.prompt("Confirmação de segurança: digite DESMARCAR para continuar.");
+            if ((typed || '').trim().toUpperCase() !== 'DESMARCAR') return;
+        } else {
+            if (!window.confirm("Tem certeza que deseja finalizar e gravar o estoque no Supabase?")) return;
+        }
 
         const targetScopeCatKeys = new Set(
             getScopeCategories(groupId, deptId, catId).map(({ group, dept, cat }) =>
                 partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id })
             )
         );
-        const makeCatKey = (g?: string | number, d?: string | number, c?: string | number) =>
-            partialScopeKey({ groupId: g, deptId: d, catId: c });
         const entryTouchesTargetScope = (entry: { groupId?: string; deptId?: string; catId?: string }) => {
             if (targetScopeCatKeys.size === 0) return scopeContainsPartial(entry, groupId, deptId, catId);
             const expanded = getScopeCategories(entry.groupId, entry.deptId, entry.catId);
@@ -3964,38 +3997,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             }
             return false;
         };
-        const draftTouchesTargetScope = (draftKey: string) => {
-            if (targetScopeCatKeys.size === 0) return false;
-            if (draftKey.startsWith('custom|')) {
-                const match = draftKey.match(/^custom\|[^|]*\|(.*)$/);
-                const scopesPart = match?.[1] || '';
-                const scopedKeys = scopesPart.split(',').filter(Boolean);
-                for (const scopeKey of scopedKeys) {
-                    const [g, d, c] = scopeKey.split('|');
-                    const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
-                    for (const { group, dept, cat } of expanded) {
-                        if (targetScopeCatKeys.has(makeCatKey(group.id, dept.id, cat.id))) return true;
-                    }
-                }
-                return false;
-            }
-            const [type, g, d, c] = draftKey.split('|');
-            if (!type || type === 'custom') return false;
-            const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
-            for (const { group, dept, cat } of expanded) {
-                if (targetScopeCatKeys.has(makeCatKey(group.id, dept.id, cat.id))) return true;
-            }
-            return false;
-        };
-
         const existingPartials = data?.partialStarts || [];
         const filteredPartials = existingPartials.filter(p => !entryTouchesTargetScope(p));
-        const baseCompleted = allDone
+        const baseCompleted = isUnmarkFlow
             ? (data.partialCompleted || []).filter(p => !entryTouchesTargetScope(p))
             : (data.partialCompleted || []);
         let nextCompleted = baseCompleted;
         let nextBatchId = data.lastPartialBatchId;
-        if (!allDone) {
+        if (isUnmarkFlow) {
+            nextBatchId = getLatestBatchId(baseCompleted);
+        } else {
             const completedAt = new Date().toISOString();
             const batchId = createBatchId();
             const scopeEntry = {
@@ -4010,8 +4021,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             map.set(partialCompletedKey(scopeEntry), scopeEntry);
             nextCompleted = Array.from(map.values());
             nextBatchId = batchId;
-        } else {
-            nextBatchId = getLatestBatchId(baseCompleted);
         }
 
         const nextDataRaw: AuditData = {
@@ -4025,15 +4034,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     ...g,
                     departments: g.departments.map(d => {
                         if (deptId && d.id !== deptId) return d;
-                        let targetCats = d.categories;
-                        if (catId) targetCats = d.categories.filter(c => c.id === catId);
-                        const allDone = targetCats.every(c => isDoneStatus(c.status));
-                        const newStatus = allDone ? AuditStatus.TODO : AuditStatus.DONE;
                         return {
                             ...d,
                             categories: d.categories.map(c => {
                                 if (catId && c.id !== catId) return c;
-                                return { ...c, status: newStatus };
+                                if (isUnmarkFlow) return { ...c, status: AuditStatus.TODO };
+                                if (isDoneStatus(c.status)) return c;
+                                return { ...c, status: AuditStatus.DONE };
                             })
                         };
                     })
@@ -4042,22 +4049,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         };
 
         const nextData = applyPartialScopes(nextDataRaw, filteredPartials);
-        const removedAt = new Date().toISOString();
-        let nextDrafts = termDrafts;
-        if (allDone) {
-            const mutableDrafts: Record<string, TermForm> = { ...(termDrafts || {}) };
-            Object.keys(mutableDrafts).forEach(draftKey => {
-                if (!draftTouchesTargetScope(draftKey)) return;
-                mutableDrafts[draftKey] = {
-                    ...mutableDrafts[draftKey],
-                    excelMetrics: undefined,
-                    excelMetricsRemovedAt: removedAt
-                };
-            });
-            nextDrafts = mutableDrafts;
-            setTermDrafts(nextDrafts);
-            setTermComparisonMetrics(null);
-        }
+        const nextDrafts = termDrafts;
 
         const nextDataWithTerms = { ...nextData, termDrafts: nextDrafts } as any;
         setData(nextDataWithTerms);
@@ -4072,7 +4064,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 data: nextDataWithTerms,
                 progress: progress,
                 user_email: userEmail
-            }, { allowProgressRegression: allDone });
+            }, { allowProgressRegression: isUnmarkFlow });
             if (savedSession) {
                 await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
             }
@@ -4083,16 +4075,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 user_email: userEmail,
                 user_name: userName || null,
                 app: 'auditoria',
-                event_type: allDone ? 'audit_partial_pause' : 'audit_partial_finalize',
+                event_type: isUnmarkFlow ? 'audit_partial_pause' : 'audit_partial_finalize',
                 entity_type: 'partial_scope',
                 entity_id: `${groupId || ''}:${deptId || ''}:${catId || ''}`,
                 status: 'success',
                 success: true,
                 source: 'web',
-                event_meta: { groupId, deptId, catId, action: allDone ? 'unmark' : 'finalize' }
+                event_meta: { groupId, deptId, catId, action: isUnmarkFlow ? 'unmark' : 'finalize' }
             }).catch(() => { });
-            alert(allDone
-                ? "Contagem concluída removida e zerada no Supabase."
+            alert(isUnmarkFlow
+                ? "Escopo desmarcado com sucesso."
                 : "Estoque gravado no Supabase com sucesso!");
 
         } catch (err) {
@@ -4412,63 +4404,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const resetPartialHistory = useCallback(async () => {
         if (!data) return;
-        if (!isMaster) {
-            alert("Apenas usuário master pode zerar termos e contagens concluídas.");
-            return;
-        }
-        if (!window.confirm("Tem certeza que deseja zerar TODAS as contagens concluídas e termos personalizados desta auditoria?")) return;
-
-        const filteredDrafts: Record<string, TermForm> = {};
-
-        const resetGroups = data.groups.map(g => ({
-            ...g,
-            departments: g.departments.map(d => ({
-                ...d,
-                categories: d.categories.map(c => ({
-                    ...c,
-                    status: AuditStatus.TODO
-                }))
-            }))
-        }));
-
-        const nextData: AuditData = {
-            ...data,
-            groups: resetGroups,
-            partialStarts: [],
-            partialCompleted: [],
-            lastPartialBatchId: undefined,
-            termDrafts: filteredDrafts
-        };
-
-        setTermDrafts(filteredDrafts);
-        setData(nextData);
-        setInitialDoneUnits(0);
-        setTermModal(null);
-        setTermForm(null);
-        setTermComparisonMetrics(null);
-
-        try {
-            // Persistence consolidated in audit_sessions (data field)
-            const progress = calculateProgress(nextData);
-            const savedSession = await persistAuditSession({
-                id: dbSessionId,
-                branch: selectedFilial,
-                audit_number: nextAuditNumber,
-                status: 'open',
-                data: { ...nextData, termDrafts: ((nextData as any)?.termDrafts || termDrafts || {}) } as any,
-                progress: progress,
-                user_email: userEmail
-            }, { allowProgressRegression: true });
-            if (savedSession) {
-                await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
-            }
-            alert("Contagens concluídas e termos personalizados zerados.");
-
-        } catch (err) {
-            console.error("Error resetting partial history:", err);
-            alert("Erro ao zerar no Supabase. Os dados locais foram limpos.");
-        }
-    }, [data, isMaster, termDrafts, selectedFilial, nextAuditNumber, dbSessionId, calculateProgress]);
+        alert("Proteção ativa: não é permitido zerar contagens finalizadas nem termos.");
+    }, [data]);
 
     const batchSummaryList = useMemo(() => {
         if (!data?.partialCompleted || data.partialCompleted.length === 0) return [];
