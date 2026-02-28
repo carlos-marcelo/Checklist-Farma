@@ -639,7 +639,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [termModal, setTermModal] = useState<TermScope | null>(null);
     const [termForm, setTermForm] = useState<TermForm | null>(null);
     const [termDrafts, setTermDrafts] = useState<Record<string, TermForm>>({});
-    const [termComparisonMetrics, setTermComparisonMetrics] = useState<{
+    const [rawTermComparisonMetrics, setTermComparisonMetrics] = useState<{
         sysQty: number;
         sysCost: number;
         countedQty: number;
@@ -649,6 +649,47 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         items: any[];
         groupedDifferences?: any[];
     } | null>(null);
+
+    const termComparisonMetrics = useMemo(() => {
+        if (!rawTermComparisonMetrics) return null;
+
+        const metadataKeywords = [
+            'filial:', 'grupo de produtos:', 'departamento:', 'categoria:',
+            'tipo de produto:', 'grupo de preço:', 'início contagem:',
+            'conferência de estoque', 'código', 'página 1 de', 'produto:'
+        ];
+
+        const isMetadataRow = (item: any) => {
+            const codigo = String(item.code || '').trim().toLowerCase();
+            const descricao = String(item.description || '').trim().toLowerCase();
+
+            if (metadataKeywords.some(keyword => codigo.startsWith(keyword) || descricao.startsWith(keyword))) {
+                return true;
+            }
+            if ((!codigo && !descricao) || codigo === '-' || descricao === '-' || (codigo === '' && descricao === '-')) {
+                return true;
+            }
+            return false;
+        };
+
+        const newItems = (rawTermComparisonMetrics.items || []).filter((item: any) => !isMetadataRow(item));
+
+        const newGroups = (rawTermComparisonMetrics.groupedDifferences || []).filter((g: any) => {
+            const hasItems = newItems.some((item: any) =>
+                item.catName?.toLowerCase() === g.catName?.toLowerCase() &&
+                item.deptName?.toLowerCase() === g.deptName?.toLowerCase() &&
+                item.groupName?.toLowerCase() === g.groupName?.toLowerCase()
+            );
+            return hasItems || Math.abs(g.diffQty) > 0.01 || Math.abs(g.diffCost) > 0.01;
+        });
+
+        return {
+            ...rawTermComparisonMetrics,
+            items: newItems,
+            groupedDifferences: newGroups
+        };
+    }, [rawTermComparisonMetrics]);
+
     const [expandedCatKeys, setExpandedCatKeys] = useState<Set<string>>(new Set());
     const [auditLookup, setAuditLookup] = useState('');
     const [auditLookupOpen, setAuditLookupOpen] = useState(false);
@@ -2804,7 +2845,42 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 // Se houver "Total Geral", ignorar
                 const desc = String(row[1] || '').trim().toLowerCase();
                 const colG = String(row[6] || '').trim().toLowerCase();
+                const codigo = String(row[1] || '').trim(); // B: Cód Reduzido
+                const descricao = String(row[2] || '').trim(); // C: Descrição
+
                 if (desc.includes('total geral') || colG.includes('total geral')) {
+                    continue;
+                }
+
+                // Skip header / metadata rows from the Excel system export
+                const metadataKeywords = [
+                    'filial:', 'grupo de produtos:', 'departamento:', 'categoria:',
+                    'tipo de produto:', 'grupo de preço:', 'início contagem:',
+                    'conferência de estoque', 'código', 'página 1 de', 'produto:'
+                ];
+
+                let isHeader = false;
+                for (let j = 0; j < Math.min(row.length, 5); j++) {
+                    const cellVal = String(row[j] || '').trim().toLowerCase();
+                    if (metadataKeywords.some(keyword => cellVal.startsWith(keyword))) {
+                        isHeader = true;
+                        break;
+                    }
+                }
+
+                // If code or description is exactly "-" or empty, it's highly likely a metadata row
+                const isHyphenRow = (!codigo && !descricao) ||
+                    codigo === '-' ||
+                    descricao === '-' ||
+                    (codigo === '' && descricao === '-');
+
+                // Real product rows in this report will have a numeric value in column K (sysQty) and O (countedQty)
+                // Metadata rows usually have empty strings or spaces there, or don't reach those indices
+                const sqStr = String(row[10] || '').trim();
+                const cqStr = String(row[14] || '').trim();
+                const isNotProductRow = sqStr === '' && cqStr === '';
+
+                if (isHeader || isHyphenRow || isNotProductRow) {
                     continue;
                 }
 
@@ -3520,7 +3596,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 theme: 'striped',
                 styles: { fontSize: 7, cellPadding: 1.5 },
                 headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255] },
-                footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' }
+                footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
+                columnStyles: {
+                    0: { cellWidth: 15 }, // Cód
+                    1: { cellWidth: 'auto' }, // Descrição
+                    2: { cellWidth: 15 }, // Lab
+                    3: { cellWidth: 15, halign: 'right' }, // Est Sist
+                    4: { cellWidth: 15, halign: 'right' }, // Est Fis
+                    5: { cellWidth: 15, halign: 'right' }, // Dif Qtd
+                    6: { cellWidth: 20, halign: 'right' }, // Custo Sist
+                    7: { cellWidth: 20, halign: 'right' }, // Custo Fis
+                    8: { cellWidth: 20, halign: 'right' }  // Dif R$
+                }
             });
 
             // @ts-ignore
@@ -3537,12 +3624,38 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 doc.setTextColor(15, 23, 42);
                 doc.text('RESUMO DE DIVERGÊNCIAS POR CATEGORIA', 14, afterProductTableY);
 
-                const groupHead = [['Hierarquia (Grupo > Depto > Categoria)', 'Dif Qtd', 'Prejuízo/Sobra']];
-                const groupBody = termComparisonMetrics.groupedDifferences.map((g: any) => [
-                    `${g.groupName} > ${g.deptName} > ${g.catName}`,
-                    `${g.diffQty > 0 ? '+' : ''}${Math.round(g.diffQty).toLocaleString('pt-BR')} un.`,
-                    `R$ ${g.diffCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                ]);
+                const groupHead = [['Item / Hierarquia', 'Dif Qtd', 'Sist.', 'Fís.', 'Dif R$']];
+
+                const groupBody: any[] = [];
+
+                termComparisonMetrics.groupedDifferences.forEach((g: any) => {
+                    // Add Category Header
+                    groupBody.push([
+                        { content: `${g.groupName} > ${g.deptName} > ${g.catName}`, colSpan: 1, styles: { fontStyle: 'bold', fillColor: [243, 244, 246] } },
+                        { content: `${g.diffQty > 0 ? '+' : ''}${Math.round(g.diffQty).toLocaleString('pt-BR')} un.`, styles: { fontStyle: 'bold', fillColor: [243, 244, 246] } },
+                        { content: '', styles: { fillColor: [243, 244, 246] } },
+                        { content: '', styles: { fillColor: [243, 244, 246] } },
+                        { content: `R$ ${g.diffCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, styles: { fontStyle: 'bold', fillColor: [243, 244, 246] } }
+                    ]);
+
+                    // Add items for this category
+                    const catItems = termComparisonMetrics.items.filter(
+                        (item: any) =>
+                            item.catName?.toLowerCase() === g.catName?.toLowerCase() &&
+                            item.deptName?.toLowerCase() === g.deptName?.toLowerCase() &&
+                            item.groupName?.toLowerCase() === g.groupName?.toLowerCase()
+                    ).sort((a: any, b: any) => a.diffCost - b.diffCost);
+
+                    catItems.forEach((item: any) => {
+                        groupBody.push([
+                            `  ${item.code} - ${item.description}`,
+                            `${item.diffQty > 0 ? '+' : ''}${Math.round(item.diffQty).toLocaleString('pt-BR')}`,
+                            Math.round(item.sysQty).toLocaleString('pt-BR'),
+                            Math.round(item.countedQty).toLocaleString('pt-BR'),
+                            `R$ ${item.diffCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                        ]);
+                    });
+                });
 
                 // @ts-ignore
                 doc.autoTable({
@@ -3550,17 +3663,36 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     head: groupHead,
                     body: groupBody,
                     theme: 'striped',
-                    styles: { fontSize: 8, cellPadding: 2 },
+                    styles: { fontSize: 7, cellPadding: 1.5 },
                     headStyles: { fillColor: [99, 102, 241], textColor: [255, 255, 255] }, // Indigo-500
+                    columnStyles: {
+                        0: { cellWidth: 'auto' },
+                        1: { cellWidth: 20, halign: 'right' },
+                        2: { cellWidth: 20, halign: 'right' },
+                        3: { cellWidth: 20, halign: 'right' },
+                        4: { cellWidth: 25, halign: 'right' }
+                    },
                     didParseCell: (hookData: any) => {
-                        if (hookData.section === 'body' && hookData.column.index === 2) {
-                            const valStr = hookData.cell.raw.toString();
-                            if (valStr.includes('-')) {
-                                hookData.cell.styles.textColor = [220, 38, 38]; // Red
-                                hookData.cell.styles.fontStyle = 'bold';
-                            } else if (valStr !== 'R$ 0,00' && valStr !== 'R$ -0,00') {
-                                hookData.cell.styles.textColor = [22, 163, 74]; // Green
-                                hookData.cell.styles.fontStyle = 'bold';
+                        // Colorize diff Qtd and R$ for Category Headers
+                        if (hookData.section === 'body' && hookData.row.raw[0]?.styles?.fontStyle === 'bold') {
+                            if (hookData.column.index === 1 || hookData.column.index === 4) {
+                                const valStr = hookData.cell.raw.content?.toString() || hookData.cell.raw.toString();
+                                if (valStr.includes('-')) {
+                                    hookData.cell.styles.textColor = [220, 38, 38]; // Red
+                                } else if (valStr !== 'R$ 0,00' && valStr !== 'R$ -0,00' && valStr !== '0 un.' && valStr !== '') {
+                                    hookData.cell.styles.textColor = [22, 163, 74]; // Green
+                                }
+                            }
+                        }
+                        // Colorize diff Qtd and R$ for Items
+                        if (hookData.section === 'body' && !hookData.row.raw[0]?.styles) {
+                            if (hookData.column.index === 1 || hookData.column.index === 4) {
+                                const valStr = hookData.cell.raw.toString();
+                                if (valStr.includes('-')) {
+                                    hookData.cell.styles.textColor = [220, 38, 38]; // Red
+                                } else if (valStr !== 'R$ 0,00' && valStr !== 'R$ -0,00' && valStr !== '0' && valStr !== '') {
+                                    hookData.cell.styles.textColor = [22, 163, 74]; // Green
+                                }
                             }
                         }
                     }
