@@ -3489,7 +3489,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             doc.setTextColor(15, 23, 42);
             doc.text('DIVERGÊNCIAS (PLANILHA DE CONFRONTO)', 14, afterProductTableY);
 
-            const divHead = [['Cód', 'Descrição', 'Lab', 'Est Sist', 'Est Fis', 'Dif Qtd', 'Custo Físico', 'Dif R$']];
+            const divHead = [['Cód', 'Descrição', 'Lab', 'Est Sist', 'Est Fis', 'Dif Qtd', 'Custo Sist', 'Custo Físico', 'Dif R$']];
             const divBody = termComparisonMetrics.items.map(p => [
                 p.code,
                 p.description,
@@ -3497,6 +3497,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 Math.round(p.sysQty).toLocaleString(),
                 Math.round(p.countedQty).toLocaleString(),
                 Math.round(p.diffQty).toLocaleString(),
+                `R$ ${(p.sysCost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                 `R$ ${(p.countedCost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
                 `R$ ${(p.diffCost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
             ]);
@@ -3505,8 +3506,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 Math.round(termComparisonMetrics.sysQty).toLocaleString(),
                 Math.round(termComparisonMetrics.countedQty).toLocaleString(),
                 Math.round(termComparisonMetrics.diffQty).toLocaleString(),
-                `R$ ${termComparisonMetrics.countedCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-                `R$ ${termComparisonMetrics.diffCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                `R$ ${(termComparisonMetrics.sysCost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                `R$ ${(termComparisonMetrics.countedCost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                `R$ ${(termComparisonMetrics.diffCost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
             ]];
 
             // @ts-ignore
