@@ -649,7 +649,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         items: any[];
         groupedDifferences?: any[];
     } | null>(null);
-    const [expandedCatKey, setExpandedCatKey] = useState<string | null>(null);
+    const [expandedCatKeys, setExpandedCatKeys] = useState<Set<string>>(new Set());
     const [auditLookup, setAuditLookup] = useState('');
     const [auditLookupOpen, setAuditLookupOpen] = useState(false);
     const auditLookupInputRef = useRef<HTMLInputElement | null>(null);
@@ -5481,275 +5481,280 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             const representativity = getFinancialRepresentativity(scopeAuditedCost, termComparisonMetrics.diffCost);
                                             return (
                                                 <>
-                                        <button
-                                            onClick={removeTermComparisonExcel}
-                                            className={`absolute top-3 right-3 transition-colors ${isMaster ? 'text-indigo-400 hover:text-red-500' : 'text-slate-300 cursor-not-allowed'}`}
-                                            title="Remover planilha"
-                                            disabled={!isMaster}
-                                        >
-                                            <X className="w-4 h-4" />
-                                        </button>
-                                        <h5 className="text-[10px] font-black text-indigo-800 uppercase tracking-widest mb-3">Resumo Identificado</h5>
-                                        <div className="grid grid-cols-2 lg:grid-cols-2 gap-4">
-                                            {/* Row 1: Quantities */}
-                                            <div className="flex justify-between items-center bg-white p-3 rounded border border-slate-100">
-                                                <div>
-                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Sist (Qtde)</p>
-                                                    <p className="font-bold text-slate-700">{Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')} un.</p>
-                                                </div>
-                                                <div className="text-right">
-                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Físico (Qtde)</p>
-                                                    <p className="font-bold text-slate-700">{Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')} un.</p>
-                                                </div>
-                                                <div className="text-right pl-4 border-l border-slate-100">
-                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Diferença (Qtde)</p>
-                                                    <p className={`font-black text-base ${termComparisonMetrics.diffQty < 0 ? 'text-red-500' : termComparisonMetrics.diffQty > 0 ? 'text-green-500' : 'text-slate-600'}`}>
-                                                        {termComparisonMetrics.diffQty > 0 ? '+' : ''}{Math.round(termComparisonMetrics.diffQty).toLocaleString('pt-BR')} un.
-                                                    </p>
-                                                </div>
-                                            </div>
+                                                    <button
+                                                        onClick={removeTermComparisonExcel}
+                                                        className={`absolute top-3 right-3 transition-colors ${isMaster ? 'text-indigo-400 hover:text-red-500' : 'text-slate-300 cursor-not-allowed'}`}
+                                                        title="Remover planilha"
+                                                        disabled={!isMaster}
+                                                    >
+                                                        <X className="w-4 h-4" />
+                                                    </button>
+                                                    <h5 className="text-[10px] font-black text-indigo-800 uppercase tracking-widest mb-3">Resumo Identificado</h5>
+                                                    <div className="grid grid-cols-2 lg:grid-cols-2 gap-4">
+                                                        {/* Row 1: Quantities */}
+                                                        <div className="flex justify-between items-center bg-white p-3 rounded border border-slate-100">
+                                                            <div>
+                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Sist (Qtde)</p>
+                                                                <p className="font-bold text-slate-700">{Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')} un.</p>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Físico (Qtde)</p>
+                                                                <p className="font-bold text-slate-700">{Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')} un.</p>
+                                                            </div>
+                                                            <div className="text-right pl-4 border-l border-slate-100">
+                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Diferença (Qtde)</p>
+                                                                <p className={`font-black text-base ${termComparisonMetrics.diffQty < 0 ? 'text-red-500' : termComparisonMetrics.diffQty > 0 ? 'text-green-500' : 'text-slate-600'}`}>
+                                                                    {termComparisonMetrics.diffQty > 0 ? '+' : ''}{Math.round(termComparisonMetrics.diffQty).toLocaleString('pt-BR')} un.
+                                                                </p>
+                                                            </div>
+                                                        </div>
 
-                                            {/* Row 2: Finances */}
-                                            <div className="flex justify-between items-center bg-white p-3 rounded border border-slate-100">
-                                                <div>
-                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Sist</p>
-                                                    <p className="font-bold text-slate-700">{termComparisonMetrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
-                                                </div>
-                                                <div className="text-right">
-                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Físico</p>
-                                                    <p className="font-bold text-slate-700">{termComparisonMetrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
-                                                </div>
-                                                <div className="text-right pl-4 border-l border-slate-100">
-                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Resultado Fin.</p>
-                                                    <div className="flex flex-col items-end">
-                                                        <span className={`font-black text-base ${termComparisonMetrics.diffCost < 0 ? 'text-red-600' : termComparisonMetrics.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>
-                                                            {termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                                        </span>
-                                                        <span className={`text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${termComparisonMetrics.diffCost < 0 ? 'bg-red-100 text-red-600' : termComparisonMetrics.diffCost > 0 ? 'bg-green-100 text-green-600' : 'bg-slate-200 text-slate-600'}`}>
-                                                            {termComparisonMetrics.diffCost < 0 ? 'Prejuízo' : termComparisonMetrics.diffCost > 0 ? 'Sobra' : 'Zero'}
-                                                        </span>
-                                                        {representativity !== null && (
-                                                            <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mt-1">
-                                                                Rep. Auditada: {representativity.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {/* Quadrinho de Resumo por Categoria */}
-                                        {(() => {
-                                            if (!termComparisonMetrics.groupedDifferences || termComparisonMetrics.groupedDifferences.length === 0) return null;
-
-                                            const groupsMap = new Map();
-                                            termComparisonMetrics.groupedDifferences.forEach((diff: any) => {
-                                                if (!groupsMap.has(diff.groupName)) {
-                                                    groupsMap.set(diff.groupName, { name: diff.groupName, diffQty: 0, diffCost: 0, departments: new Map() });
-                                                }
-                                                const g = groupsMap.get(diff.groupName);
-                                                g.diffQty += diff.diffQty;
-                                                g.diffCost += diff.diffCost;
-
-                                                if (!g.departments.has(diff.deptName)) {
-                                                    g.departments.set(diff.deptName, { name: diff.deptName, diffQty: 0, diffCost: 0, categories: [] });
-                                                }
-                                                const d = g.departments.get(diff.deptName);
-                                                d.diffQty += diff.diffQty;
-                                                d.diffCost += diff.diffCost;
-
-                                                d.categories.push({ name: diff.catName, diffQty: diff.diffQty, diffCost: diff.diffCost });
-                                            });
-
-                                            const nested = Array.from(groupsMap.values()).map(g => ({
-                                                ...g,
-                                                departments: Array.from(g.departments.values())
-                                                    .map((d: any) => ({
-                                                        ...d,
-                                                        categories: d.categories.filter((c: any) =>
-                                                            Math.abs(c.diffQty) > 0.01 || Math.abs(c.diffCost) > 0.01
-                                                        )
-                                                    }))
-                                                    .filter((d: any) => d.categories.length > 0)
-                                            })).filter(g => g.departments.length > 0);
-
-                                            if (nested.length === 0) return null;
-
-                                            return (
-                                                <div className="mt-4 pt-4 border-t border-indigo-100">
-                                                    <h6 className="text-[10px] font-black text-indigo-800 uppercase tracking-widest mb-3 flex items-center gap-1.5">
-                                                        <Boxes className="w-3.5 h-3.5" />
-                                                        Resumo de Prejuízo por Categoria
-                                                    </h6>
-                                                    <div className="space-y-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
-                                                        {nested.map((group: any, gIdx: number) => (
-                                                            <div key={gIdx} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2">
-                                                                {/* GROUP HEADER */}
-                                                                <div className="p-3 bg-indigo-50/50 border-b border-indigo-100 flex items-center justify-between">
-                                                                    <div className="flex items-center gap-3">
-                                                                        <div className="w-8 h-8 rounded-xl bg-white border border-indigo-100 flex items-center justify-center shadow-sm">
-                                                                            <Boxes className="w-4 h-4 text-indigo-600" />
-                                                                        </div>
-                                                                        <div>
-                                                                            <h3 className="text-[11px] font-black text-indigo-900 uppercase italic tracking-wider">{group.name}</h3>
-                                                                            <p className="text-[8px] font-bold text-indigo-400 uppercase tracking-widest mt-0.5">Grupo</p>
-                                                                        </div>
-                                                                    </div>
-                                                                    <div className="text-right flex items-center gap-3">
-                                                                        <div>
-                                                                            <p className="text-[7px] font-black text-indigo-400 uppercase tracking-widest">Dif. Qtd</p>
-                                                                            <p className={`font-bold text-[10px] ${group.diffQty < 0 ? 'text-red-500' : group.diffQty > 0 ? 'text-green-500' : 'text-slate-500'}`}>{group.diffQty > 0 ? '+' : ''}{Math.round(group.diffQty).toLocaleString('pt-BR')} un.</p>
-                                                                        </div>
-                                                                        <div className="border-l border-indigo-100 pl-3">
-                                                                            <p className="text-[7px] font-black text-indigo-400 uppercase tracking-widest">Finanças</p>
-                                                                            <p className={`font-black text-xs ${group.diffCost < 0 ? 'text-red-600' : group.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>{group.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
-                                                                        </div>
-                                                                    </div>
+                                                        {/* Row 2: Finances */}
+                                                        <div className="flex justify-between items-center bg-white p-3 rounded border border-slate-100">
+                                                            <div>
+                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Sist</p>
+                                                                <p className="font-bold text-slate-700">{termComparisonMetrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Físico</p>
+                                                                <p className="font-bold text-slate-700">{termComparisonMetrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                                                            </div>
+                                                            <div className="text-right pl-4 border-l border-slate-100">
+                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Resultado Fin.</p>
+                                                                <div className="flex flex-col items-end">
+                                                                    <span className={`font-black text-base ${termComparisonMetrics.diffCost < 0 ? 'text-red-600' : termComparisonMetrics.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>
+                                                                        {termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                    </span>
+                                                                    <span className={`text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${termComparisonMetrics.diffCost < 0 ? 'bg-red-100 text-red-600' : termComparisonMetrics.diffCost > 0 ? 'bg-green-100 text-green-600' : 'bg-slate-200 text-slate-600'}`}>
+                                                                        {termComparisonMetrics.diffCost < 0 ? 'Prejuízo' : termComparisonMetrics.diffCost > 0 ? 'Sobra' : 'Zero'}
+                                                                    </span>
+                                                                    {representativity !== null && (
+                                                                        <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mt-1">
+                                                                            Rep. Auditada: {representativity.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
+                                                                        </span>
+                                                                    )}
                                                                 </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
 
-                                                                {/* DEPARTMENTS */}
-                                                                <div className="p-3 space-y-3 bg-slate-50/50">
-                                                                    {group.departments.map((dept: any, dIdx: number) => (
-                                                                        <div key={dIdx} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                                                                            <div className="p-2.5 border-b border-slate-100 flex items-center justify-between">
-                                                                                <div className="flex items-center gap-2.5">
-                                                                                    <div className="w-6 h-6 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center">
-                                                                                        <FileBox className="w-3 h-3 text-slate-500" />
+                                                    {/* Quadrinho de Resumo por Categoria */}
+                                                    {(() => {
+                                                        if (!termComparisonMetrics.groupedDifferences || termComparisonMetrics.groupedDifferences.length === 0) return null;
+
+                                                        const groupsMap = new Map();
+                                                        termComparisonMetrics.groupedDifferences.forEach((diff: any) => {
+                                                            if (!groupsMap.has(diff.groupName)) {
+                                                                groupsMap.set(diff.groupName, { name: diff.groupName, diffQty: 0, diffCost: 0, departments: new Map() });
+                                                            }
+                                                            const g = groupsMap.get(diff.groupName);
+                                                            g.diffQty += diff.diffQty;
+                                                            g.diffCost += diff.diffCost;
+
+                                                            if (!g.departments.has(diff.deptName)) {
+                                                                g.departments.set(diff.deptName, { name: diff.deptName, diffQty: 0, diffCost: 0, categories: [] });
+                                                            }
+                                                            const d = g.departments.get(diff.deptName);
+                                                            d.diffQty += diff.diffQty;
+                                                            d.diffCost += diff.diffCost;
+
+                                                            d.categories.push({ name: diff.catName, diffQty: diff.diffQty, diffCost: diff.diffCost });
+                                                        });
+
+                                                        const nested = Array.from(groupsMap.values()).map(g => ({
+                                                            ...g,
+                                                            departments: Array.from(g.departments.values())
+                                                                .map((d: any) => ({
+                                                                    ...d,
+                                                                    categories: d.categories.filter((c: any) =>
+                                                                        Math.abs(c.diffQty) > 0.01 || Math.abs(c.diffCost) > 0.01
+                                                                    )
+                                                                }))
+                                                                .filter((d: any) => d.categories.length > 0)
+                                                        })).filter(g => g.departments.length > 0);
+
+                                                        if (nested.length === 0) return null;
+
+                                                        return (
+                                                            <div className="mt-4 pt-4 border-t border-indigo-100">
+                                                                <h6 className="text-[10px] font-black text-indigo-800 uppercase tracking-widest mb-3 flex items-center gap-1.5">
+                                                                    <Boxes className="w-3.5 h-3.5" />
+                                                                    Resumo de Prejuízo por Categoria
+                                                                </h6>
+                                                                <div className="space-y-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
+                                                                    {nested.map((group: any, gIdx: number) => (
+                                                                        <div key={gIdx} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2">
+                                                                            {/* GROUP HEADER */}
+                                                                            <div className="p-3 bg-indigo-50/50 border-b border-indigo-100 flex items-center justify-between">
+                                                                                <div className="flex items-center gap-3">
+                                                                                    <div className="w-8 h-8 rounded-xl bg-white border border-indigo-100 flex items-center justify-center shadow-sm">
+                                                                                        <Boxes className="w-4 h-4 text-indigo-600" />
                                                                                     </div>
                                                                                     <div>
-                                                                                        <h4 className="text-[10px] font-black text-indigo-700 uppercase italic tracking-widest">{dept.name}</h4>
-                                                                                        <p className="text-[7px] font-bold text-slate-400 uppercase tracking-widest">Departamento</p>
+                                                                                        <h3 className="text-[11px] font-black text-indigo-900 uppercase italic tracking-wider">{group.name}</h3>
+                                                                                        <p className="text-[8px] font-bold text-indigo-400 uppercase tracking-widest mt-0.5">Grupo</p>
                                                                                     </div>
                                                                                 </div>
                                                                                 <div className="text-right flex items-center gap-3">
                                                                                     <div>
-                                                                                        <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Dif. Qtd</p>
-                                                                                        <p className={`font-bold text-[9px] ${dept.diffQty < 0 ? 'text-red-500' : dept.diffQty > 0 ? 'text-green-500' : 'text-slate-500'}`}>{dept.diffQty > 0 ? '+' : ''}{Math.round(dept.diffQty).toLocaleString('pt-BR')} un.</p>
+                                                                                        <p className="text-[7px] font-black text-indigo-400 uppercase tracking-widest">Dif. Qtd</p>
+                                                                                        <p className={`font-bold text-[10px] ${group.diffQty < 0 ? 'text-red-500' : group.diffQty > 0 ? 'text-green-500' : 'text-slate-500'}`}>{group.diffQty > 0 ? '+' : ''}{Math.round(group.diffQty).toLocaleString('pt-BR')} un.</p>
                                                                                     </div>
-                                                                                    <div className="border-l border-slate-100 pl-3 w-20">
-                                                                                        <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Finanças</p>
-                                                                                        <p className={`font-black text-[11px] ${dept.diffCost < 0 ? 'text-red-600' : dept.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>{dept.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
+                                                                                    <div className="border-l border-indigo-100 pl-3">
+                                                                                        <p className="text-[7px] font-black text-indigo-400 uppercase tracking-widest">Finanças</p>
+                                                                                        <p className={`font-black text-xs ${group.diffCost < 0 ? 'text-red-600' : group.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>{group.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
                                                                                     </div>
                                                                                 </div>
                                                                             </div>
 
-                                                                            {/* CATEGORIES */}
-                                                                            <div className="p-2 bg-[#f8fafc] grid grid-cols-1 gap-1.5">
-                                                                                {dept.categories.map((cat: any, cIdx: number) => {
-                                                                                    const catItems = (termComparisonMetrics?.items || []).filter(
-                                                                                        (item: any) =>
-                                                                                            item.catName?.toLowerCase() === cat.name?.toLowerCase() &&
-                                                                                            item.deptName?.toLowerCase() === dept.name?.toLowerCase()
-                                                                                    ).sort((a: any, b: any) => a.diffCost - b.diffCost);
-                                                                                    const catKey = `${dept.name}|${cat.name}`;
-                                                                                    return (
-                                                                                        <div key={cIdx} className="rounded-lg overflow-hidden border border-[#dcfce7]">
-                                                                                            {/* Category header - clickable */}
-                                                                                            <button
-                                                                                                onClick={() => setExpandedCatKey(prev => prev === catKey ? null : catKey)}
-                                                                                                className="w-full bg-[#F0FDF4] p-2 flex items-center justify-between transition-colors hover:bg-[#dcfce7] cursor-pointer"
-                                                                                            >
-                                                                                                <div className="flex items-center gap-2">
-                                                                                                    <Activity className="w-3 h-3 text-[#059669]" />
-                                                                                                    <span className="text-[9px] font-black text-[#065f46] uppercase italic tracking-widest">{cat.name}</span>
-                                                                                                    {catItems.length > 0 && (
-                                                                                                        <span className="bg-indigo-100 text-indigo-600 text-[7px] font-black px-1 py-0.5 rounded-full">
-                                                                                                            {catItems.length}
-                                                                                                        </span>
-                                                                                                    )}
+                                                                            {/* DEPARTMENTS */}
+                                                                            <div className="p-3 space-y-3 bg-slate-50/50">
+                                                                                {group.departments.map((dept: any, dIdx: number) => (
+                                                                                    <div key={dIdx} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                                                                                        <div className="p-2.5 border-b border-slate-100 flex items-center justify-between">
+                                                                                            <div className="flex items-center gap-2.5">
+                                                                                                <div className="w-6 h-6 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center">
+                                                                                                    <FileBox className="w-3 h-3 text-slate-500" />
                                                                                                 </div>
-                                                                                                <div className="flex items-center gap-3 text-right">
-                                                                                                    <div className="min-w-[45px]">
-                                                                                                        <span className={`text-[9px] font-bold ${cat.diffQty < 0 ? 'text-red-600' : cat.diffQty > 0 ? 'text-[#16a34a]' : 'text-[#166534]/70'}`}>
-                                                                                                            {cat.diffQty > 0 ? '+' : ''}{Math.round(cat.diffQty).toLocaleString('pt-BR')} un.
-                                                                                                        </span>
-                                                                                                    </div>
-                                                                                                    <div className="min-w-[65px]">
-                                                                                                        <span className={`text-[10px] font-black ${cat.diffCost < 0 ? 'text-red-600' : cat.diffCost > 0 ? 'text-[#16a34a]' : 'text-[#166534]/80'}`}>
-                                                                                                            {cat.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                                                                                        </span>
-                                                                                                    </div>
-                                                                                                    <ChevronRight className={`w-3 h-3 text-slate-400 transition-transform ${expandedCatKey === catKey ? 'rotate-90' : ''}`} />
+                                                                                                <div>
+                                                                                                    <h4 className="text-[10px] font-black text-indigo-700 uppercase italic tracking-widest">{dept.name}</h4>
+                                                                                                    <p className="text-[7px] font-bold text-slate-400 uppercase tracking-widest">Departamento</p>
                                                                                                 </div>
-                                                                                            </button>
-
-                                                                                            {/* Expanded item list */}
-                                                                                            {expandedCatKey === catKey && catItems.length > 0 && (
-                                                                                                <div className="bg-white border-t border-[#dcfce7]">
-                                                                                                    <table className="w-full text-[8px]">
-                                                                                                        <thead>
-                                                                                                            <tr className="bg-slate-50 border-b border-slate-100">
-                                                                                                                <th className="text-left p-1.5 font-black text-slate-500 uppercase tracking-widest">Cód</th>
-                                                                                                                <th className="text-left p-1.5 font-black text-slate-500 uppercase tracking-widest">Descrição</th>
-                                                                                                                <th className="text-right p-1.5 font-black text-slate-500 uppercase">Sist.</th>
-                                                                                                                <th className="text-right p-1.5 font-black text-slate-500 uppercase">Fís.</th>
-                                                                                                                <th className="text-right p-1.5 font-black text-slate-500 uppercase">Dif.</th>
-                                                                                                                <th className="text-right p-1.5 font-black text-slate-500 uppercase">R$</th>
-                                                                                                            </tr>
-                                                                                                        </thead>
-                                                                                                        <tbody>
-                                                                                                            {catItems.map((item: any, iIdx: number) => (
-                                                                                                                <tr key={iIdx} className={`border-b border-slate-50 ${item.diffQty < 0 ? 'bg-red-50/40' : item.diffQty > 0 ? 'bg-green-50/40' : ''}`}>
-                                                                                                                    <td className="p-1.5 font-black text-slate-600 tabular-nums">{item.code}</td>
-                                                                                                                    <td className="p-1.5 text-slate-700 max-w-[120px] truncate" title={item.description}>{item.description}</td>
-                                                                                                                    <td className="p-1.5 text-right text-slate-500 tabular-nums">{Math.round(item.sysQty)}</td>
-                                                                                                                    <td className="p-1.5 text-right text-slate-500 tabular-nums">{Math.round(item.countedQty)}</td>
-                                                                                                                    <td className={`p-1.5 text-right font-black tabular-nums ${item.diffQty < 0 ? 'text-red-600' : item.diffQty > 0 ? 'text-green-600' : 'text-slate-400'}`}>
-                                                                                                                        {item.diffQty > 0 ? '+' : ''}{Math.round(item.diffQty)}
-                                                                                                                    </td>
-                                                                                                                    <td className={`p-1.5 text-right font-black tabular-nums ${item.diffCost < 0 ? 'text-red-600' : item.diffCost > 0 ? 'text-green-600' : 'text-slate-400'}`}>
-                                                                                                                        {item.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                                                                                                    </td>
-                                                                                                                </tr>
-                                                                                                            ))}
-                                                                                                        </tbody>
-                                                                                                    </table>
+                                                                                            </div>
+                                                                                            <div className="text-right flex items-center gap-3">
+                                                                                                <div>
+                                                                                                    <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Dif. Qtd</p>
+                                                                                                    <p className={`font-bold text-[9px] ${dept.diffQty < 0 ? 'text-red-500' : dept.diffQty > 0 ? 'text-green-500' : 'text-slate-500'}`}>{dept.diffQty > 0 ? '+' : ''}{Math.round(dept.diffQty).toLocaleString('pt-BR')} un.</p>
                                                                                                 </div>
-                                                                                            )}
-                                                                                            {expandedCatKey === catKey && catItems.length === 0 && (
-                                                                                                <div className="p-2 bg-slate-50 text-center text-[8px] text-slate-400 font-bold">
-                                                                                                    Nenhum item encontrado nesta categoria
+                                                                                                <div className="border-l border-slate-100 pl-3 w-20">
+                                                                                                    <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Finanças</p>
+                                                                                                    <p className={`font-black text-[11px] ${dept.diffCost < 0 ? 'text-red-600' : dept.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>{dept.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
                                                                                                 </div>
-                                                                                            )}
+                                                                                            </div>
                                                                                         </div>
-                                                                                    );
-                                                                                })}
 
-                                                                            </div>
-                                                                            {/* Lista de códigos reduzidos para DIVERSOS */}
-                                                                            {dept.name === 'DIVERSOS (SEM DEPARTAMENTO)' && (() => {
-                                                                                const diversosItems = (termComparisonMetrics?.items || []).filter(
-                                                                                    (item: any) =>
-                                                                                        item.deptName === 'DIVERSOS (SEM DEPARTAMENTO)' &&
-                                                                                        (Math.abs(item.diffQty) > 0.01 || Math.abs(item.diffCost) > 0.01)
-                                                                                );
-                                                                                if (diversosItems.length === 0) return null;
-                                                                                return (
-                                                                                    <div className="p-2 border-t border-amber-100 bg-amber-50">
-                                                                                        <p className="text-[8px] font-black text-amber-700 uppercase tracking-widest mb-1.5 flex items-center gap-1">
-                                                                                            <Search className="w-2.5 h-2.5" />
-                                                                                            Itens sem categoria vinculada (Cód. Reduzido)
-                                                                                        </p>
-                                                                                        <div className="flex flex-wrap gap-1">
-                                                                                            {diversosItems.map((item: any, idx: number) => (
-                                                                                                <span key={idx} className="bg-white border border-amber-200 text-amber-800 text-[8px] font-black px-1.5 py-0.5 rounded-md shadow-sm" title={item.description}>
-                                                                                                    {item.code}
-                                                                                                </span>
-                                                                                            ))}
+                                                                                        {/* CATEGORIES */}
+                                                                                        <div className="p-2 bg-[#f8fafc] grid grid-cols-1 gap-1.5">
+                                                                                            {dept.categories.map((cat: any, cIdx: number) => {
+                                                                                                const catItems = (termComparisonMetrics?.items || []).filter(
+                                                                                                    (item: any) =>
+                                                                                                        item.catName?.toLowerCase() === cat.name?.toLowerCase() &&
+                                                                                                        item.deptName?.toLowerCase() === dept.name?.toLowerCase()
+                                                                                                ).sort((a: any, b: any) => a.diffCost - b.diffCost);
+                                                                                                const catKey = `${dept.name}|${cat.name}`;
+                                                                                                return (
+                                                                                                    <div key={cIdx} className="rounded-lg overflow-hidden border border-[#dcfce7]">
+                                                                                                        {/* Category header - clickable */}
+                                                                                                        <button
+                                                                                                            onClick={() => setExpandedCatKeys(prev => {
+                                                                                                                const next = new Set(prev);
+                                                                                                                if (next.has(catKey)) next.delete(catKey);
+                                                                                                                else next.add(catKey);
+                                                                                                                return next;
+                                                                                                            })}
+                                                                                                            className="w-full bg-[#F0FDF4] p-2 flex items-center justify-between transition-colors hover:bg-[#dcfce7] cursor-pointer"
+                                                                                                        >
+                                                                                                            <div className="flex items-center gap-2">
+                                                                                                                <Activity className="w-3 h-3 text-[#059669]" />
+                                                                                                                <span className="text-[9px] font-black text-[#065f46] uppercase italic tracking-widest">{cat.name}</span>
+                                                                                                                {catItems.length > 0 && (
+                                                                                                                    <span className="bg-indigo-100 text-indigo-600 text-[7px] font-black px-1 py-0.5 rounded-full">
+                                                                                                                        {catItems.length}
+                                                                                                                    </span>
+                                                                                                                )}
+                                                                                                            </div>
+                                                                                                            <div className="flex items-center gap-3 text-right">
+                                                                                                                <div className="min-w-[45px]">
+                                                                                                                    <span className={`text-[9px] font-bold ${cat.diffQty < 0 ? 'text-red-600' : cat.diffQty > 0 ? 'text-[#16a34a]' : 'text-[#166534]/70'}`}>
+                                                                                                                        {cat.diffQty > 0 ? '+' : ''}{Math.round(cat.diffQty).toLocaleString('pt-BR')} un.
+                                                                                                                    </span>
+                                                                                                                </div>
+                                                                                                                <div className="min-w-[65px]">
+                                                                                                                    <span className={`text-[10px] font-black ${cat.diffCost < 0 ? 'text-red-600' : cat.diffCost > 0 ? 'text-[#16a34a]' : 'text-[#166534]/80'}`}>
+                                                                                                                        {cat.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                                                                    </span>
+                                                                                                                </div>
+                                                                                                                <ChevronRight className={`w-3 h-3 text-slate-400 transition-transform ${expandedCatKeys.has(catKey) ? 'rotate-90' : ''}`} />
+                                                                                                            </div>
+                                                                                                        </button>
+
+                                                                                                        {/* Expanded item list */}
+                                                                                                        {expandedCatKeys.has(catKey) && catItems.length > 0 && (
+                                                                                                            <div className="bg-white border-t border-[#dcfce7]">
+                                                                                                                <table className="w-full text-[8px]">
+                                                                                                                    <thead>
+                                                                                                                        <tr className="bg-slate-50 border-b border-slate-100">
+                                                                                                                            <th className="text-left p-1.5 font-black text-slate-500 uppercase tracking-widest">Cód</th>
+                                                                                                                            <th className="text-left p-1.5 font-black text-slate-500 uppercase tracking-widest">Descrição</th>
+                                                                                                                            <th className="text-right p-1.5 font-black text-slate-500 uppercase">Sist.</th>
+                                                                                                                            <th className="text-right p-1.5 font-black text-slate-500 uppercase">Fís.</th>
+                                                                                                                            <th className="text-right p-1.5 font-black text-slate-500 uppercase">Dif.</th>
+                                                                                                                            <th className="text-right p-1.5 font-black text-slate-500 uppercase">R$</th>
+                                                                                                                        </tr>
+                                                                                                                    </thead>
+                                                                                                                    <tbody>
+                                                                                                                        {catItems.map((item: any, iIdx: number) => (
+                                                                                                                            <tr key={iIdx} className={`border-b border-slate-50 ${item.diffQty < 0 ? 'bg-red-50/40' : item.diffQty > 0 ? 'bg-green-50/40' : ''}`}>
+                                                                                                                                <td className="p-1.5 font-black text-slate-600 tabular-nums">{item.code}</td>
+                                                                                                                                <td className="p-1.5 text-slate-700 max-w-[120px] truncate" title={item.description}>{item.description}</td>
+                                                                                                                                <td className="p-1.5 text-right text-slate-500 tabular-nums">{Math.round(item.sysQty)}</td>
+                                                                                                                                <td className="p-1.5 text-right text-slate-500 tabular-nums">{Math.round(item.countedQty)}</td>
+                                                                                                                                <td className={`p-1.5 text-right font-black tabular-nums ${item.diffQty < 0 ? 'text-red-600' : item.diffQty > 0 ? 'text-green-600' : 'text-slate-400'}`}>
+                                                                                                                                    {item.diffQty > 0 ? '+' : ''}{Math.round(item.diffQty)}
+                                                                                                                                </td>
+                                                                                                                                <td className={`p-1.5 text-right font-black tabular-nums ${item.diffCost < 0 ? 'text-red-600' : item.diffCost > 0 ? 'text-green-600' : 'text-slate-400'}`}>
+                                                                                                                                    {item.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                                                                                </td>
+                                                                                                                            </tr>
+                                                                                                                        ))}
+                                                                                                                    </tbody>
+                                                                                                                </table>
+                                                                                                            </div>
+                                                                                                        )}
+                                                                                                        {expandedCatKeys.has(catKey) && catItems.length === 0 && (
+                                                                                                            <div className="p-2 bg-slate-50 text-center text-[8px] text-slate-400 font-bold">
+                                                                                                                Nenhum item encontrado nesta categoria
+                                                                                                            </div>
+                                                                                                        )}
+                                                                                                    </div>
+                                                                                                );
+                                                                                            })}
+
                                                                                         </div>
+                                                                                        {/* Lista de códigos reduzidos para DIVERSOS */}
+                                                                                        {dept.name === 'DIVERSOS (SEM DEPARTAMENTO)' && (() => {
+                                                                                            const diversosItems = (termComparisonMetrics?.items || []).filter(
+                                                                                                (item: any) =>
+                                                                                                    item.deptName === 'DIVERSOS (SEM DEPARTAMENTO)' &&
+                                                                                                    (Math.abs(item.diffQty) > 0.01 || Math.abs(item.diffCost) > 0.01)
+                                                                                            );
+                                                                                            if (diversosItems.length === 0) return null;
+                                                                                            return (
+                                                                                                <div className="p-2 border-t border-amber-100 bg-amber-50">
+                                                                                                    <p className="text-[8px] font-black text-amber-700 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+                                                                                                        <Search className="w-2.5 h-2.5" />
+                                                                                                        Itens sem categoria vinculada (Cód. Reduzido)
+                                                                                                    </p>
+                                                                                                    <div className="flex flex-wrap gap-1">
+                                                                                                        {diversosItems.map((item: any, idx: number) => (
+                                                                                                            <span key={idx} className="bg-white border border-amber-200 text-amber-800 text-[8px] font-black px-1.5 py-0.5 rounded-md shadow-sm" title={item.description}>
+                                                                                                                {item.code}
+                                                                                                            </span>
+                                                                                                        ))}
+                                                                                                    </div>
+                                                                                                </div>
+                                                                                            );
+                                                                                        })()}
                                                                                     </div>
-                                                                                );
-                                                                            })()}
+                                                                                ))}
+                                                                            </div>
                                                                         </div>
-                                                                    ))}
+                                                                    ))
+                                                                    }
                                                                 </div>
                                                             </div>
-                                                        ))
-                                                        }
-                                                    </div>
-                                                </div>
-                                            )
-                                        })()}
+                                                        )
+                                                    })()}
                                                 </>
                                             );
                                         })()}
