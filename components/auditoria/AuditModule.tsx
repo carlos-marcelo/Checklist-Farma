@@ -5042,13 +5042,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             </button>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); startScopeAudit(group.id); }}
-                                                disabled={isComplete}
-                                                className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all shadow-sm ${isComplete
+                                                disabled={isComplete || !isMaster}
+                                                className={`w-10 h-10 rounded-xl border flex items-center justify-center transition-all shadow-sm ${isComplete || !isMaster
                                                     ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                     : groupHasInProgress
                                                         ? 'bg-blue-600 text-white border-blue-500'
                                                         : 'bg-blue-50 text-blue-600 border-blue-100 hover:bg-blue-600 hover:text-white'}`}
-                                                title={isComplete ? 'Desmarque a conclusão para iniciar parcial' : (groupHasInProgress ? 'Desativar contagem parcial' : (groupHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial'))}
+                                                title={!isMaster ? 'Apenas Master pode iniciar grupo inteiro' : (isComplete ? 'Desmarque a conclusão para iniciar parcial' : (groupHasInProgress ? 'Desativar contagem parcial' : (groupHasStarted ? 'Retomar auditoria parcial' : 'Iniciar auditoria parcial')))}
                                             >
                                                 <Activity className="w-5 h-5" />
                                             </button>
@@ -5588,20 +5588,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     </h4>
                                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Gera resumo financeiro no PDF</span>
                                 </div>
-                                <div className="bg-white border-2 border-dashed border-slate-200 rounded-xl p-4 text-center relative hover:bg-slate-50 transition-colors">
+                                <div className={`bg-white border-2 border-dashed border-slate-200 rounded-xl p-4 text-center relative transition-colors ${!isMaster ? 'opacity-50 cursor-not-allowed' : 'hover:bg-slate-50'}`}>
                                     <input
                                         type="file"
                                         accept=".xlsx, .xls"
                                         onChange={handleProcessTermComparisonExcel}
-                                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                                        title="Carregar Excel de Divergências"
+                                        className={`absolute inset-0 w-full h-full opacity-0 ${!isMaster ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                                        title={!isMaster ? "Apenas Usuário Master pode carregar planilha" : "Carregar Excel de Divergências"}
+                                        disabled={!isMaster}
                                     />
                                     <div className="flex flex-col items-center gap-2">
-                                        <div className="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-500">
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${!isMaster ? 'bg-slate-100 text-slate-400' : 'bg-indigo-50 text-indigo-500'}`}>
                                             <Upload className="w-5 h-5" />
                                         </div>
                                         <p className="text-sm font-bold text-slate-700">Carregar Excel de Divergências</p>
-                                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">Clique ou arraste o arquivo aqui</p>
+                                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">{!isMaster ? 'Restrito ao Master' : 'Clique ou arraste o arquivo aqui'}</p>
                                     </div>
                                 </div>
 
@@ -5618,7 +5619,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                     <button
                                                         onClick={removeTermComparisonExcel}
                                                         className={`absolute top-3 right-3 transition-colors ${isMaster ? 'text-indigo-400 hover:text-red-500' : 'text-slate-300 cursor-not-allowed'}`}
-                                                        title="Remover planilha"
+                                                        title={!isMaster ? "Apenas Master pode remover planilha" : "Remover planilha"}
                                                         disabled={!isMaster}
                                                     >
                                                         <X className="w-4 h-4" />
