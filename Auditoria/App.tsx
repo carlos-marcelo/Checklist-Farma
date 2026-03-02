@@ -942,15 +942,28 @@ const App: React.FC = () => {
                           </div>
                           {h.status === 'completed' && (
                             <button
-                              onClick={() => {
-                                setData(h.data);
-                                setViewingHistoryParams({ branch: h.branch, number: h.audit_number });
-                                setShowHistory(false);
-                                setAuditNumber(h.audit_number);
+                              onClick={async () => {
+                                setIsProcessing(true);
+                                try {
+                                  const fullSession = await fetchAuditSession(h.branch, h.audit_number);
+                                  if (fullSession && fullSession.data) {
+                                    setData(fullSession.data);
+                                    setViewingHistoryParams({ branch: h.branch, number: h.audit_number });
+                                    setShowHistory(false);
+                                    setAuditNumber(h.audit_number);
+                                  } else {
+                                    alert("Falha ao carregar dados completos da auditoria do servidor.");
+                                  }
+                                } catch (error) {
+                                  console.error(error);
+                                  alert("Erro ao buscar a sessão salvada.");
+                                } finally {
+                                  setIsProcessing(false);
+                                }
                               }}
-                              className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded text-xs font-bold hover:bg-indigo-200"
+                              className="bg-indigo-50 text-indigo-600 px-4 py-2 rounded-xl text-xs font-bold hover:bg-indigo-600 hover:text-white transition-colors"
                             >
-                              Visualizar
+                              Revisar
                             </button>
                           )}
                         </div>

@@ -1169,7 +1169,7 @@ export async function fetchAuditsHistory(branch: string): Promise<DbAuditSession
   try {
     const { data, error } = await supabase
       .from('audit_sessions')
-      .select('*')
+      .select('id, branch, audit_number, status, progress, user_email, created_at, updated_at')
       .eq('branch', branch)
       .order('updated_at', { ascending: false })
       .order('audit_number', { ascending: false });

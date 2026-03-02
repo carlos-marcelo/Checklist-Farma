@@ -450,11 +450,12 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     if (!userEmail) return;
     if (masterProducts.size === 0 || inventory.size === 0) return;
 
-    // Save periodically only when dirty and not already saving
-    const interval = setInterval(() => {
-      if (!isDirty || isSavingSession) return;
-      void persistSession().then(() => setIsDirty(false));
-    }, 30000);
+    // Auto-save to Supabase when idle for 3 seconds
+    const timer = setTimeout(() => {
+      if (isDirty && !isSavingSession) {
+        void persistSession().then(() => setIsDirty(false));
+      }
+    }, 3000);
 
     const handleWake = () => {
       if (!document.hidden && isDirty && !isSavingSession) {
@@ -465,11 +466,11 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     window.addEventListener('focus', handleWake);
 
     return () => {
-      clearInterval(interval);
+      clearTimeout(timer);
       document.removeEventListener('visibilitychange', handleWake);
       window.removeEventListener('focus', handleWake);
     };
-  }, [step, userEmail, masterProducts.size, inventory.size, isDirty, isSavingSession]);
+  }, [step, userEmail, masterProducts.size, inventory, isDirty, isSavingSession]);
 
   // Limpeza de cache legado no mount
   useEffect(() => {
@@ -678,9 +679,14 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     inventoryOverride?: Map<string, StockItem>;
     productOverride?: Map<string, Product>;
     recountOverride?: Set<string>;
+    skipSupabase?: boolean;
   }) => {
     if (!userEmail) {
       console.error('❌ persistSession blocked: userEmail is missing.');
+      return;
+    }
+    const currentStep = options?.step || step;
+    if (currentStep === 'report') {
       return;
     }
     const productSource = options?.productOverride || masterProducts;
@@ -723,6 +729,11 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     // Save to IndexedDB (Async)
     await StockStorage.saveLocalStockSession(userEmail, payload);
     console.log('💾 Session saved to IndexedDB');
+
+    if (options?.skipSupabase) {
+      setIsSavingSession(false);
+      return; // Fast return to save bandwidth
+    }
 
     console.log('🔄 Persisting stock session to Supabase...', {
       email: userEmail,
@@ -1111,8 +1122,17 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     setLastScanned({ item: updatedItem, product });
     playAccumulationBeep();
 
-    // Auto-save after accumulation
-    await persistSession({ inventoryOverride: updatedInventory, step: 'conference' });
+    // Check if phase 1 is complete
+    let pendingCount = 0;
+    updatedInventory.forEach(i => { if (i.status === 'pending') pendingCount++; });
+    const isComplete = pendingCount === 0;
+
+    if (isComplete) {
+      setStep('divergence');
+    }
+
+    // Auto-save after accumulation (IndexedDB only, Supabase is debounced globally)
+    await persistSession({ inventoryOverride: updatedInventory, step: isComplete ? 'divergence' : 'conference', skipSupabase: true });
     if (userEmail) {
       SupabaseService.insertAppEventLog({
         company_id: selectedCompanyId || null,
@@ -1167,8 +1187,17 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     setActiveItem(null);
     setCountInput('');
 
-    // Auto-save after each item counted
-    await persistSession({ inventoryOverride: updatedInventory, step: 'conference' });
+    // Check if phase 1 is complete
+    let pendingCount = 0;
+    updatedInventory.forEach(i => { if (i.status === 'pending') pendingCount++; });
+    const isComplete = pendingCount === 0;
+
+    if (isComplete) {
+      setStep('divergence');
+    }
+
+    // Auto-save after each item counted (IndexedDB only, Supabase is debounced globally)
+    await persistSession({ inventoryOverride: updatedInventory, step: isComplete ? 'divergence' : 'conference', skipSupabase: true });
     if (userEmail) {
       SupabaseService.insertAppEventLog({
         company_id: selectedCompanyId || null,
@@ -1252,12 +1281,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   };
 
   const handleFinalize = async () => {
-    if (finalizeInFlightRef.current || isSavingStockReport) {
-      return;
-    }
-
     // 1. Strict Check: Phase 1 Completion (No Pending items allowed)
-    // This applies to both Phase 1 (Initial) and Phase 2 (Recount) because recount resets items to pending.
     const pendingCount = Array.from(inventory.values()).filter((i: StockItem) => i.status === 'pending').length;
 
     if (pendingCount > 0) {
@@ -1267,9 +1291,6 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     }
 
     // 2. Strict Check: Phase 2 Requirement (If Divergences exist, Recount must have been initiated)
-    // We check if divergences exist AND we are NOT in recount mode (recountTargets.size == 0).
-    // If stats.isRecount is true, it means we are in Phase 2 workflow (or finished it), so we rely on pending == 0 check above.
-    // If stats.isRecount is false, it means we haven't started Phase 2.
     const divergentCount = Array.from(inventory.values()).filter((i: StockItem) => i.status === 'divergent').length;
 
     if (divergentCount > 0 && !stats.isRecount) {
@@ -1278,71 +1299,81 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       return;
     }
 
-    // If passed all checks, persist to Supabase before showing final report
-    const allItems = Array.from(inventory.values());
-    const matched = allItems.filter(item => item.status === 'matched').length;
-    const divergent = allItems.filter(item => item.status === 'divergent').length;
-    const pending = allItems.filter(item => item.status === 'pending').length;
-    const finalizedAt = new Date();
-    const startTimestamp = sessionStartTime ? new Date(sessionStartTime).toISOString() : null;
-    const endTimestamp = finalizedAt.toISOString();
-    const durationMs = sessionStartTime ? Math.max(0, finalizedAt.getTime() - sessionStartTime) : 0;
+    // If passed all checks, simply go to report screen to collect signatures.
+    // The actual save will happen when they download the definite report.
+    setStep('report');
+  };
 
-    const summary = {
-      total: allItems.length,
-      matched,
-      divergent,
-      pending,
-      percent: stats.percent,
-      duration_ms: durationMs,
-      durationMs,
-      started_at: startTimestamp,
-      startedAt: startTimestamp,
-      ended_at: endTimestamp,
-      endedAt: endTimestamp,
-      signatures: {
-        pharmacist: pharmSignature,
-        manager: managerSignature
-      }
-    };
+  const saveDefinitiveReport = async (): Promise<boolean> => {
+    if (lastSavedReportId) return true; // Já salvo corretamente
+    if (isSavingStockReport) return false;
 
-    const inventorySnapshot = allItems.map(item => {
-      const product = masterProducts.get(item.reducedCode);
-      return {
-        reduced_code: item.reducedCode,
-        barcode: product?.barcode || null,
-        description: product?.description || null,
-        system_qty: item.systemQty,
-        counted_qty: item.countedQty,
-        status: item.status,
-        difference: item.countedQty - item.systemQty,
-        last_updated: item.lastUpdated ? item.lastUpdated.toISOString() : null
-      };
-    });
-
-    const payload = {
-      user_email: userEmail?.trim() || 'desconhecido@empresa.com',
-      user_name: userName?.trim() || 'Operador',
-      branch: branch || 'Filial não informada',
-      area: selectedAreaName || 'Área não informada',
-      pharmacist: pharmacist || 'Farmacêutico não informado',
-      manager: manager || 'Gestor não informado',
-      summary,
-      items: inventorySnapshot
-    };
-
-    let reportSaved = false;
-    finalizeInFlightRef.current = true;
     setIsSavingStockReport(true);
+    let reportSaved = false;
+
     try {
+      const allItems = Array.from(inventory.values());
+      const matched = allItems.filter(item => item.status === 'matched').length;
+      const divergent = allItems.filter(item => item.status === 'divergent').length;
+      const pending = allItems.filter(item => item.status === 'pending').length;
+      const finalizedAt = new Date();
+      const startTimestamp = sessionStartTime ? new Date(sessionStartTime).toISOString() : null;
+      const endTimestamp = finalizedAt.toISOString();
+      const durationMs = sessionStartTime ? Math.max(0, finalizedAt.getTime() - sessionStartTime) : 0;
+
+      const summary = {
+        total: allItems.length,
+        matched,
+        divergent,
+        pending,
+        percent: stats.percent,
+        duration_ms: durationMs,
+        durationMs,
+        started_at: startTimestamp,
+        startedAt: startTimestamp,
+        ended_at: endTimestamp,
+        endedAt: endTimestamp,
+        signatures: {
+          pharmacist: pharmSignature,
+          manager: managerSignature
+        }
+      };
+
+      const inventorySnapshot = allItems.map(item => {
+        const product = masterProducts.get(item.reducedCode);
+        return {
+          reduced_code: item.reducedCode,
+          barcode: product?.barcode || null,
+          description: product?.description || null,
+          system_qty: item.systemQty,
+          counted_qty: item.countedQty,
+          status: item.status,
+          difference: item.countedQty - item.systemQty,
+          last_updated: item.lastUpdated ? item.lastUpdated.toISOString() : null
+        };
+      });
+
+      const payload = {
+        user_email: userEmail?.trim() || 'desconhecido@empresa.com',
+        user_name: userName?.trim() || 'Operador',
+        branch: branch || 'Filial não informada',
+        area: selectedAreaName || 'Área não informada',
+        pharmacist: pharmacist || 'Farmacêutico não informado',
+        manager: manager || 'Gestor não informado',
+        summary,
+        items: inventorySnapshot
+      };
+
       const saved = await SupabaseService.createStockConferenceReport(payload);
       if (saved) {
         reportSaved = true;
         setLastSavedReportId(saved.id || null);
         setLastSavedSummary(summary);
+
         if (onReportSaved) {
           await onReportSaved();
         }
+
         if (userEmail) {
           SupabaseService.insertAppEventLog({
             company_id: selectedCompanyId || null,
@@ -1359,28 +1390,25 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
             source: 'web',
             event_meta: { total: summary.total, matched: summary.matched, divergent: summary.divergent }
           }).catch(() => { });
-        }
-      }
-    } catch (error) {
-      console.error('Erro ao salvar conferência de estoque:', error);
-      alert('Não foi possível salvar o relatório no Supabase. A conferência NÃO será descartada; tente finalizar novamente.');
-    } finally {
-      finalizeInFlightRef.current = false;
-      setIsSavingStockReport(false);
-      if (reportSaved) {
-        manualSessionStartedRef.current = false;
-        setSessionId(null);
-        if (userEmail) {
+
           await StockStorage.clearLocalStockSession(userEmail);
           try {
             await SupabaseService.deleteStockConferenceSession(userEmail);
-          } catch (deleteError) {
-            console.warn('Falha ao limpar sessão local após finalização:', deleteError);
-          }
+          } catch (deleteError) { }
         }
-        setStep('report');
+      }
+    } catch (error) {
+      console.error('Erro ao salvar conferência de estoque definitivo:', error);
+      alert('Não foi possível salvar o relatório no servidor de forma definitiva. Verifique sua conexão e tente novamente.');
+    } finally {
+      setIsSavingStockReport(false);
+      if (reportSaved) {
+        setIsDirty(false);
+        manualSessionStartedRef.current = false;
+        setSessionId(null);
       }
     }
+    return reportSaved;
   };
 
   // Helper to determine display color for divergence
@@ -2135,6 +2163,33 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       </div>
     );
   };
+  const handleResetSession = () => {
+    setStep('setup');
+    setInventory(new Map());
+    setMasterProducts(new Map());
+    setRecountTargets(new Set());
+    setPharmSignature(null);
+    setManagerSignature(null);
+    setBranch('');
+    setSelectedCompanyId('');
+    setSelectedAreaName('');
+    setProductFile(null);
+    setStockFile(null);
+    setSessionId(null);
+    manualSessionStartedRef.current = false;
+    setIsDirty(false);
+  };
+
+  useEffect(() => {
+    if (step !== 'report') return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleResetSession();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [step]);
 
   const renderReport = () => {
     const allItems: StockItem[] = Array.from(inventory.values());
@@ -2144,7 +2199,10 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
 
     const signaturesComplete = pharmSignature && managerSignature;
 
-    const exportCSV = () => {
+    const exportCSV = async () => {
+      const saved = await saveDefinitiveReport();
+      if (!saved) return;
+
       if (userEmail) {
         SupabaseService.insertAppEventLog({
           company_id: selectedCompanyId || null,
@@ -2174,6 +2232,18 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       a.href = url;
       a.download = `conferencia_${branch.replace(/\s+/g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`;
       a.click();
+    };
+
+    const handleSaveAndFinish = async () => {
+      const saved = await saveDefinitiveReport();
+      if (!saved) return;
+
+      const wantsPDF = window.confirm("Relatório salvo com sucesso no sistema!\n\nDeseja baixar o arquivo PDF agora?");
+      if (wantsPDF) {
+        exportPDF();
+      } else {
+        alert("Você pode acessar este relatório mais tarde no Histórico.");
+      }
     };
 
     const exportPDF = () => {
@@ -2310,7 +2380,14 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     };
 
     return (
-      <div className="flex flex-col h-full bg-white overflow-y-auto w-full">
+      <div className="flex flex-col h-full bg-white overflow-y-auto w-full relative">
+        {isSavingStockReport && (
+          <div className="absolute inset-0 z-50 bg-white/80 backdrop-blur-sm flex flex-col justify-center items-center">
+            <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mb-4"></div>
+            <p className="text-xl font-bold text-gray-800">Salvando Relatório Definitivo...</p>
+            <p className="text-sm text-gray-500 mt-2">Por favor, não feche a página.</p>
+          </div>
+        )}
         <div className="max-w-4xl mx-auto w-full p-8 flex flex-col items-center">
           <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-6">
             <FileText className="w-8 h-8" />
@@ -2385,69 +2462,38 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
           <div className="grid grid-cols-1 gap-4 w-full md:w-auto">
             {!signaturesComplete && (
               <div className="text-center text-red-500 font-medium mb-2 bg-red-50 p-2 rounded">
-                Colete ambas as assinaturas para liberar o download.
+                Colete ambas as assinaturas para liberar o salvamento.
               </div>
             )}
             <button
-              onClick={exportPDF}
+              onClick={handleSaveAndFinish}
               disabled={!signaturesComplete}
-              className={`flex items-center justify-center space-x-2 px-8 py-4 rounded-xl text-lg font-bold shadow-lg transition w-full ${signaturesComplete ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+              className={`flex items-center justify-center space-x-2 px-8 py-4 rounded-xl text-lg font-bold shadow-lg transition w-full ${signaturesComplete ? 'bg-green-600 text-white hover:bg-green-700' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
             >
               <Printer className="w-5 h-5" />
-              <span>Baixar Relatório (PDF)</span>
+              <span>Salvar Relatório e Finalizar</span>
             </button>
 
             <button
               onClick={exportCSV}
               disabled={!signaturesComplete}
-              className={`flex items-center justify-center space-x-2 px-8 py-4 rounded-xl text-lg font-bold shadow-lg transition w-full ${signaturesComplete ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-gray-300 text-gray-500 cursor-not-allowed'}`}
+              className={`flex items-center justify-center space-x-2 px-8 py-3 rounded-xl text-md font-semibold shadow-sm transition w-full ${signaturesComplete ? 'bg-blue-50 text-blue-600 hover:bg-blue-100 border border-blue-200' : 'bg-gray-100 text-gray-400 cursor-not-allowed'}`}
             >
-              <Download className="w-5 h-5" />
-              <span>Baixar Relatório (CSV)</span>
+              <Download className="w-4 h-4" />
+              <span>Baixar CSV</span>
             </button>
           </div>
 
           <button
-            onClick={() => window.location.reload()}
-            className="mt-6 text-gray-400 hover:text-gray-600 text-sm"
+            onClick={handleResetSession}
+            className="mt-6 px-6 py-3 rounded-xl bg-gray-100 text-gray-700 border border-gray-300 font-bold shadow hover:bg-gray-200 transition"
           >
-            Iniciar Nova Conferência
+            Iniciar Nova Conferência (Esc)
           </button>
         </div>
       </div>
     );
   };
-
-  useEffect(() => {
-    if (!lastSavedReportId || !lastSavedSummary) return;
-    if (!pharmSignature && !managerSignature) return;
-
-    const hash = `${pharmSignature || ''}-${managerSignature || ''}`;
-    if (signatureHashRef.current === hash) return;
-
-    const updatedSummary: StockSummaryPayload = {
-      ...lastSavedSummary,
-      signatures: {
-        pharmacist: pharmSignature || null,
-        manager: managerSignature || null
-      }
-    };
-
-    const applyUpdate = async () => {
-      try {
-        await SupabaseService.updateStockConferenceReportSummary(lastSavedReportId, updatedSummary);
-        setLastSavedSummary(updatedSummary);
-        signatureHashRef.current = hash;
-        if (onReportSaved) {
-          await onReportSaved();
-        }
-      } catch (error) {
-        console.error('Erro ao atualizar assinaturas no Supabase:', error);
-      }
-    };
-
-    applyUpdate();
-  }, [pharmSignature, managerSignature, lastSavedReportId, lastSavedSummary, onReportSaved]);
 
   return (
     <div className="h-full w-full">
