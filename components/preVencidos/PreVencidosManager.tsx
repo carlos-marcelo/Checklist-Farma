@@ -3310,6 +3310,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     if (!userEmail) return true;
     if (isLoadingSession) return false;
 
+    // Se estivermos na tela de SETUP, a UI de botão cuida da espera. Não trava a hidratação global.
+    if (currentView === AppView.SETUP) {
+      return true;
+    }
+
     // Se já existe contexto de filial/empresa, só libera após carregar tudo.
     if (hasReportsContext) {
       if (!isInitialSyncDone) return false;
@@ -3333,7 +3338,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     hasBranchContext,
     hasLoadedInitialBranchRecords,
     shouldWaitSetupPrefetch,
-    isBranchPrefetching
+    isBranchPrefetching,
+    currentView
   ]);
 
   useEffect(() => {

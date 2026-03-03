@@ -356,14 +356,17 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     else setExpanded({ id, type });
   };
 
-  const filteredResults = results.filter(r => {
-    const matchesSearch = r.name.toLowerCase().includes(searchTerm.toLowerCase()) || r.reducedCode.includes(searchTerm);
-    if (!matchesSearch) return false;
-    if (activeFilter === 'all') return true;
-    if (activeFilter === 'finalized') return r.isFinalized;
-    if (activeFilter === 'similar') return !r.isFinalized && r.status === 'replaced';
-    return !r.isFinalized && r.status === 'sold';
-  });
+  const filteredResults = useMemo(() => {
+    const searchLower = searchTerm.toLowerCase();
+    return results.filter(r => {
+      const matchesSearch = r.name.toLowerCase().includes(searchLower) || r.reducedCode.includes(searchTerm);
+      if (!matchesSearch) return false;
+      if (activeFilter === 'all') return true;
+      if (activeFilter === 'finalized') return r.isFinalized;
+      if (activeFilter === 'similar') return !r.isFinalized && r.status === 'replaced';
+      return !r.isFinalized && r.status === 'sold';
+    });
+  }, [results, searchTerm, activeFilter]);
 
   const formatCurrency = (value: number) => {
     try {
@@ -434,8 +437,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                 onClick={() => handleFilterClick('pending')}
                 aria-pressed={activeFilter === 'pending'}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${activeFilter === 'pending'
-                    ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-200 scale-[1.02]'
-                    : 'bg-white text-slate-400 border-slate-200 hover:text-blue-600 hover:border-blue-200 hover:shadow-sm'
+                  ? 'bg-blue-600 text-white border-blue-500 shadow-lg shadow-blue-200 scale-[1.02]'
+                  : 'bg-white text-slate-400 border-slate-200 hover:text-blue-600 hover:border-blue-200 hover:shadow-sm'
                   }`}
               >
                 <div className={`w-2.5 h-2.5 rounded-full ${activeFilter === 'pending' ? 'bg-white' : 'bg-blue-500'}`}></div>
@@ -446,8 +449,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                 onClick={() => handleFilterClick('finalized')}
                 aria-pressed={activeFilter === 'finalized'}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${activeFilter === 'finalized'
-                    ? 'bg-green-600 text-white border-green-500 shadow-lg shadow-green-200 scale-[1.02]'
-                    : 'bg-white text-slate-400 border-slate-200 hover:text-green-600 hover:border-green-200 hover:shadow-sm'
+                  ? 'bg-green-600 text-white border-green-500 shadow-lg shadow-green-200 scale-[1.02]'
+                  : 'bg-white text-slate-400 border-slate-200 hover:text-green-600 hover:border-green-200 hover:shadow-sm'
                   }`}
               >
                 <div className={`w-2.5 h-2.5 rounded-full ${activeFilter === 'finalized' ? 'bg-white' : 'bg-green-500'}`}></div>
@@ -458,8 +461,8 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
                 onClick={() => handleFilterClick('similar')}
                 aria-pressed={activeFilter === 'similar'}
                 className={`flex items-center gap-2 px-4 py-2.5 rounded-2xl border text-[11px] font-black uppercase tracking-widest transition-all ${activeFilter === 'similar'
-                    ? 'bg-amber-500 text-white border-amber-400 shadow-lg shadow-amber-200 scale-[1.02]'
-                    : 'bg-white text-slate-400 border-slate-200 hover:text-amber-600 hover:border-amber-200 hover:shadow-sm'
+                  ? 'bg-amber-500 text-white border-amber-400 shadow-lg shadow-amber-200 scale-[1.02]'
+                  : 'bg-white text-slate-400 border-slate-200 hover:text-amber-600 hover:border-amber-200 hover:shadow-sm'
                   }`}
               >
                 <div className={`w-2.5 h-2.5 rounded-full ${activeFilter === 'similar' ? 'bg-white' : 'bg-amber-500'}`}></div>

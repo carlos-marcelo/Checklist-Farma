@@ -1,5 +1,5 @@
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Product, PVRecord, SessionInfo } from '../../preVencidos/types';
 import { insertAppEventLog } from '../../supabaseService';
 import ScannerInput from './ScannerInput';
@@ -271,14 +271,18 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     if (e.key === 'Enter') handleConfirm();
   };
 
-  const similarProducts = scanningProduct
-    ? masterProducts.filter(p => p.dcb === scanningProduct.dcb && p.reducedCode !== scanningProduct.reducedCode).slice(0, 10)
-    : [];
+  const similarProducts = useMemo(() => {
+    return scanningProduct
+      ? masterProducts.filter(p => p.dcb === scanningProduct.dcb && p.reducedCode !== scanningProduct.reducedCode).slice(0, 10)
+      : [];
+  }, [scanningProduct, masterProducts]);
 
-  const originOptions = Array.from(new Set(
-    (originBranches.length > 0 ? originBranches : (sessionInfo?.filial ? [sessionInfo.filial] : []))
-      .filter(Boolean)
-  ));
+  const originOptions = useMemo(() => {
+    return Array.from(new Set(
+      (originBranches.length > 0 ? originBranches : (sessionInfo?.filial ? [sessionInfo.filial] : []))
+        .filter(Boolean)
+    ));
+  }, [originBranches, sessionInfo?.filial]);
 
   const setDraftField = (id: string, field: 'quantity' | 'sectorResponsible', value: string) => {
     setDrafts(prev => ({
@@ -381,7 +385,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     }
   };
 
-  const getInventoryCostUnitByReduced = (reducedCode?: string) => {
+  const getInventoryCostUnitByReduced = useCallback((reducedCode?: string) => {
     if (!reducedCode) return 0;
     const normalizedReduced = normalizeReducedCode(reducedCode);
     const reducedKey = normalizedReduced ? `red:${normalizedReduced}` : '';
@@ -393,12 +397,14 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     const noZeros = normalized.replace(/^0+/, '') || normalized;
     const value = inventoryCostByBarcode[normalized] ?? inventoryCostByBarcode[noZeros];
     return Number(value || 0);
-  };
+  }, [inventoryCostByBarcode, barcodeByReduced]);
 
-  const totalCostPredicted = pvRecords.reduce((acc, rec) => {
-    const unit = getInventoryCostUnitByReduced(rec.reducedCode);
-    return acc + unit * rec.quantity;
-  }, 0);
+  const totalCostPredicted = useMemo(() => {
+    return pvRecords.reduce((acc, rec) => {
+      const unit = getInventoryCostUnitByReduced(rec.reducedCode);
+      return acc + unit * rec.quantity;
+    }, 0);
+  }, [pvRecords, inventoryCostByBarcode, barcodeByReduced]);
 
   // PDF Export
   const handleExportPDF = () => {
@@ -546,63 +552,71 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       : <div className="w-3 h-3 ml-1 text-amber-500 ring-2 ring-amber-100 rounded-full"><ChevronRight className="rotate-90" size={12} /></div>;
   };
 
-  const filteredRecords = pvRecords.filter(rec => {
+  const filteredRecords = useMemo(() => {
     const search = filterText.trim().toLowerCase();
-    const matchText = !search
-      ? true
-      : rec.name.toLowerCase().includes(search)
-      || rec.reducedCode.toLowerCase().includes(search);
-    const matchMonth = selectedMonths.length > 0
-      ? selectedMonths.includes(rec.expiryDate)
-      : (filterMonthInput ? rec.expiryDate.includes(filterMonthInput) : true);
+    let result = pvRecords.filter(rec => {
+      const matchText = !search
+        ? true
+        : rec.name.toLowerCase().includes(search)
+        || rec.reducedCode.toLowerCase().includes(search);
+      const matchMonth = selectedMonths.length > 0
+        ? selectedMonths.includes(rec.expiryDate)
+        : (filterMonthInput ? rec.expiryDate.includes(filterMonthInput) : true);
 
-    let matchStatus = true;
-    if (filterStatus) {
-      const status = getExpiryStatus(rec.expiryDate);
-      matchStatus = status.label === filterStatus;
+      let matchStatus = true;
+      if (filterStatus) {
+        const status = getExpiryStatus(rec.expiryDate);
+        matchStatus = status.label === filterStatus;
+      }
+
+      return matchText && matchMonth && matchStatus;
+    });
+
+    if (sortConfig) {
+      result.sort((a, b) => {
+        if (sortConfig.key === 'expiryDate') {
+          const [m1, y1] = a.expiryDate.split('/').map(Number);
+          const [m2, y2] = b.expiryDate.split('/').map(Number);
+          const v1 = (y1 * 12) + m1;
+          const v2 = (y2 * 12) + m2;
+          return sortConfig.direction === 'asc' ? v1 - v2 : v2 - v1;
+        }
+
+        const v1 = a[sortConfig.key];
+        const v2 = b[sortConfig.key];
+
+        if (typeof v1 === 'number' && typeof v2 === 'number') {
+          return sortConfig.direction === 'asc' ? v1 - v2 : v2 - v1;
+        }
+
+        const s1 = String(v1 ?? '');
+        const s2 = String(v2 ?? '');
+        return sortConfig.direction === 'asc'
+          ? s1.localeCompare(s2)
+          : s2.localeCompare(s1);
+      });
     }
 
-    return matchText && matchMonth && matchStatus;
-  });
+    return result;
+  }, [pvRecords, filterText, filterMonthInput, selectedMonths, filterStatus, sortConfig]);
 
-  if (sortConfig) {
-    filteredRecords.sort((a, b) => {
-      if (sortConfig.key === 'expiryDate') {
-        const [m1, y1] = a.expiryDate.split('/').map(Number);
-        const [m2, y2] = b.expiryDate.split('/').map(Number);
-        const v1 = (y1 * 12) + m1;
-        const v2 = (y2 * 12) + m2;
-        return sortConfig.direction === 'asc' ? v1 - v2 : v2 - v1;
-      }
+  const { launchesLast30, lastLaunchDate, lastLaunchLabel } = useMemo(() => {
+    const now = new Date();
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const validLaunchDates = pvRecords
+      .map(rec => ({ rec, date: new Date(rec.entryDate) }))
+      .filter(item => !Number.isNaN(item.date.getTime()));
+    const launchesLast30 = validLaunchDates.filter(item => item.date >= thirtyDaysAgo).length;
+    const lastLaunchDate = validLaunchDates.reduce<Date | null>((latest, item) => {
+      if (!latest || item.date > latest) return item.date;
+      return latest;
+    }, null);
+    const lastLaunchLabel = lastLaunchDate
+      ? `${lastLaunchDate.toLocaleDateString('pt-BR')} ${lastLaunchDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
+      : 'Sem lançamentos';
 
-      const v1 = a[sortConfig.key];
-      const v2 = b[sortConfig.key];
-
-      if (typeof v1 === 'number' && typeof v2 === 'number') {
-        return sortConfig.direction === 'asc' ? v1 - v2 : v2 - v1;
-      }
-
-      const s1 = String(v1 ?? '');
-      const s2 = String(v2 ?? '');
-      return sortConfig.direction === 'asc'
-        ? s1.localeCompare(s2)
-        : s2.localeCompare(s1);
-    });
-  }
-
-  const now = new Date();
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-  const validLaunchDates = pvRecords
-    .map(rec => ({ rec, date: new Date(rec.entryDate) }))
-    .filter(item => !Number.isNaN(item.date.getTime()));
-  const launchesLast30 = validLaunchDates.filter(item => item.date >= thirtyDaysAgo).length;
-  const lastLaunchDate = validLaunchDates.reduce<Date | null>((latest, item) => {
-    if (!latest || item.date > latest) return item.date;
-    return latest;
-  }, null);
-  const lastLaunchLabel = lastLaunchDate
-    ? `${lastLaunchDate.toLocaleDateString('pt-BR')} ${lastLaunchDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`
-    : 'Sem lançamentos';
+    return { launchesLast30, lastLaunchDate, lastLaunchLabel };
+  }, [pvRecords]);
 
   const lastEditDate = pvEventSummary?.lastUpdatedAt ? new Date(pvEventSummary.lastUpdatedAt) : null;
   const lastEditLabel = lastEditDate && !Number.isNaN(lastEditDate.getTime())
@@ -824,21 +838,24 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
 
             <div className="flex flex-wrap gap-3 overflow-x-auto custom-scrollbar pb-2">
               {(() => {
-                const grouped = pvRecords.reduce((acc, rec) => {
-                  const key = rec.expiryDate;
-                  if (!acc[key]) acc[key] = { items: 0, skus: new Set<string>(), costTotal: 0 };
-                  const unit = getInventoryCostUnitByReduced(rec.reducedCode);
-                  acc[key].items += rec.quantity;
-                  acc[key].skus.add(rec.reducedCode);
-                  acc[key].costTotal += unit * rec.quantity;
-                  return acc;
-                }, {} as Record<string, { items: number; skus: Set<string>; costTotal: number }>);
+                const { sortedDates, grouped } = useMemo(() => {
+                  const currentGrouped = pvRecords.reduce((acc, rec) => {
+                    const key = rec.expiryDate;
+                    if (!acc[key]) acc[key] = { items: 0, skus: new Set<string>(), costTotal: 0 };
+                    const unit = getInventoryCostUnitByReduced(rec.reducedCode);
+                    acc[key].items += rec.quantity;
+                    acc[key].skus.add(rec.reducedCode);
+                    acc[key].costTotal += unit * rec.quantity;
+                    return acc;
+                  }, {} as Record<string, { items: number; skus: Set<string>; costTotal: number }>);
 
-                const sortedDates = Object.keys(grouped).sort((a, b) => {
-                  const [m1, y1] = a.split('/').map(Number);
-                  const [m2, y2] = b.split('/').map(Number);
-                  return (y1 * 12 + m1) - (y2 * 12 + m2);
-                });
+                  const currentSortedDates = Object.keys(currentGrouped).sort((a, b) => {
+                    const [m1, y1] = a.split('/').map(Number);
+                    const [m2, y2] = b.split('/').map(Number);
+                    return (y1 * 12 + m1) - (y2 * 12 + m2);
+                  });
+                  return { sortedDates: currentSortedDates, grouped: currentGrouped };
+                }, [pvRecords, inventoryCostByBarcode, barcodeByReduced]);
 
                 return sortedDates.length === 0 ? (
                   <div className="flex flex-col items-center justify-center py-12 text-slate-300 gap-3 border-2 border-dashed border-slate-50 rounded-2xl w-full">
@@ -874,7 +891,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                             {data.items} unidades · {data.skus.size} skus
                           </span>
                           <span className={`px-1.5 py-0.5 rounded text-white ${status.label === 'VENCIDO' ? 'bg-red-500' :
-                              status.label === 'CRÍTICO' ? 'bg-rose-500' : 'bg-blue-500'
+                            status.label === 'CRÍTICO' ? 'bg-rose-500' : 'bg-blue-500'
                             }`}>
                             {status.label}
                           </span>
