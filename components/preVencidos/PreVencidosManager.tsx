@@ -157,12 +157,12 @@ const normalizeReducedCode = (value?: string) => {
 };
 
 const buildSetupDraftKey = (email: string) => `PV_SETUP_DRAFT_${(email || '').trim().toLowerCase()}`;
-  const GLOBAL_BASE_CACHE_TTL_MS = 60 * 1000;
-  const BRANCH_FETCH_COOLDOWN_MS = 5 * 1000;
-  const LOCAL_REPORTS_LOAD_TIMEOUT_MS = 1500;
-  const REPORTS_SYNC_WATCHDOG_MS = 15000;
-  const BRANCH_RECORDS_FETCH_TIMEOUT_MS = 12000;
-  const PV_GLOBAL_MODULE_KEYS = ['shared_cadastro_produtos', 'pre_dcb_base'] as const;
+const GLOBAL_BASE_CACHE_TTL_MS = 60 * 1000;
+const BRANCH_FETCH_COOLDOWN_MS = 5 * 1000;
+const LOCAL_REPORTS_LOAD_TIMEOUT_MS = 1500;
+const REPORTS_SYNC_WATCHDOG_MS = 15000;
+const BRANCH_RECORDS_FETCH_TIMEOUT_MS = 12000;
+const PV_GLOBAL_MODULE_KEYS = ['shared_cadastro_produtos', 'pre_dcb_base'] as const;
 
 const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   userEmail,
@@ -680,13 +680,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     saveLocalPVSession(userEmail, payload);
   }, [currentView, userEmail]);
 
+  const reportLookupCompanyId = setupDraftInfo?.companyId || sessionInfo?.companyId || null;
+  const reportLookupBranch = setupDraftInfo?.filial || sessionInfo?.filial || null;
+
   useEffect(() => {
     if (!userEmail) return;
     let cancelled = false;
 
     const syncReports = async (attempt = 0) => {
-      const reportLookupCompanyId = setupDraftInfo?.companyId || sessionInfo?.companyId || null;
-      const reportLookupBranch = setupDraftInfo?.filial || sessionInfo?.filial || null;
       // Em primeiro acesso (novo usuário/máquina), ainda não há contexto de filial.
       // Não bloqueia a hidratação global aguardando sync remoto sem filtro.
       if (!reportLookupCompanyId || !reportLookupBranch) {
@@ -712,8 +713,20 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       const now = Date.now();
       const isCooldown = now - lastRun < BRANCH_FETCH_COOLDOWN_MS;
       const shouldBypassCooldown = !reportsReady || reportsSyncStatus === 'missing' || reportsSyncStatus === 'error';
-      if (reportsSyncInFlightRef.current.has(syncKey) || (isCooldown && !shouldBypassCooldown)) {
-        if (!cancelled) setIsInitialSyncDone(true);
+
+      if (reportsSyncInFlightRef.current.has(syncKey)) {
+        // Already fetching for this exact context. Let the active fetch update the state when done.
+        return;
+      }
+
+      if (isCooldown && !shouldBypassCooldown) {
+        if (!cancelled) {
+          setIsInitialSyncDone(true);
+          // Prevent hanging on 'idle' if we inherited a bad state
+          if (reportsSyncStatus === 'idle') {
+            setReportsSyncStatus('ready');
+          }
+        }
         return;
       }
       reportsSyncInFlightRef.current.add(syncKey);
@@ -908,7 +921,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [userEmail, setupDraftInfo?.companyId, setupDraftInfo?.filial, sessionInfo?.companyId, sessionInfo?.filial, decodeGlobalFileToBrowserFile, fetchGlobalBaseFilesCached]);
+  }, [userEmail, reportLookupCompanyId, reportLookupBranch, decodeGlobalFileToBrowserFile, fetchGlobalBaseFilesCached]);
 
   useEffect(() => {
     const hasReportsContextForWatchdog = !!(
@@ -3328,7 +3341,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     if (
       hasInitialHydrationCompleted &&
       hasReportsContext &&
-      (!isInitialSyncDone || reportsSyncStatus !== 'ready')
+      (!isInitialSyncDone || reportsSyncStatus === 'idle' || reportsSyncStatus === 'loading')
     ) {
       setHasInitialHydrationCompleted(false);
       setHydrationDelayDone(false);
@@ -3365,7 +3378,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   if (!hasInitialHydrationCompleted) {
     return (
-      <div className="h-full w-full bg-slate-50 flex items-center justify-center">
+      <div className="h-full w-full bg-slate-50 flex items-center justify-center relative">
         <div className="bg-white border border-slate-200 rounded-2xl shadow-sm px-8 py-6 flex flex-col items-center gap-3">
           <div className="w-8 h-8 border-4 border-slate-200 border-t-blue-500 rounded-full animate-spin"></div>
           <p className="text-sm font-black text-slate-700 uppercase tracking-wider">Sincronizando Pré-Vencidos</p>

@@ -124,7 +124,8 @@ const SetupView: React.FC<SetupViewProps> = ({
   };
 
   const isFormValid = !!info.companyId && info.filial && info.pharmacist && info.manager && systemLoaded && dcbLoaded;
-  const canStart = isFormValid && reportsReady && !isBranchPrefetching && !branchPrefetchError;
+  const isReportsSyncing = reportsStatus === 'idle' || reportsStatus === 'loading';
+  const canStart = isFormValid && reportsReady && !isReportsSyncing && !isBranchPrefetching && !branchPrefetchError;
 
   const RequirementItem = ({ label, met }: { label: string, met: boolean }) => (
     <div className={`flex items-center gap-2 text-xs font-bold transition-all duration-300 ${met ? 'text-emerald-600' : 'text-slate-400'}`}>
@@ -366,7 +367,6 @@ const SetupView: React.FC<SetupViewProps> = ({
         </div>
       )}
 
-      {/* Botão de início */}
       <div className="flex justify-center pt-2">
         <button
           disabled={!canStart}
@@ -380,7 +380,7 @@ const SetupView: React.FC<SetupViewProps> = ({
             <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 transform -skew-x-12 -translate-x-full group-hover:translate-x-full transition-transform duration-700"></div>
           )}
           <span className="relative z-10 flex items-center gap-3">
-            {isBranchPrefetching ? 'CARREGANDO DADOS...' : 'INICIAR LANÇAMENTOS'}
+            {isReportsSyncing ? 'SINCRONIZANDO CADASTROS...' : isBranchPrefetching ? 'CARREGANDO ESTOQUE...' : 'INICIAR LANÇAMENTOS'}
             <ArrowRight size={22} className={`transition-transform duration-300 ${canStart ? 'group-hover:translate-x-1' : ''}`} />
           </span>
         </button>
