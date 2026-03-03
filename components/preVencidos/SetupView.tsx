@@ -308,17 +308,7 @@ const SetupView: React.FC<SetupViewProps> = ({
       </div>
 
       {/* Status banner */}
-      {reportsStatus === 'loading' ? (
-        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-5 rounded-2xl border border-blue-200 flex items-center gap-4">
-          <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
-            <Info size={20} className="text-blue-600" />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-blue-800">Carregando relatórios</p>
-            <p className="text-xs text-blue-600 mt-0.5">Aguardando sincronização do Cadastro e DCB no Supabase.</p>
-          </div>
-        </div>
-      ) : !systemLoaded || !dcbLoaded ? (
+      {!systemLoaded || !dcbLoaded ? (
         <div className="bg-gradient-to-r from-amber-50 to-orange-50 p-5 rounded-2xl border border-amber-200 flex items-center gap-4">
           <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
             <Info size={20} className="text-amber-600" />
@@ -328,7 +318,7 @@ const SetupView: React.FC<SetupViewProps> = ({
             <p className="text-xs text-amber-600 mt-0.5">Carregue ambos os arquivos (Cadastro + DCB) para liberar o botão de início.</p>
           </div>
         </div>
-      ) : !reportsReady ? (
+      ) : !reportsReady && !isReportsSyncing && !isBranchPrefetching && !branchPrefetchError ? (
         <div className="bg-gradient-to-r from-amber-50 to-orange-50 p-5 rounded-2xl border border-amber-200 flex items-center gap-4">
           <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
             <Info size={20} className="text-amber-600" />
@@ -336,16 +326,6 @@ const SetupView: React.FC<SetupViewProps> = ({
           <div>
             <p className="text-sm font-bold text-amber-800">Sincronização pendente</p>
             <p className="text-xs text-amber-600 mt-0.5">Os relatórios ainda não foram reconhecidos no Supabase.</p>
-          </div>
-        </div>
-      ) : isBranchPrefetching ? (
-        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 p-5 rounded-2xl border border-blue-200 flex items-center gap-4">
-          <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center flex-shrink-0">
-            <Info size={20} className="text-blue-600" />
-          </div>
-          <div>
-            <p className="text-sm font-bold text-blue-800">Carregando dados da filial</p>
-            <p className="text-xs text-blue-600 mt-0.5">Estoque e vendas estão sendo sincronizados.</p>
           </div>
         </div>
       ) : branchPrefetchError ? (
@@ -358,7 +338,7 @@ const SetupView: React.FC<SetupViewProps> = ({
             <p className="text-xs text-red-600 mt-0.5">{branchPrefetchError}</p>
           </div>
         </div>
-      ) : (
+      ) : !isReportsSyncing && !isBranchPrefetching && (
         <div className="bg-gradient-to-r from-emerald-500 to-emerald-600 p-5 rounded-2xl text-white flex items-center gap-4 shadow-lg shadow-emerald-200">
           <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
             <Check size={20} className="text-white" />
@@ -371,17 +351,24 @@ const SetupView: React.FC<SetupViewProps> = ({
         <button
           disabled={!canStart}
           onClick={() => onComplete(info)}
-          className={`px-16 py-5 rounded-2xl font-bold text-xl shadow-xl transition-all duration-300 relative overflow-hidden group ${canStart
+          className={`px-16 py-5 rounded-2xl font-bold text-xl shadow-xl transition-all duration-300 relative overflow-hidden group min-w-[340px] flex justify-center ${canStart
             ? 'bg-gradient-to-r from-prevencidos-500 via-prevencidos-600 to-prevencidos-700 text-white hover:shadow-2xl hover:shadow-prevencidos-300/50 hover:-translate-y-1 active:scale-95'
-            : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+            : isReportsSyncing || isBranchPrefetching
+              ? 'bg-blue-100 text-blue-500 cursor-not-allowed shadow-none border-2 border-blue-200'
+              : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
             }`}
         >
           {canStart && (
             <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 transform -skew-x-12 -translate-x-full group-hover:translate-x-full transition-transform duration-700"></div>
           )}
           <span className="relative z-10 flex items-center gap-3">
-            {isReportsSyncing ? 'SINCRONIZANDO CADASTROS...' : isBranchPrefetching ? 'CARREGANDO ESTOQUE...' : 'INICIAR LANÇAMENTOS'}
-            <ArrowRight size={22} className={`transition-transform duration-300 ${canStart ? 'group-hover:translate-x-1' : ''}`} />
+            {(isReportsSyncing || isBranchPrefetching) && (
+              <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+            )}
+            {isReportsSyncing ? <span className="animate-pulse">SINCRONIZANDO CADASTROS...</span> :
+              isBranchPrefetching ? <span className="animate-pulse">CARREGANDO ESTOQUE...</span> :
+                'INICIAR LANÇAMENTOS'}
+            {canStart && <ArrowRight size={22} className="transition-transform duration-300 group-hover:translate-x-1" />}
           </span>
         </button>
       </div>
