@@ -59,6 +59,7 @@ const SetupView: React.FC<SetupViewProps> = ({
     manager: '',
     companyId: undefined
   });
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     if (!initialInfo) return;
@@ -349,26 +350,31 @@ const SetupView: React.FC<SetupViewProps> = ({
 
       <div className="flex justify-center pt-2">
         <button
-          disabled={!canStart}
-          onClick={() => onComplete(info)}
-          className={`px-16 py-5 rounded-2xl font-bold text-xl shadow-xl transition-all duration-300 relative overflow-hidden group min-w-[340px] flex justify-center ${canStart
+          disabled={!canStart || isSubmitting}
+          onClick={async () => {
+            setIsSubmitting(true);
+            try {
+              await onComplete(info);
+            } finally {
+              setIsSubmitting(false);
+            }
+          }}
+          className={`px-16 py-5 rounded-2xl font-bold text-xl shadow-xl transition-all duration-300 relative overflow-hidden group min-w-[340px] flex justify-center ${canStart && !isSubmitting
             ? 'bg-gradient-to-r from-prevencidos-500 via-prevencidos-600 to-prevencidos-700 text-white hover:shadow-2xl hover:shadow-prevencidos-300/50 hover:-translate-y-1 active:scale-95'
-            : isReportsSyncing || isBranchPrefetching
+            : isSubmitting
               ? 'bg-blue-100 text-blue-500 cursor-not-allowed shadow-none border-2 border-blue-200'
               : 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
             }`}
         >
-          {canStart && (
+          {canStart && !isSubmitting && (
             <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 transform -skew-x-12 -translate-x-full group-hover:translate-x-full transition-transform duration-700"></div>
           )}
           <span className="relative z-10 flex items-center gap-3">
-            {(isReportsSyncing || isBranchPrefetching) && (
+            {isSubmitting && (
               <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
             )}
-            {isReportsSyncing ? <span className="animate-pulse">SINCRONIZANDO CADASTROS...</span> :
-              isBranchPrefetching ? <span className="animate-pulse">CARREGANDO ESTOQUE...</span> :
-                'INICIAR LANÇAMENTOS'}
-            {canStart && <ArrowRight size={22} className="transition-transform duration-300 group-hover:translate-x-1" />}
+            {isSubmitting ? <span className="animate-pulse">SINCRONIZANDO CADASTROS...</span> : 'INICIAR LANÇAMENTOS'}
+            {canStart && !isSubmitting && <ArrowRight size={22} className="transition-transform duration-300 group-hover:translate-x-1" />}
           </span>
         </button>
       </div>
