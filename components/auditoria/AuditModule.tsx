@@ -5104,7 +5104,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         );
                     })}
 
-                    {view.level === 'departments' && selectedGroup?.departments.map(dept => {
+                    {view.level === 'departments' && [...(selectedGroup?.departments || [])].sort((a, b) => {
+                        const aHasInProgress = a.categories.some(c => isInProgressStatus(c.status));
+                        const bHasInProgress = b.categories.some(c => isInProgressStatus(c.status));
+                        if (aHasInProgress && !bHasInProgress) return -1;
+                        if (!aHasInProgress && bHasInProgress) return 1;
+
+                        const aM = calcScopeMetrics(a);
+                        const bM = calcScopeMetrics(b);
+                        const aAllDone = Number(aM.skus) > 0 && Number(aM.doneSkus) >= Number(aM.skus);
+                        const bAllDone = Number(bM.skus) > 0 && Number(bM.doneSkus) >= Number(bM.skus);
+
+                        if (aAllDone && !bAllDone) return 1;
+                        if (!aAllDone && bAllDone) return -1;
+
+                        return 0;
+                    }).map(dept => {
                         const m = calcScopeMetrics(dept);
                         const totalSkus = Number(m.skus);
                         const doneSkus = Number(m.doneSkus);
@@ -5177,7 +5192,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         );
                     })}
 
-                    {view.level === 'categories' && selectedDept?.categories.map(cat => {
+                    {view.level === 'categories' && [...(selectedDept?.categories || [])].sort((a, b) => {
+                        const aStatus = normalizeAuditStatus(a.status);
+                        const bStatus = normalizeAuditStatus(b.status);
+
+                        // IN_PROGRESS no topo (peso 0)
+                        // TODO no meio (peso 1)
+                        // DONE no fim (peso 2)
+                        const getWeight = (status: AuditStatus) => {
+                            if (status === AuditStatus.IN_PROGRESS) return 0;
+                            if (status === AuditStatus.TODO) return 1;
+                            if (status === AuditStatus.DONE) return 2;
+                            return 3;
+                        };
+
+                        return getWeight(aStatus) - getWeight(bStatus);
+                    }).map(cat => {
                         const catStatus = normalizeAuditStatus(cat.status);
                         const canFinalize = isMaster && catStatus !== AuditStatus.TODO;
                         const startLabel = catStatus === AuditStatus.IN_PROGRESS ? 'PAUSAR' : 'INICIAR';
