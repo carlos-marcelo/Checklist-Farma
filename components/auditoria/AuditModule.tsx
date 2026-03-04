@@ -868,7 +868,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                         if (isMaster) {
                             if ((isNewSession || !data) && !alreadyConfirmed) {
-                                const wantsToUpdate = window.confirm(`Auditoria Nº ${latest.audit_number} em aberto encontrada.\n\nDeseja abrir a tela para carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
+                                const lastLoadStr = latest.updated_at ? new Date(latest.updated_at).toLocaleString('pt-BR') : 'não informada';
+                                const wantsToUpdate = window.confirm(`Auditoria Nº ${latest.audit_number} em aberto encontrada.\nÚltima atualização: ${lastLoadStr}\n\nDeseja abrir a tela para carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
                                 if (wantsToUpdate) {
                                     setIsUpdatingStock(true);
                                     setGroupFiles(createInitialGroupFiles());
