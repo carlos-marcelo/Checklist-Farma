@@ -753,7 +753,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             let latest: DbAuditSession | null = null;
             if (latestFromDb) {
                 // Security-first: trust the latest server snapshot and use cache only as fallback.
-                // This avoids resurrecting stale partial scopes/terms from local backups.
                 latest = latestFromDb;
             } else {
                 const fallbackCandidates = [cachedCurrent, cachedBackup].filter(Boolean) as DbAuditSession[];
@@ -770,7 +769,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 }
             }
 
-            // Polling silencioso com mesma sessão → atualiza dados sem popups
             if (isStaleRequest()) return;
             if (silent && latest && dbSessionId === latest.id && latest.data) {
                 lastAuditUpdateRef.current = latest.updated_at || null;
@@ -808,7 +806,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 if (getAuditDataStrength(reconciled) > 0) {
                     await CacheService.set(backupKey, { ...latest, data: reconciled } as any);
                 }
-                return; // Dados atualizados silenciosamente, sem popups
+                return;
             }
 
             if (isStaleRequest()) return;
@@ -835,7 +833,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     if (!(latest.data as any).lastPartialBatchId) {
                         (latest.data as any).lastPartialBatchId = getLatestBatchId((latest.data as any).partialCompleted);
                     }
-                    // REPAIR LOGIC: If totalCost is missing (old sessions), recalculate it
                     if (latest.data.groups) {
                         latest.data.groups.forEach((g: any) => {
                             g.departments.forEach((d: any) => {
@@ -856,20 +853,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     setData(reconciled);
                     const draftsFromData = ((reconciled as any).termDrafts || {}) as Record<string, TermForm>;
                     setTermDrafts(draftsFromData);
+                    setDbSessionId(latest.id);
                     if (getAuditDataStrength(reconciled) > 0) {
                         await CacheService.set(backupKey, { ...latest, data: reconciled } as any);
                     }
-                    setDbSessionId(latest.id);
 
                     if (!silent) {
                         const isNewSession = dbSessionId !== latest.id;
-                        // Sessão já confirmada nesta janela do browser (sobrevive a refresh)
                         const alreadyConfirmed = sessionStorage.getItem(CONFIRMED_SESSION_KEY) === latest.id;
 
                         if (isMaster) {
                             if ((isNewSession || !data) && !alreadyConfirmed) {
-                                const lastLoadStr = latest.updated_at ? new Date(latest.updated_at).toLocaleString('pt-BR') : 'não informada';
-                                const wantsToUpdate = window.confirm(`Auditoria Nº ${latest.audit_number} em aberto encontrada.\nÚltima atualização: ${lastLoadStr}\n\nDeseja abrir a tela para carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
+                                const lastLoadStr = (latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at)
+                                    ? new Date(latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at).toLocaleString('pt-BR')
+                                    : 'nao informada';
+                                const wantsToUpdate = window.confirm(`Auditoria N ${latest.audit_number} em aberto encontrada.\nData do Estoque: ${lastLoadStr}\n\nDeseja abrir a tela para carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
                                 if (wantsToUpdate) {
                                     setIsUpdatingStock(true);
                                     setGroupFiles(createInitialGroupFiles());
@@ -880,41 +878,34 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     setIsUpdatingStock(false);
                                 }
                             }
-                            // Marca esta sessão como confirmada para não perguntar novamente
                             if (latest.id) sessionStorage.setItem(CONFIRMED_SESSION_KEY, latest.id);
                             setView({ level: 'groups' });
                         } else {
                             setIsUpdatingStock(false);
                             setView({ level: 'groups' });
-
                             if ((isNewSession || !data) && !alreadyConfirmed) {
-                                const lastLoadStr = latest.updated_at ? new Date(latest.updated_at).toLocaleString('pt-BR') : 'não informada';
-                                alert(`ENTRANDO EM MODO CONSULTA.\n\nAviso: O estoque exibido reflete a última carga realizada pelo usuário Master em ${lastLoadStr} e pode estar desatualizado.`);
+                                const lastLoadStr = (latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at)
+                                    ? new Date(latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at).toLocaleString('pt-BR')
+                                    : 'nao informada';
+                                alert(`ENTRANDO EM MODO CONSULTA.\n\nAviso: O estoque exibido reflete a carga de estoque realizada pelo usuário Master em ${lastLoadStr}. As contagens em andamento são atualizadas em tempo real.`);
                             }
-                            // Marca como confirmada
                             if (latest.id) sessionStorage.setItem(CONFIRMED_SESSION_KEY, latest.id);
                         }
-                    } else if (!data && !isUpdatingStock) {
-                        // Se for polling mas não estávamos em uma auditoria, entra automaticamente
-                        setView({ level: 'groups' });
-                    }
 
-                    let done = 0;
-                    if (latest.data.groups) {
-                        latest.data.groups.forEach((g: any) =>
-                            g.departments.forEach((d: any) =>
-                                d.categories.forEach((c: any) => {
-                                    if (isDoneStatus(c.status)) done += c.totalQuantity;
-                                })
-                            )
-                        );
+                        let done = 0;
+                        if (latest.data.groups) {
+                            latest.data.groups.forEach((g: any) =>
+                                g.departments.forEach((d: any) =>
+                                    d.categories.forEach((c: any) => {
+                                        if (isDoneStatus(c.status)) done += c.totalQuantity;
+                                    })
+                                )
+                            );
+                        }
+                        setInitialDoneUnits(done);
                     }
-                    setInitialDoneUnits(done);
                 }
             } else {
-                // Se a API retornou null e estamos em polling, só fechamos a auditoria se tivermos certeza.
-                // Mas como o fetchLatestAudit pode retornar null em erros de rede (500), vamos ser menos agressivos:
-                // Só alertar se não houver erro. O `latest` ser null aqui pode ser um falso negativo de conexão caída.
                 if (latest !== undefined) {
                     if (isStaleRequest()) return;
                     setNextAuditNumber(latest ? latest.audit_number + 1 : 1);
@@ -922,17 +913,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     if (!silent) {
                         setData(null);
                         setTermDrafts({});
-                    } else if (data) {
-                        // Evita limpar sessão local se foi só um erro 500 passageiro.
-                        // Só desloga se explicitamente a session de fechamento for retornada ou sumiu.
-                        // Mas por segurança, como não temos como distinguir no payload atual entre "Nao tem" e "Deu erro 500"
-                        // se o fetch silencia erros, deixamos o usuário trabalhar offline localmente até salvar.
                     }
                 }
             }
         } catch (error) {
             console.error('Error loading audit info:', error);
-            // Em caso de erro de conexão, NÃO expulsa o usuário.
         }
     }, [selectedFilial, dbSessionId, isMaster, data, isUpdatingStock]);
 
@@ -1414,6 +1399,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         return {
             mode: 'initial-structure-import',
             importedAt: nowIso,
+            lastStockUpdateAt: nowIso,
             groups: effectiveGroupFiles.map(({ groupId, file }) => ({
                 groupId,
                 source: groupFiles[groupId] ? 'local_upload' : 'global_base',
