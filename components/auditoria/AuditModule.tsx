@@ -1776,6 +1776,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 };
             });
 
+            const UNCLASSIFIED_GROUP_ID = '99999';
+            const UNCLASSIFIED_GROUP_NAME = 'NAO CLASSIFICADO (SEM GRUPO)';
+            const UNCLASSIFIED_DEPT_NAME = 'NAO CLASSIFICADO (SEM DEPARTAMENTO)';
+            const UNCLASSIFIED_CAT_NAME = 'NAO CLASSIFICADO (SEM CATEGORIA)';
+
             Object.entries(stockAcc).forEach(([reduced, acc]) => {
                 const avgCost = acc.q > 0 ? (acc.costAmount / acc.q) : 0;
                 const nameKey = cleanDescription(acc.name || "");
@@ -1800,7 +1805,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         };
                     }
                 }
-                if (!chosenScope) return;
+                if (!chosenScope) {
+                    const hasAllowedStockGroup =
+                        !!acc.groupId && ALLOWED_IDS.includes(Number(acc.groupId));
+                    const fallbackGroupId = hasAllowedStockGroup ? acc.groupId : UNCLASSIFIED_GROUP_ID;
+                    chosenScope = {
+                        groupId: fallbackGroupId,
+                        groupName: hasAllowedStockGroup
+                            ? (GROUP_CONFIG_DEFAULTS[fallbackGroupId] || `Grupo ${fallbackGroupId}`)
+                            : UNCLASSIFIED_GROUP_NAME,
+                        deptId: '',
+                        deptName: UNCLASSIFIED_DEPT_NAME,
+                        catId: '',
+                        catName: UNCLASSIFIED_CAT_NAME
+                    };
+                }
                 const resolvedScope: ProductScope = { ...chosenScope };
                 const deptByReduced = deptReportByReduced[reduced];
                 const catByReduced = catReportByReduced[reduced];
