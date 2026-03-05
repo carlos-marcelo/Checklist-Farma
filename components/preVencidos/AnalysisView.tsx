@@ -6,6 +6,7 @@ import { FileSearch, Users, ShoppingCart, TrendingUp, AlertCircle, CheckCircle, 
 import { insertAppEventLog } from '../../supabaseService';
 
 const MONTH_NAMES_PT_BR = ['JAN', 'FEV', 'MAR', 'ABR', 'MAI', 'JUN', 'JUL', 'AGO', 'SET', 'OUT', 'NOV', 'DEZ'];
+const DCB_UNCLASSIFIED_LABEL = 'SEM DCB';
 
 const getExpiryMonthLabel = (expiryDate?: string) => {
   if (!expiryDate) return 'MÊS NÃO INFORMADO';
@@ -199,7 +200,10 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
         };
       });
 
-      const isValidDCB = (dcb?: string) => dcb && dcb.trim() !== '' && dcb.toUpperCase() !== 'N/A';
+      const isValidDCB = (dcb?: string) => {
+        const normalized = String(dcb || '').trim().toUpperCase();
+        return normalized !== '' && normalized !== 'N/A' && normalized !== DCB_UNCLASSIFIED_LABEL;
+      };
       const similarSales = isValidDCB(pv.dcb)
         ? salesRecords.filter(s => s.dcb === pv.dcb && s.reducedCode !== pv.reducedCode)
         : [];

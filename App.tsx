@@ -16,6 +16,7 @@ import { Logo, MFLogo, LogoPrint } from './components/Layout/Logo';
 import { AppStorage } from './src/appStorage';
 import { CacheService } from './src/cacheService';
 import { ImageUtils } from './src/utils/imageUtils';
+import { CadastrosBaseService } from './src/cadastrosBase/cadastrosBaseService';
 
 
 const mergeAccessMatrixWithDefaults = (incoming: Partial<Record<AccessLevelId, Record<string, boolean>>>) => {
@@ -195,6 +196,18 @@ type GlobalBaseModuleSlot = {
     key: string;
     label: string;
     description: string;
+};
+
+const buildSharedStockModuleKey = (branchRaw: string) => {
+    const raw = String(branchRaw || '').trim();
+    const digits = raw.match(/\d+/g)?.join('') || '';
+    const token = digits || raw
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'sem_filial';
+    return `shared_stock_branch_${token}`;
 };
 
 const GLOBAL_BASE_MODULE_SLOTS: GlobalBaseModuleSlot[] = [
@@ -2100,6 +2113,14 @@ const App: React.FC = () => {
     }, [currentUser?.company_id, currentUser?.role]);
 
     useEffect(() => {
+        if (currentView !== 'cadastros_globais') return;
+        if (!currentUser?.company_id || currentUser.role !== 'MASTER') return;
+        loadGlobalBaseFiles().catch((error) => {
+            console.error('Erro ao atualizar cadastros globais ao abrir a tela:', error);
+        });
+    }, [currentView, currentUser?.company_id, currentUser?.role]);
+
+    useEffect(() => {
         if (!showBranchSelectionModal || !currentUser?.company_id) return;
         if (!branchSelectionValue) {
             setBranchSelectionArea('');
@@ -2193,6 +2214,7 @@ const App: React.FC = () => {
                 return;
             }
             await loadGlobalBaseFiles();
+            await CadastrosBaseService.clearCache();
             SupabaseService.insertAppEventLog({
                 company_id: currentUser.company_id || null,
                 branch: currentUser.filial || null,
@@ -4358,6 +4380,41 @@ const App: React.FC = () => {
         });
         return map;
     }, [globalBaseFiles]);
+
+    const globalBranchStockSlotsByArea = useMemo(() => {
+        if (!currentUser?.company_id) return [] as Array<{ areaName: string; slots: GlobalBaseModuleSlot[] }>;
+        const company = companies.find((c: any) => c.id === currentUser.company_id);
+        if (!company?.areas) return [] as Array<{ areaName: string; slots: GlobalBaseModuleSlot[] }>;
+
+        return (company.areas || [])
+            .map((area: any) => {
+                const uniqueBranches = Array.from(new Set((area.branches || [])
+                    .map((branch: string) => String(branch || '').trim())
+                    .filter(Boolean)));
+                const slots = uniqueBranches
+                    .sort((a, b) => {
+                        const numA = Number((a.match(/\d+/)?.[0] || ''));
+                        const numB = Number((b.match(/\d+/)?.[0] || ''));
+                        const hasNumA = Number.isFinite(numA) && numA > 0;
+                        const hasNumB = Number.isFinite(numB) && numB > 0;
+                        if (hasNumA && hasNumB && numA !== numB) return numA - numB;
+                        if (hasNumA && !hasNumB) return -1;
+                        if (!hasNumA && hasNumB) return 1;
+                        return normalizeBranchLabel(a).localeCompare(normalizeBranchLabel(b), 'pt-BR');
+                    })
+                    .map(branch => ({
+                        key: buildSharedStockModuleKey(branch),
+                        label: `Estoque Compartilhado (${normalizeBranchLabel(branch)})`,
+                        description: 'Relatório único de estoque para Pré‑Vencidos e Auditoria.'
+                    }));
+                return {
+                    areaName: String(area.name || 'Sem Área').trim() || 'Sem Área',
+                    slots
+                };
+            })
+            .filter(entry => entry.slots.length > 0)
+            .sort((a, b) => a.areaName.localeCompare(b.areaName, 'pt-BR'));
+    }, [currentUser?.company_id, companies]);
 
     const resolveAreaFromCompanyBranch = (companyId?: string | null, branchName?: string | null) => {
         if (!companyId || !branchName) return '';
@@ -7008,6 +7065,78 @@ const App: React.FC = () => {
                                     );
                                 })}
                             </div>
+
+                            {globalBranchStockSlotsByArea.length > 0 && (
+                                <>
+                                    <div className="pt-2">
+                                        <p className="text-xs font-black text-gray-500 uppercase tracking-widest mb-3">Estoque Compartilhado por Filial</p>
+                                        <p className="text-sm font-semibold text-gray-500">Carregue aqui o saldo da filial para uso imediato em Pré‑Vencidos e Auditoria.</p>
+                                    </div>
+                                    {globalBranchStockSlotsByArea.map(area => (
+                                        <div key={area.areaName} className="space-y-3">
+                                            <div className="flex items-center justify-between">
+                                                <h3 className="text-sm font-black text-gray-800 uppercase tracking-wider">{area.areaName}</h3>
+                                                <span className="text-[11px] font-bold text-gray-400">{area.slots.length} filial(is)</span>
+                                            </div>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                                                {area.slots.map(slot => {
+                                                    const uploadedFile = globalBaseFilesByKey.get(slot.key);
+                                                    const isUploading = uploadingGlobalBaseKey === slot.key;
+                                                    const inputId = `global-base-upload-${slot.key}`;
+                                                    return (
+                                                        <div key={slot.key} className="bg-white rounded-3xl border border-gray-100 shadow-sm p-5 space-y-4">
+                                                            <div className="space-y-1">
+                                                                <h3 className="text-sm font-black text-gray-900 tracking-tight">{slot.label}</h3>
+                                                                <p className="text-xs text-gray-500 font-medium leading-relaxed">{slot.description}</p>
+                                                            </div>
+
+                                                            <div className={`rounded-2xl border px-4 py-3 ${uploadedFile ? 'border-emerald-200 bg-emerald-50/40' : 'border-amber-200 bg-amber-50/50'}`}>
+                                                                <div className="flex items-center justify-between gap-2">
+                                                                    <span className={`text-[10px] font-black uppercase tracking-widest ${uploadedFile ? 'text-emerald-700' : 'text-amber-700'}`}>
+                                                                        {uploadedFile ? 'Arquivo carregado (atual)' : 'Aguardando upload'}
+                                                                    </span>
+                                                                    {uploadedFile ? <CheckCircle size={14} className="text-emerald-600" /> : <AlertCircle size={14} className="text-amber-600" />}
+                                                                </div>
+                                                                <p className="mt-2 text-xs font-bold text-gray-700 truncate" title={uploadedFile?.file_name || 'Sem arquivo'}>
+                                                                    {uploadedFile?.file_name || 'Sem arquivo'}
+                                                                </p>
+                                                                <p className="mt-1 text-[11px] text-gray-500 font-semibold">
+                                                                    {uploadedFile ? `${formatFileSize(uploadedFile.file_size)} • ${formatFullDateTime(uploadedFile.uploaded_at || uploadedFile.updated_at)}` : 'Nenhum envio registrado'}
+                                                                </p>
+                                                                <p className="mt-1 text-[11px] text-gray-400 font-semibold truncate">
+                                                                    {uploadedFile?.uploaded_by ? `Responsável: ${uploadedFile.uploaded_by}` : 'Responsável: —'}
+                                                                </p>
+                                                            </div>
+
+                                                            <input
+                                                                id={inputId}
+                                                                type="file"
+                                                                accept=".xls,.xlsx,.csv,.xml,.txt"
+                                                                className="hidden"
+                                                                onChange={(e) => {
+                                                                    const selectedFile = e.target.files?.[0];
+                                                                    if (!selectedFile) return;
+                                                                    handleUploadGlobalBaseFile(slot.key, selectedFile);
+                                                                    e.currentTarget.value = '';
+                                                                }}
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => document.getElementById(inputId)?.click()}
+                                                                disabled={isUploading}
+                                                                className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-2xl bg-slate-900 text-white text-xs font-black uppercase tracking-wider hover:bg-slate-800 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                                                            >
+                                                                {isUploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+                                                                {isUploading ? 'Enviando...' : 'Carregar arquivo'}
+                                                            </button>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </>
+                            )}
 
                             <div className="bg-blue-50/70 border border-blue-100 rounded-3xl p-5">
                                 <p className="text-xs font-black text-blue-900 uppercase tracking-widest mb-2">Escopo do módulo</p>

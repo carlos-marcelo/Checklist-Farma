@@ -125,6 +125,15 @@ const SetupView: React.FC<SetupViewProps> = ({
   };
 
   const isFormValid = !!info.companyId && info.filial && info.pharmacist && info.manager && systemLoaded && dcbLoaded;
+  const inventoryLoaded = !!(
+    info.companyId &&
+    info.filial &&
+    inventoryReport &&
+    String(inventoryReport.branch || '').trim() === String(info.filial || '').trim() &&
+    String(inventoryReport.company_id || '').trim() === String(info.companyId || '').trim() &&
+    Array.isArray(inventoryReport.records) &&
+    inventoryReport.records.length > 0
+  );
   const isReportsSyncing = reportsStatus === 'idle' || reportsStatus === 'loading';
   const canStart = isFormValid && reportsReady && !isReportsSyncing && !isBranchPrefetching && !branchPrefetchError;
 
@@ -173,6 +182,7 @@ const SetupView: React.FC<SetupViewProps> = ({
             <RequirementItem label="Nomes dos Responsáveis" met={!!(info.pharmacist && info.manager)} />
             <RequirementItem label="Cadastro Carregado" met={systemLoaded} />
             <RequirementItem label="Relatório DCB Carregado" met={dcbLoaded} />
+            <RequirementItem label="Estoque da Filial Carregado" met={inventoryLoaded} />
             <RequirementItem label="Relatórios no Supabase" met={reportsReady} />
             <RequirementItem label="Produtos Identificados" met={productsLoaded} />
           </div>

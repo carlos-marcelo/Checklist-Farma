@@ -66,6 +66,7 @@ export const parseSystemProductsXLSX = async (file: File): Promise<Product[]> =>
         let nameIdx = 3; // D
         let labIdx = 5; // F
         let barcodeIdx = 10; // K
+        let dcbIdx = -1;
 
         for (let i = 0; i < rows.length; i++) {
           const row = rows[i];
@@ -92,13 +93,17 @@ export const parseSystemProductsXLSX = async (file: File): Promise<Product[]> =>
             val.includes('gtin') ||
             val.includes('barcode')
           );
+          const idxDcb = findIndexSafe(val => val === 'dcb' || val.startsWith('dcb ') || val.includes(' dcb'));
 
-          const isHeaderRow = (idxReduced >= 0 && idxName >= 0) || (idxReduced >= 0 && (idxBarcode >= 0 || idxLab >= 0));
+          const isHeaderRow =
+            (idxReduced >= 0 && idxName >= 0) ||
+            (idxReduced >= 0 && (idxBarcode >= 0 || idxLab >= 0 || idxDcb >= 0));
           if (isHeaderRow) {
             if (idxReduced >= 0) reducedIdx = idxReduced;
             if (idxName >= 0) nameIdx = idxName;
             if (idxLab >= 0) labIdx = idxLab;
             if (idxBarcode >= 0) barcodeIdx = idxBarcode;
+            if (idxDcb >= 0) dcbIdx = idxDcb;
             continue;
           }
 
@@ -106,6 +111,7 @@ export const parseSystemProductsXLSX = async (file: File): Promise<Product[]> =>
           const reducedCode = normalizeCode(row[reducedIdx]);
           const name = String(row[nameIdx] || "").trim();
           const lab = String(row[labIdx] || "").trim();
+          const dcb = dcbIdx >= 0 ? String(row[dcbIdx] || "").trim() : "";
           let barcode = parseBarcode(row[barcodeIdx]);
           if (!barcode || barcode.length < 8) {
             const candidate = row
@@ -121,7 +127,7 @@ export const parseSystemProductsXLSX = async (file: File): Promise<Product[]> =>
               name: name || "Produto sem descrição",
               barcode: barcode,
               reducedCode: reducedCode,
-              dcb: "N/A",
+              dcb: dcb || "N/A",
               lab: lab || undefined
             });
           }
@@ -143,61 +149,136 @@ export const parseDCBProductsXLSX = async (file: File): Promise<Product[]> => {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array', cellText: true, cellNF: true });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
+        const normalizeHeader = (value: any) => (
+          String(value || '')
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .trim()
+        );
+        const parseRows = (rows: any[][], sheetName: string): Product[] => {
+          const groupedProducts: Product[] = [];
+          let currentDCB = "N/A";
 
-        const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
-        const products: Product[] = [];
+          for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            if (!row || row.length === 0) continue;
 
-        let currentDCB = "N/A";
-
-        for (let i = 0; i < rows.length; i++) {
-          const row = rows[i];
-          if (!row || row.length === 0) continue;
-
-          let isHeaderRow = false;
-          // Identifica o cabeçalho DCB (Ex: "DCB" na coluna B, Código na C, Descrição na D)
-          for (let c = 0; c < Math.min(row.length, 5); c++) {
-            const val = String(row[c] || "").trim().toUpperCase();
-            if (val.includes("DCB") && !/^\d+$/.test(val.replace("DCB", "").trim())) {
-              const dcbCode = String(row[c + 1] || "").trim();
-              const dcbDesc = String(row[c + 2] || "").trim();
-
-              if (dcbCode) {
-                currentDCB = dcbCode + (dcbDesc ? ` - ${dcbDesc}` : "");
-              } else {
-                currentDCB = val.replace("DCB:", "").replace("DCB", "").trim() || currentDCB;
+            let isHeaderRow = false;
+            for (let c = 0; c < Math.min(row.length, 6); c++) {
+              const val = String(row[c] || "").trim().toUpperCase();
+              if (val.includes("DCB") && !/^\d+$/.test(val.replace("DCB", "").trim())) {
+                const dcbCode = String(row[c + 1] || "").trim();
+                const dcbDesc = String(row[c + 2] || "").trim();
+                if (dcbCode) {
+                  currentDCB = dcbCode + (dcbDesc ? ` - ${dcbDesc}` : "");
+                } else {
+                  currentDCB = val.replace("DCB:", "").replace("DCB", "").trim() || currentDCB;
+                }
+                isHeaderRow = true;
+                break;
               }
+            }
+            if (isHeaderRow) continue;
 
-              isHeaderRow = true;
-              break;
+            let reducedCode = "";
+            let productName = "";
+            for (let c = 0; c < Math.min(row.length, 6); c++) {
+              const val = String(row[c] || "").trim();
+              if (/^\d+$/.test(val) && val !== "") {
+                reducedCode = normalizeCode(val);
+                productName = String(row[c + 1] || row[c + 2] || "").trim();
+                break;
+              }
+            }
+
+            if (reducedCode && productName.length > 2) {
+              groupedProducts.push({
+                id: `dcb-${sheetName}-${reducedCode}-${i}`,
+                name: productName,
+                barcode: "",
+                reducedCode,
+                dcb: currentDCB
+              });
             }
           }
-          if (isHeaderRow) continue;
 
-          let reducedCode = "";
-          let productName = "";
+          const tabularProducts: Product[] = [];
+          let reducedIdx = 2; // C
+          let nameIdx = 3; // D
+          let dcbIdx = 1; // B (fallback comum)
+          let foundHeader = false;
 
-          for (let c = 0; c < Math.min(row.length, 3); c++) {
-            const val = String(row[c] || "").trim();
-            if (/^\d+$/.test(val) && val !== "") {
-              reducedCode = normalizeCode(val);
-              productName = String(row[c + 1] || row[c + 2] || "").trim();
-              break;
+          for (let i = 0; i < rows.length; i++) {
+            const row = rows[i];
+            if (!Array.isArray(row) || row.length < 2) continue;
+
+            const lowerRow = row.map(val => normalizeHeader(val));
+            const findIndexSafe = (predicate: (value: string) => boolean) => {
+              for (let idx = 0; idx < lowerRow.length; idx++) {
+                const value = lowerRow[idx] || "";
+                if (predicate(value)) return idx;
+              }
+              return -1;
+            };
+
+            const idxReduced = findIndexSafe(val =>
+              val.includes('reduzido') ||
+              val.includes('cod reduzido') ||
+              val.includes('código reduzido') ||
+              val === 'cód.' ||
+              val === 'cod.' ||
+              val === 'cód' ||
+              val === 'cod'
+            );
+            const idxName = findIndexSafe(val => val.includes('descri') || val.includes('produto') || val.includes('item'));
+            const idxDcb = findIndexSafe(val => val === 'dcb' || val.startsWith('dcb ') || val.includes(' dcb'));
+
+            if (!foundHeader && idxReduced >= 0 && (idxName >= 0 || idxDcb >= 0)) {
+              reducedIdx = idxReduced;
+              if (idxName >= 0) nameIdx = idxName;
+              if (idxDcb >= 0) dcbIdx = idxDcb;
+              foundHeader = true;
+              continue;
             }
-          }
 
-          if (reducedCode && productName.length > 2) {
-            products.push({
-              id: `dcb-${reducedCode}-${i}`,
-              name: productName,
-              barcode: "",
-              reducedCode: reducedCode,
-              dcb: currentDCB
+            const reducedCode = normalizeCode(row[reducedIdx]);
+            const isNumericCode = /^\d+$/.test(reducedCode) && reducedCode !== "";
+            if (!isNumericCode) continue;
+
+            const productName = String(row[nameIdx] || "").trim();
+            const inlineDcb = String(row[dcbIdx] || "").trim();
+            const dcb = inlineDcb && inlineDcb.toUpperCase() !== 'N/A' ? inlineDcb : '';
+
+            tabularProducts.push({
+              id: `dcb-tab-${sheetName}-${reducedCode}-${i}`,
+              name: productName || 'Produto sem descrição',
+              barcode: '',
+              reducedCode,
+              dcb: dcb || 'N/A'
             });
           }
-        }
-        resolve(products);
+
+          return tabularProducts.length > groupedProducts.length ? tabularProducts : groupedProducts;
+        };
+
+        const mergedByReduced = new Map<string, Product>();
+        (workbook.SheetNames || []).forEach((sheetName) => {
+          const worksheet = workbook.Sheets[sheetName];
+          const rows: any[][] = XLSX.utils.sheet_to_json(worksheet, { header: 1, raw: false });
+          const parsed = parseRows(rows, sheetName);
+          parsed.forEach((item) => {
+            const key = normalizeCode(item.reducedCode);
+            if (!key) return;
+            const existing = mergedByReduced.get(key);
+            const itemHasDcb = String(item.dcb || '').trim().toUpperCase() !== 'N/A';
+            const existingHasDcb = existing ? String(existing.dcb || '').trim().toUpperCase() !== 'N/A' : false;
+            if (!existing || (!existingHasDcb && itemHasDcb)) {
+              mergedByReduced.set(key, { ...item, reducedCode: key });
+            }
+          });
+        });
+
+        resolve(Array.from(mergedByReduced.values()));
       } catch (err) {
         reject(err);
       }
@@ -651,11 +732,13 @@ export const parseInventoryXLSX = async (file: File): Promise<InventoryCostRecor
           return parseFloat(cleaned) || 0;
         };
 
-        // Colunas dinâmicas (iniciam com os padrões, mas serão atualizadas se cabeçalhos forem encontrados)
-        let reducedColIndex = 0; // Coluna A (código reduzido)
-        let barcodeColIndex = 1; // Coluna B
-        let costColIndex = 9; // Coluna J
-        let stockColIndex = 13; // Coluna N
+        // Padrão do relatório atual de estoque:
+        // B = código reduzido, O = estoque, P = preço de custo.
+        // Se houver cabeçalhos explícitos, os índices são sobrescritos dinamicamente.
+        let reducedColIndex = 1; // Coluna B (código reduzido)
+        let barcodeColIndex = 1; // fallback: sem barras, usa reduzido
+        let costColIndex = 15; // Coluna P (preço de custo)
+        let stockColIndex = 14; // Coluna O (estoque)
         let nameColIndex = -1;
         let headersFound = false;
 
@@ -666,14 +749,25 @@ export const parseInventoryXLSX = async (file: File): Promise<InventoryCostRecor
           const lowerRow = row.map(val => normalizeHeader(val));
 
           // Tenta detectar a linha de cabeçalho verificando múltiplas colunas conhecidas
-          const foundReduced = lowerRow.findIndex(val => val.includes("reduzido") || val.includes("cod.red") || val.includes("codigo red"));
+          const foundReduced = lowerRow.findIndex(val =>
+            val.includes("reduzido") ||
+            val.includes("cod.red") ||
+            val.includes("codigo red") ||
+            val === "cód." ||
+            val === "cód" ||
+            val === "cod." ||
+            val === "cod" ||
+            val.startsWith("cód.") ||
+            val.startsWith("cod.")
+          );
           const foundBarcode = lowerRow.findIndex(val => val.includes("barras") || val.includes("ean") || val.includes("cod.barras") || val.includes("gtiin"));
           const foundCost = lowerRow.findIndex(val => val.includes("custo") || val.includes("vlr.custo") || val.includes("preço custo") || val.includes("preco custo"));
           const foundStock = lowerRow.findIndex(val => val.includes("estoque") || val.includes("saldo") || val.includes("qtde") || val.includes("quantidade"));
           const foundName = lowerRow.findIndex(val => val.includes("descrição") || val.includes("descricao") || val.includes("produto") || val.includes("item"));
 
-          // Se encontrou pelo menos dois dos principais cabeçalhos, marcamos como linha de cabeçalho e atualizamos os índices
-          if (!headersFound && (foundReduced >= 0 || foundName >= 0 || foundBarcode >= 0)) {
+          // Só aceita cabeçalho quando a coluna de código reduzido foi realmente identificada.
+          // Isso evita confundir linhas de metadados (ex: "Saldo em Estoque com Custo").
+          if (!headersFound && foundReduced >= 0) {
             if (foundReduced >= 0) reducedColIndex = foundReduced;
             if (foundBarcode >= 0) barcodeColIndex = foundBarcode;
             if (foundCost >= 0) costColIndex = foundCost;
@@ -685,8 +779,11 @@ export const parseInventoryXLSX = async (file: File): Promise<InventoryCostRecor
             continue; // Pula a linha do cabeçalho
           }
 
-          const reducedCode = normalizeCode(row[reducedColIndex]);
-          if (!reducedCode && !headersFound) continue; // Pula linhas vazias antes do cabeçalho
+          // Para estoque, reduzido precisa ser numérico para evitar incluir metadados.
+          const reducedRaw = row[reducedColIndex];
+          const reducedDigits = String(reducedRaw ?? '').replace(/\D/g, '');
+          const reducedCode = reducedDigits ? (reducedDigits.replace(/^0+/, '') || reducedDigits) : '';
+          if (!reducedCode) continue;
 
           let barcode = parseBarcode(row[barcodeColIndex]);
           if (!barcode || barcode.length < 8) {

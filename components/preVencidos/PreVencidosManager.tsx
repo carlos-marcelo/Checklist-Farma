@@ -53,7 +53,8 @@ import {
   insertAppEventLog,
   fetchPVInventoryReport,
   upsertPVInventoryReport,
-  fetchGlobalBaseFilesForModules
+  fetchGlobalBaseFilesForModules,
+  upsertGlobalBaseFile
 } from '../../supabaseService';
 import { CadastrosBaseService } from '../../src/cadastrosBase/cadastrosBaseService';
 import { CacheService } from '../../src/cacheService';
@@ -158,11 +159,23 @@ const normalizeReducedCode = (value?: string) => {
 
 const buildSetupDraftKey = (email: string) => `PV_SETUP_DRAFT_${(email || '').trim().toLowerCase()}`;
 const GLOBAL_BASE_CACHE_TTL_MS = 60 * 1000;
+const buildSharedStockModuleKey = (branchRaw: string) => {
+  const raw = String(branchRaw || '').trim();
+  const digits = raw.match(/\d+/g)?.join('') || '';
+  const token = digits || raw
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'sem_filial';
+  return `shared_stock_branch_${token}`;
+};
 const BRANCH_FETCH_COOLDOWN_MS = 5 * 1000;
 const LOCAL_REPORTS_LOAD_TIMEOUT_MS = 1500;
 const REPORTS_SYNC_WATCHDOG_MS = 15000;
 const BRANCH_RECORDS_FETCH_TIMEOUT_MS = 12000;
 const PV_GLOBAL_MODULE_KEYS = ['shared_cadastro_produtos', 'pre_dcb_base'] as const;
+const DCB_UNCLASSIFIED_LABEL = 'SEM DCB';
 
 const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   userEmail,
@@ -316,6 +329,32 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     setInventoryStockByBarcode(stockMap);
   }, []);
 
+  const dcbByReduced = useMemo(() => {
+    const map: Record<string, string> = {};
+    const register = (reducedRaw: any, dcbRaw: any) => {
+      const reduced = normalizeReducedCode(String(reducedRaw || ''));
+      const dcb = String(dcbRaw || '').trim();
+      const normalizedDcb = dcb.toUpperCase();
+      if (!reduced || !dcb || normalizedDcb === 'N/A' || normalizedDcb === DCB_UNCLASSIFIED_LABEL) return;
+      if (!map[reduced]) map[reduced] = dcb;
+    };
+    dcbBaseProducts.forEach(prod => register(prod.reducedCode, prod.dcb));
+    masterProducts.forEach(prod => register(prod.reducedCode, prod.dcb));
+    return map;
+  }, [dcbBaseProducts, masterProducts]);
+
+  const resolveDcbForReduced = useCallback((reducedRaw: any, fallback?: any) => {
+    const reduced = normalizeReducedCode(String(reducedRaw || ''));
+    const fromBase = reduced ? dcbByReduced[reduced] : '';
+    if (fromBase) return fromBase;
+    const fallbackText = String(fallback || '').trim();
+    const normalizedFallback = fallbackText.toUpperCase();
+    if (fallbackText && normalizedFallback !== 'N/A' && normalizedFallback !== DCB_UNCLASSIFIED_LABEL) {
+      return fallbackText;
+    }
+    return DCB_UNCLASSIFIED_LABEL;
+  }, [dcbByReduced]);
+
   const mapDbRecordsToPV = useCallback((records: any[]) => {
     return (records || []).map(rec => ({
       id: String(rec.id || `db-${rec.reduced_code}-${Date.now()}`),
@@ -326,11 +365,25 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       sectorResponsible: rec.sector_responsible || '',
       expiryDate: rec.expiry_date,
       entryDate: rec.entry_date,
-      dcb: rec.dcb,
+      dcb: resolveDcbForReduced(rec.reduced_code, rec.dcb),
       userEmail: rec.user_email,
       userName: ''
     }));
-  }, []);
+  }, [resolveDcbForReduced]);
+
+  useEffect(() => {
+    if (!pvRecords.length || Object.keys(dcbByReduced).length === 0) return;
+    setPvRecords(prev => {
+      let changed = false;
+      const next = prev.map(rec => {
+        const resolved = resolveDcbForReduced(rec.reducedCode, rec.dcb);
+        if (String(rec.dcb || '').trim() === String(resolved || '').trim()) return rec;
+        changed = true;
+        return { ...rec, dcb: resolved };
+      });
+      return changed ? next : prev;
+    });
+  }, [pvRecords.length, dcbByReduced, resolveDcbForReduced]);
 
   const fetchPVBranchRecordsWithTimeout = useCallback(async (companyId: string, branch: string) => {
     return Promise.race([
@@ -427,6 +480,49 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     return request;
   }, []);
 
+  const loadBranchInventoryWithGlobalFallback = useCallback(async (companyId: string, branch: string): Promise<DbPVInventoryReport | null> => {
+    let report = await CacheService.fetchWithCache(
+      `pv_inventory_${companyId}_${branch}`,
+      () => fetchPVInventoryReport(companyId, branch)
+    );
+    const reportRecords = Array.isArray(report?.records) ? report.records : [];
+    const positiveCosts = reportRecords.filter((rec: any) => Number(rec?.cost || 0) > 0).length;
+    const hasOnlyZeroCosts = reportRecords.length > 0 && positiveCosts === 0;
+    const hasSuspiciouslyLowCostFill = reportRecords.length >= 300 && (positiveCosts / reportRecords.length) < 0.02;
+
+    const stockModuleKey = buildSharedStockModuleKey(branch);
+    const globalStock = await CadastrosBaseService.getGlobalBaseFileCached(companyId, stockModuleKey);
+
+    if (globalStock) {
+      const globalUpdated = Date.parse(globalStock.updated_at || globalStock.uploaded_at || '');
+      const reportUpdated = Date.parse(report?.uploaded_at || '');
+      const shouldImportFromGlobal =
+        !report ||
+        hasOnlyZeroCosts ||
+        hasSuspiciouslyLowCostFill ||
+        Number.isNaN(reportUpdated) ||
+        (!Number.isNaN(globalUpdated) && globalUpdated > reportUpdated);
+
+      if (shouldImportFromGlobal) {
+        const stockFile = decodeGlobalFileToBrowserFile(globalStock as any);
+        if (stockFile) {
+          const records = await parseInventoryXLSX(stockFile);
+          const fromGlobal: DbPVInventoryReport = {
+            company_id: companyId,
+            branch,
+            file_name: globalStock.file_name || stockFile.name,
+            uploaded_at: globalStock.updated_at || globalStock.uploaded_at || new Date().toISOString(),
+            records
+          };
+          const saved = await upsertPVInventoryReport(fromGlobal);
+          report = saved || fromGlobal;
+        }
+      }
+    }
+
+    return report;
+  }, [decodeGlobalFileToBrowserFile]);
+
   useEffect(() => {
     setHasInitialHydrationCompleted(false);
     setHydrationDelayDone(false);
@@ -469,12 +565,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
       try {
         const [inventoryRes, activeSalesRes, uploadsRes] = await Promise.allSettled([
-          CacheService.fetchWithCache(`pv_inventory_${companyId}_${branch}`, () => fetchPVInventoryReport(companyId, branch), (data) => {
-            if (data && !cancelled) {
-              setInventoryReport(data);
-              buildInventoryMaps(data.records || []);
-            }
-          }),
+          loadBranchInventoryWithGlobalFallback(companyId, branch),
           CacheService.fetchWithCache(`pv_active_sales_${companyId}_${branch}`, () => fetchActiveSalesReport(companyId, branch), (data) => {
             if (data && !cancelled) {
               if (data.sales_records && data.sales_records.length > 0) setSalesRecords(data.sales_records);
@@ -562,7 +653,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [currentView, setupDraftInfo?.companyId, setupDraftInfo?.filial, buildInventoryMaps]);
+  }, [currentView, setupDraftInfo?.companyId, setupDraftInfo?.filial, buildInventoryMaps, loadBranchInventoryWithGlobalFallback]);
 
   useEffect(() => {
     if (sessionInfo?.companyId && sessionInfo?.filial) return;
@@ -801,14 +892,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           }));
         }
 
+        const countValidDcb = (items: any[]) => (items || []).filter((item: any) => {
+          const value = String(item?.dcb || '').trim();
+          const normalized = value.toUpperCase();
+          return value && normalized !== 'N/A' && normalized !== DCB_UNCLASSIFIED_LABEL;
+        }).length;
         let systemMissingLab = finalSystem.some(item => !String((item as any)?.lab || '').trim());
+        const dcbValidCount = countValidDcb(finalDcb);
+        const hasWeakDcbCoverage = finalDcb.length > 0 && (dcbValidCount / finalDcb.length) < 0.65;
         const hasMissingCacheForLab = systemMissingLab && !(storedReports as any)?.enrichedLabs;
 
         // Fallback/enriquecimento global por empresa (carregado no módulo Cadastros Base).
         // Também usa o arquivo global para preencher laboratório ausente no system já salvo em DB.
         if (
           reportLookupCompanyId &&
-          (finalSystem.length === 0 || finalDcb.length === 0 || hasMissingCacheForLab)
+          (finalSystem.length === 0 || finalDcb.length === 0 || hasWeakDcbCoverage || hasMissingCacheForLab)
         ) {
           try {
             const globalFiles = await fetchGlobalBaseFilesCached(reportLookupCompanyId);
@@ -847,11 +945,18 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
                 }
               }
 
-              if (dcbGlobal && finalDcb.length === 0) {
+              const dbDcbTime = Date.parse(dbDcbSyncedAt || '');
+              const globalDcbTime = Date.parse((dcbGlobal as any)?.updated_at || (dcbGlobal as any)?.uploaded_at || '');
+              const isGlobalDcbNewer = !Number.isNaN(globalDcbTime) && (Number.isNaN(dbDcbTime) || globalDcbTime > dbDcbTime);
+              const shouldRefreshDcbFromGlobal = !!dcbGlobal && (finalDcb.length === 0 || hasWeakDcbCoverage || isGlobalDcbNewer);
+
+              if (shouldRefreshDcbFromGlobal) {
                 const dcbFile = decodeGlobalFileToBrowserFile(dcbGlobal as any);
                 if (dcbFile) {
                   const parsedDcb = await parseDCBProductsXLSX(dcbFile);
-                  if (parsedDcb.length > 0) {
+                  const parsedValid = countValidDcb(parsedDcb);
+                  const currentValid = countValidDcb(finalDcb);
+                  if (parsedDcb.length > 0 && (finalDcb.length === 0 || parsedValid >= currentValid)) {
                     finalDcb = parsedDcb;
                     loadedDcbFromGlobal = true;
                   }
@@ -1428,9 +1533,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
     branchFetchInFlightRef.current.add(fetchKey);
     setIsLoadingInventoryReport(true);
-    CacheService.fetchWithCache(`pv_inventory_${sessionInfo.companyId}_${sessionInfo.filial}`, () => fetchPVInventoryReport(sessionInfo.companyId, sessionInfo.filial))
-      .then(report => {
+    (async () => {
+      try {
+        const report = await loadBranchInventoryWithGlobalFallback(sessionInfo.companyId, sessionInfo.filial);
         if (cancelled) return;
+
         if (report) {
           setInventoryReport(report);
           buildInventoryMaps(report.records || []);
@@ -1439,22 +1546,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           setInventoryCostByBarcode({});
           setInventoryStockByBarcode({});
         }
-      })
-      .catch(err => {
+      } catch (err) {
         if (cancelled) return;
         console.error('Erro carregando relatório de estoque da filial:', err);
-      })
-      .finally(() => {
+      } finally {
         branchFetchInFlightRef.current.delete(fetchKey);
         branchFetchLastRunRef.current.set(fetchKey, Date.now());
         if (cancelled) return;
         setIsLoadingInventoryReport(false);
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;
     };
-  }, [sessionInfo?.companyId, sessionInfo?.filial, buildInventoryMaps]);
+  }, [sessionInfo?.companyId, sessionInfo?.filial, buildInventoryMaps, loadBranchInventoryWithGlobalFallback]);
 
   const originBranches = useMemo(() => {
     const byId = companies.find(c => c.id === sessionInfo?.companyId);
@@ -2454,6 +2560,27 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         };
 
         const saved = await upsertPVInventoryReport(report);
+        try {
+          const dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result || ''));
+            reader.onerror = reject;
+            reader.readAsDataURL(file);
+          });
+          await upsertGlobalBaseFile({
+            company_id: sessionInfo.companyId,
+            module_key: buildSharedStockModuleKey(sessionInfo.filial),
+            file_name: file.name,
+            mime_type: file.type || 'application/octet-stream',
+            file_size: file.size,
+            file_data_base64: dataUrl,
+            uploaded_by: userEmail || null
+          });
+          await CadastrosBaseService.clearCache();
+          globalBaseCacheRef.current.clear();
+        } catch (globalSyncError) {
+          console.warn('Falha ao sincronizar estoque no Cadastros Base:', globalSyncError);
+        }
         if (saved) {
           setInventoryReport(saved);
           alert(`Estoque atualizado! ${records.length} itens carregados.`);
@@ -3657,24 +3784,26 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
               onRefresh={handleRefresh}
               onUpdatePV={handleUpdatePVRecord}
               onAddPV={async (rec) => {
+                const resolvedDcb = resolveDcbForReduced(rec.reducedCode, rec.dcb);
+                const recWithDcb = { ...rec, dcb: resolvedDcb };
                 // Save to Supabase (pv_branch_records)
                 if (sessionInfo && sessionInfo.companyId) {
                   try {
                     const saved = await insertPVBranchRecord({
                       company_id: sessionInfo.companyId,
                       branch: sessionInfo.filial,
-                      reduced_code: rec.reducedCode,
-                      product_name: rec.name,
-                      dcb: rec.dcb,
-                      quantity: rec.quantity,
-                      origin_branch: rec.originBranch || null,
-                      sector_responsible: rec.sectorResponsible || null,
-                      expiry_date: rec.expiryDate,
-                      entry_date: rec.entryDate,
+                      reduced_code: recWithDcb.reducedCode,
+                      product_name: recWithDcb.name,
+                      dcb: recWithDcb.dcb,
+                      quantity: recWithDcb.quantity,
+                      origin_branch: recWithDcb.originBranch || null,
+                      sector_responsible: recWithDcb.sectorResponsible || null,
+                      expiry_date: recWithDcb.expiryDate,
+                      entry_date: recWithDcb.entryDate,
                       user_email: userEmail || ''
                     });
                     if (saved && saved.id) {
-                      rec.id = String(saved.id);
+                      recWithDcb.id = String(saved.id);
                     } else {
                       alert("Aviso: O registro foi adicionado à lista mas NÃO foi confirmado no banco de dados. Ao sair, ele pode ser perdido. Tente novamente.");
                     }
@@ -3688,11 +3817,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
                   const localEvent: DbPVBranchRecordEvent = {
                     company_id: sessionInfo.companyId,
                     branch: sessionInfo.filial,
-                    record_id: rec.id,
-                    reduced_code: rec.reducedCode,
+                    record_id: recWithDcb.id,
+                    reduced_code: recWithDcb.reducedCode,
                     event_type: 'CREATED',
                     previous_quantity: null,
-                    new_quantity: rec.quantity,
+                    new_quantity: recWithDcb.quantity,
                     user_email: userEmail || null,
                     created_at: new Date().toISOString()
                   };
@@ -3710,21 +3839,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
                     app: 'pre_vencidos',
                     event_type: 'pv_created',
                     entity_type: 'pv_record',
-                    entity_id: rec.id,
+                    entity_id: recWithDcb.id,
                     status: 'success',
                     success: true,
                     source: 'web',
                     event_meta: {
-                      reduced_code: rec.reducedCode,
-                      quantity: rec.quantity,
-                      expiry_date: rec.expiryDate
+                      reduced_code: recWithDcb.reducedCode,
+                      quantity: recWithDcb.quantity,
+                      expiry_date: recWithDcb.expiryDate
                     }
                   }).catch(() => { });
                 }
 
                 // Adiciona infos do usuário localmente para exibição imediata
                 const recordWithUser = {
-                  ...rec,
+                  ...recWithDcb,
                   userEmail: userEmail || '',
                   userName: userName || ''
                 };

@@ -15,6 +15,7 @@ import {
     upsertAuditSession,
     insertAppEventLog,
     fetchLatestAuditMetadata,
+    upsertGlobalBaseFile,
     type DbGlobalBaseFile,
     type DbAuditSession
 } from '../../supabaseService';
@@ -53,6 +54,18 @@ const GROUP_GLOBAL_BASE_KEYS: Record<GroupUploadId, string> = {
     '10000': 'audit_cadastro_10000',
     '66': 'audit_cadastro_66',
     '67': 'audit_cadastro_67'
+};
+
+const buildSharedStockModuleKey = (branchRaw: string) => {
+    const raw = String(branchRaw || '').trim();
+    const digits = raw.match(/\d+/g)?.join('') || '';
+    const token = digits || raw
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'sem_filial';
+    return `shared_stock_branch_${token}`;
 };
 const AUDIT_DEPT_IDS_GLOBAL_KEY = 'audit_ids_departamento';
 const AUDIT_CAT_IDS_GLOBAL_KEY = 'audit_ids_categoria';
@@ -986,6 +999,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [globalCatIdsFile, setGlobalCatIdsFile] = useState<File | null>(null);
     const [globalDeptIdsMeta, setGlobalDeptIdsMeta] = useState<DbGlobalBaseFile | null>(null);
     const [globalCatIdsMeta, setGlobalCatIdsMeta] = useState<DbGlobalBaseFile | null>(null);
+    const [globalStockFile, setGlobalStockFile] = useState<File | null>(null);
+    const [globalStockMeta, setGlobalStockMeta] = useState<DbGlobalBaseFile | null>(null);
     const [isLoadingGlobalBases, setIsLoadingGlobalBases] = useState(false);
 
     const localGroupFilesCount = useMemo(
@@ -1003,6 +1018,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const effectiveDeptIdsFile = fileDeptIds || globalDeptIdsFile;
     const effectiveCatIdsFile = fileCatIds || globalCatIdsFile;
+    const effectiveStockFile = fileStock || globalStockFile;
     const setGroupFile = (groupId: GroupUploadId, file: File | null) => {
         setGroupFiles(prev => ({ ...prev, [groupId]: file }));
     };
@@ -1023,6 +1039,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             setGlobalCatIdsFile(null);
             setGlobalDeptIdsMeta(null);
             setGlobalCatIdsMeta(null);
+            setGlobalStockFile(null);
+            setGlobalStockMeta(null);
             setIsLoadingGlobalBases(false);
             return;
         }
@@ -1034,7 +1052,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 const keysToFetch = [
                     ...GROUP_UPLOAD_IDS.map(groupId => GROUP_GLOBAL_BASE_KEYS[groupId]),
                     AUDIT_DEPT_IDS_GLOBAL_KEY,
-                    AUDIT_CAT_IDS_GLOBAL_KEY
+                    AUDIT_CAT_IDS_GLOBAL_KEY,
+                    ...(selectedFilial ? [buildSharedStockModuleKey(selectedFilial)] : [])
                 ];
                 const files = [];
                 for (const key of keysToFetch) {
@@ -1062,6 +1081,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                 const deptMeta = byKey.get(AUDIT_DEPT_IDS_GLOBAL_KEY) || null;
                 const catMeta = byKey.get(AUDIT_CAT_IDS_GLOBAL_KEY) || null;
+                const stockMeta = selectedFilial ? (byKey.get(buildSharedStockModuleKey(selectedFilial)) || null) : null;
 
                 setGlobalGroupFiles(nextGroupFiles);
                 setGlobalGroupMeta(nextGroupMeta);
@@ -1069,6 +1089,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 setGlobalCatIdsMeta(catMeta);
                 setGlobalDeptIdsFile(deptMeta ? decodeGlobalFileToBrowserFile(deptMeta) : null);
                 setGlobalCatIdsFile(catMeta ? decodeGlobalFileToBrowserFile(catMeta) : null);
+                setGlobalStockMeta(stockMeta);
+                setGlobalStockFile(stockMeta ? decodeGlobalFileToBrowserFile(stockMeta) : null);
             } catch (error) {
                 console.error('Erro ao carregar bases globais da auditoria:', error);
                 if (!cancelled) {
@@ -1078,6 +1100,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     setGlobalCatIdsMeta(null);
                     setGlobalDeptIdsFile(null);
                     setGlobalCatIdsFile(null);
+                    setGlobalStockMeta(null);
+                    setGlobalStockFile(null);
                 }
             } finally {
                 if (!cancelled) setIsLoadingGlobalBases(false);
@@ -1088,7 +1112,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         return () => {
             cancelled = true;
         };
-    }, [selectedCompany?.id]);
+    }, [selectedCompany?.id, selectedFilial]);
 
     useEffect(() => {
         AuditStorage.cleanupLegacyAuditStorage();
@@ -1396,6 +1420,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const buildStructureSourceMeta = () => {
         const nowIso = new Date().toISOString();
+        const stockSource = fileStock ? 'local_upload' : (globalStockMeta ? 'global_base' : 'none');
         return {
             mode: 'initial-structure-import',
             importedAt: nowIso,
@@ -1406,7 +1431,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 file: toUploadedFileMeta(file),
                 syncedAt: globalGroupMeta[groupId]?.updated_at || globalGroupMeta[groupId]?.uploaded_at || null
             })),
-            stock: toUploadedFileMeta(fileStock),
+            stock: effectiveStockFile ? {
+                ...toUploadedFileMeta(effectiveStockFile),
+                source: stockSource,
+                syncedAt: globalStockMeta?.updated_at || globalStockMeta?.uploaded_at || null
+            } : null,
             deptIds: effectiveDeptIdsFile ? {
                 ...toUploadedFileMeta(effectiveDeptIdsFile),
                 source: fileDeptIds ? 'local_upload' : (globalDeptIdsMeta ? 'global_base' : 'none'),
@@ -1477,7 +1506,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             return merged;
         };
 
-        if (!fileStock) {
+        if (!effectiveStockFile) {
             alert("Por favor, carregue o arquivo de SALDOS.");
             return;
         }
@@ -1506,9 +1535,32 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         try {
             const safePartialStarts = Array.isArray(data?.partialStarts) ? data.partialStarts : [];
 
+            if (isMaster && selectedCompany?.id && selectedFilial && fileStock) {
+                try {
+                    const stockDataUrl = await new Promise<string>((resolve, reject) => {
+                        const reader = new FileReader();
+                        reader.onload = () => resolve(String(reader.result || ''));
+                        reader.onerror = reject;
+                        reader.readAsDataURL(fileStock);
+                    });
+                    await upsertGlobalBaseFile({
+                        company_id: selectedCompany.id,
+                        module_key: buildSharedStockModuleKey(selectedFilial),
+                        file_name: fileStock.name,
+                        mime_type: fileStock.type || 'application/octet-stream',
+                        file_size: fileStock.size,
+                        file_data_base64: stockDataUrl,
+                        uploaded_by: userEmail
+                    });
+                    await CadastrosBaseService.clearCache();
+                } catch (syncError) {
+                    console.warn('Falha ao sincronizar arquivo de saldos para Cadastros Base:', syncError);
+                }
+            }
+
             if (shouldMergeStockOnly && data && !shouldReclassifyOpen) {
                 // Lógica de MERGE de estoque
-                const rowsStock = await readExcel(fileStock!);
+                const rowsStock = await readExcel(effectiveStockFile!);
                 const stockAcc: Record<string, { q: number; costAmount: number }> = {};
                 rowsStock.forEach(row => {
                     if (!row) return;
@@ -1565,7 +1617,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                 const nowIso = new Date().toISOString();
                 const prevSourceFiles = ((data as any).sourceFiles || {}) as any;
-                const stockMeta = toUploadedFileMeta(fileStock);
+                const stockMeta = toUploadedFileMeta(effectiveStockFile);
                 const stockUpdates = Array.isArray(prevSourceFiles.stockUpdates) ? prevSourceFiles.stockUpdates : [];
                 const nextSourceFiles = {
                     ...prevSourceFiles,
@@ -1613,7 +1665,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             }
 
             const rowsGroupsByFile = await Promise.all(effectiveGroupFiles.map(entry => readExcel(entry.file)));
-            const rowsStock = await readExcel(fileStock);
+            const rowsStock = await readExcel(effectiveStockFile);
 
             type ProductScope = { groupId: string; groupName: string; deptId: string; deptName: string; catId: string; catName: string };
             const productsByReduced: Record<string, ProductScope[]> = {};
@@ -4631,10 +4683,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 );
                             })}
 
-                            <label className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${!isMaster ? 'opacity-30 cursor-not-allowed' : ''} ${fileStock ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
+                            <label className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${!isMaster ? 'opacity-30 cursor-not-allowed' : ''} ${effectiveStockFile ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>
                                 <input type="file" className="hidden" disabled={!isMaster} onChange={e => setFileStock(e.target.files?.[0] || null)} />
-                                <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${fileStock ? 'text-emerald-500' : 'text-slate-300'}`} />
-                                <p className="text-[8px] font-black uppercase truncate">{fileStock ? fileStock.name : 'Saldos'}</p>
+                                <FileSpreadsheet className={`mx-auto w-6 h-6 mb-1 ${effectiveStockFile ? 'text-emerald-500' : 'text-slate-300'}`} />
+                                <p className="text-[8px] font-black uppercase truncate">{fileStock ? fileStock.name : effectiveStockFile ? effectiveStockFile.name : 'Saldos'}</p>
+                                <p className="text-[8px] font-bold text-slate-500 mt-1">
+                                    {fileStock
+                                        ? 'Upload local'
+                                        : globalStockFile
+                                            ? 'Já carregado em Cadastros Base Globais'
+                                            : 'Obrigatório'}
+                                </p>
+                                {!fileStock && globalStockMeta && (
+                                    <p className="text-[8px] font-bold text-emerald-700 mt-1">
+                                        {formatGlobalTimestamp(globalStockMeta.updated_at || globalStockMeta.uploaded_at)}
+                                    </p>
+                                )}
                             </label>
 
                             <label className={`block border-2 border-dashed rounded-xl p-4 cursor-pointer transition-all text-center ${(!isMaster || structureLocked) ? 'opacity-30 cursor-not-allowed' : ''} ${effectiveDeptIdsFile ? 'border-emerald-500 bg-emerald-50' : 'border-slate-50 hover:border-indigo-400'}`}>

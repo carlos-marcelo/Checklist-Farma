@@ -25,6 +25,8 @@ interface PVRegistrationProps {
   onRefresh?: () => void;
 }
 
+const DCB_UNCLASSIFIED_LABEL = 'SEM DCB';
+
 const PVRegistration: React.FC<PVRegistrationProps> = ({
   masterProducts,
   pvRecords,
@@ -131,6 +133,33 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
     return digits.replace(/^0+/, '') || digits;
   };
 
+  const dcbByReduced = useMemo(() => {
+    const map: Record<string, string> = {};
+    masterProducts.forEach((product) => {
+      const rawReduced = String(product.reducedCode || '').trim();
+      const normalizedReduced = normalizeReducedCode(rawReduced);
+      const rawDcb = String(product.dcb || '').trim();
+      const normalizedDcb = rawDcb.toUpperCase();
+      if (!rawDcb || normalizedDcb === 'N/A' || normalizedDcb === DCB_UNCLASSIFIED_LABEL) return;
+      if (rawReduced && !map[rawReduced]) map[rawReduced] = rawDcb;
+      if (normalizedReduced && !map[normalizedReduced]) map[normalizedReduced] = rawDcb;
+    });
+    return map;
+  }, [masterProducts]);
+
+  const resolveDcbByReduced = useCallback((reducedCode?: string, fallback?: string) => {
+    const rawReduced = String(reducedCode || '').trim();
+    const normalizedReduced = normalizeReducedCode(rawReduced);
+    const fromMaster = dcbByReduced[rawReduced] || (normalizedReduced ? dcbByReduced[normalizedReduced] : '');
+    if (fromMaster) return fromMaster;
+    const fallbackText = String(fallback || '').trim();
+    const normalizedFallback = fallbackText.toUpperCase();
+    if (fallbackText && normalizedFallback !== 'N/A' && normalizedFallback !== DCB_UNCLASSIFIED_LABEL) {
+      return fallbackText;
+    }
+    return DCB_UNCLASSIFIED_LABEL;
+  }, [dcbByReduced]);
+
   const productsLookup = useMemo(() => {
     const byBarcode: Record<string, Product> = {};
     const byReduced: Record<string, Product> = {};
@@ -209,7 +238,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
           name: fallbackRecord.name || 'Produto',
           barcode: fallbackRecord.barcode || '',
           reducedCode: String(fallbackRecord.reducedCode || ''),
-          dcb: fallbackRecord.dcb || 'N/A',
+          dcb: resolveDcbByReduced(fallbackRecord.reducedCode, fallbackRecord.dcb),
           lab: fallbackRecord.lab
         };
         foundFromRecords = true;
@@ -1077,7 +1106,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
                       <td className="px-4 py-2">
                         <div className="font-bold text-slate-800 text-sm leading-tight">{rec.name}</div>
                         <div className="flex items-center gap-1.5 text-[10px] text-slate-500 font-bold uppercase mt-0.5">
-                          <FlaskConical size={8} className="shrink-0 text-blue-400" /> <span className="truncate max-w-[180px]">{rec.dcb}</span>
+                          <FlaskConical size={8} className="shrink-0 text-blue-400" /> <span className="truncate max-w-[180px]">{resolveDcbByReduced(rec.reducedCode, rec.dcb)}</span>
                         </div>
                       </td>
                       <td className="px-4 py-2 text-[10px] font-bold text-slate-600 uppercase">
