@@ -1002,6 +1002,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [globalStockFile, setGlobalStockFile] = useState<File | null>(null);
     const [globalStockMeta, setGlobalStockMeta] = useState<DbGlobalBaseFile | null>(null);
     const [isLoadingGlobalBases, setIsLoadingGlobalBases] = useState(false);
+    const autoStockSyncInFlightRef = useRef(false);
+    const lastAutoStockSyncKeyRef = useRef('');
 
     const localGroupFilesCount = useMemo(
         () => GROUP_UPLOAD_IDS.reduce((count, groupId) => count + (groupFiles[groupId] ? 1 : 0), 0),
@@ -1128,7 +1130,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         };
         loadLocal();
     }, []);
-
 
     useEffect(() => {
         if (data) {
@@ -1449,6 +1450,172 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         };
     };
 
+    const applyStockMergeToOpenAudit = async (
+        stockFile: File,
+        options?: {
+            source?: 'local_upload' | 'global_base';
+            syncedAt?: string | null;
+            notify?: boolean;
+        }
+    ) => {
+        if (!data) return false;
+        const source = options?.source || 'local_upload';
+        const syncedAt = options?.syncedAt || null;
+        const shouldNotify = options?.notify !== false;
+        const safePartialStarts = Array.isArray(data?.partialStarts) ? data.partialStarts : [];
+
+        const rowsStock = await readExcel(stockFile);
+        const stockAcc: Record<string, { q: number; costAmount: number }> = {};
+        rowsStock.forEach(row => {
+            if (!row) return;
+            const reduced = normalizeBarcode(row[1]); // B (reduzido)
+            if (!reduced) return;
+            const q = parseStockNumber(row[14]); // O
+            const c = parseStockNumber(row[15]); // P
+            if (q <= 0) return;
+            const prev = stockAcc[reduced] || { q: 0, costAmount: 0 };
+            stockAcc[reduced] = {
+                q: prev.q + q,
+                costAmount: prev.costAmount + (q * c)
+            };
+        });
+        const stockMap: Record<string, { q: number; c: number }> = {};
+        Object.entries(stockAcc).forEach(([reduced, acc]) => {
+            stockMap[reduced] = {
+                q: acc.q,
+                c: acc.q > 0 ? (acc.costAmount / acc.q) : 0
+            };
+        });
+
+        const newData = { ...data };
+        let appliedUnits = 0;
+        const matchedReduced = new Set<string>();
+        newData.groups.forEach(g => {
+            g.departments.forEach(d => {
+                d.categories.forEach(c => {
+                    if (!isDoneStatus(c.status)) {
+                        c.totalQuantity = 0;
+                        c.totalCost = 0;
+                        c.products.forEach(p => {
+                            const reduced = normalizeBarcode(p.reducedCode || p.code);
+                            const entry = stockMap[reduced] || { q: 0, c: 0 };
+                            p.quantity = entry.q;
+                            p.cost = entry.c;
+                            c.totalQuantity += entry.q;
+                            c.totalCost += (entry.q * entry.c);
+                            appliedUnits += entry.q;
+                            if (entry.q > 0 && reduced) matchedReduced.add(reduced);
+                        });
+                    }
+                });
+            });
+        });
+        const stockUnits = Object.values(stockMap).reduce((sum, e) => sum + e.q, 0);
+        let unmatchedUnits = 0;
+        Object.entries(stockMap).forEach(([reduced, entry]) => {
+            if (!matchedReduced.has(reduced)) unmatchedUnits += entry.q;
+        });
+        if (shouldNotify && (Math.abs(stockUnits - appliedUnits) > 0.01 || unmatchedUnits > 0.01)) {
+            alert(`Reconciliação do estoque:\nArquivo: ${Math.round(stockUnits).toLocaleString()} unid.\nAplicado: ${Math.round(appliedUnits).toLocaleString()} unid.\nNão classificados: ${Math.round(unmatchedUnits).toLocaleString()} unid.`);
+        }
+
+        const nowIso = new Date().toISOString();
+        const prevSourceFiles = ((data as any).sourceFiles || {}) as any;
+        const stockMeta = toUploadedFileMeta(stockFile);
+        const stockUpdates = Array.isArray(prevSourceFiles.stockUpdates) ? prevSourceFiles.stockUpdates : [];
+        const nextSourceFiles = {
+            ...prevSourceFiles,
+            stock: {
+                ...stockMeta,
+                source,
+                syncedAt
+            },
+            lastStockUpdateAt: nowIso,
+            stockUpdates: [
+                ...stockUpdates,
+                { ...stockMeta, source, syncedAt, updatedAt: nowIso }
+            ]
+        };
+        const preservedTermDrafts = ((data as any).termDrafts || termDrafts || {}) as Record<string, any>;
+        const basePersistedData = { ...newData, termDrafts: preservedTermDrafts, sourceFiles: nextSourceFiles } as any;
+        const persistedData = applyPartialScopes(basePersistedData, safePartialStarts);
+        const progress = calculateProgress(persistedData as AuditData);
+        const savedSession = await persistAuditSession({
+            id: dbSessionId,
+            branch: selectedFilial,
+            audit_number: nextAuditNumber,
+            status: 'open',
+            data: persistedData,
+            progress: progress,
+            user_email: userEmail
+        });
+        if (!savedSession) {
+            throw new Error("Falha ao salvar atualização de saldos no Supabase.");
+        }
+
+        setDbSessionId(savedSession.id);
+        setNextAuditNumber(savedSession.audit_number);
+        setTermDrafts(preservedTermDrafts as any);
+        setData((savedSession.data as AuditData) || (persistedData as AuditData));
+        setGroupFiles(createInitialGroupFiles());
+        setFileDeptIds(null);
+        setFileCatIds(null);
+        setFileStock(null);
+        setIsUpdatingStock(false);
+        setView({ level: 'groups' });
+        if (shouldNotify) {
+            alert("Estoques atualizados (apenas para itens não finalizados).");
+        }
+        return true;
+    };
+
+    useEffect(() => {
+        if (!selectedFilial || !data || isProcessing || isUpdatingStock) return;
+        if (fileStock) return; // upload local sempre prevalece
+        if (!globalStockFile || !globalStockMeta) return;
+        if (autoStockSyncInFlightRef.current) return;
+
+        const globalTsRaw = globalStockMeta.updated_at || globalStockMeta.uploaded_at || null;
+        const globalTs = globalTsRaw ? new Date(globalTsRaw).getTime() : NaN;
+        if (!Number.isFinite(globalTs)) return;
+
+        const sourceFiles = ((data as any).sourceFiles || {}) as any;
+        const currentStockSyncedAt = sourceFiles?.stock?.syncedAt || sourceFiles?.lastStockUpdateAt || null;
+        const currentTs = currentStockSyncedAt ? new Date(currentStockSyncedAt).getTime() : NaN;
+        const hasNewerGlobalStock = !Number.isFinite(currentTs) || globalTs > currentTs + 1000;
+        if (!hasNewerGlobalStock) return;
+
+        const syncKey = `${dbSessionId || 'no_session'}|${selectedFilial}|${globalStockMeta.module_key}|${globalTs}`;
+        if (lastAutoStockSyncKeyRef.current === syncKey) return;
+
+        autoStockSyncInFlightRef.current = true;
+        lastAutoStockSyncKeyRef.current = syncKey;
+
+        (async () => {
+            try {
+                await applyStockMergeToOpenAudit(globalStockFile, {
+                    source: 'global_base',
+                    syncedAt: globalTsRaw,
+                    notify: false
+                });
+            } catch (error) {
+                console.error('Falha ao aplicar estoque global mais recente na auditoria:', error);
+            } finally {
+                autoStockSyncInFlightRef.current = false;
+            }
+        })();
+    }, [
+        selectedFilial,
+        data,
+        isProcessing,
+        isUpdatingStock,
+        fileStock,
+        globalStockFile,
+        globalStockMeta,
+        dbSessionId,
+        applyStockMergeToOpenAudit
+    ]);
+
     const handleStartAudit = async () => {
         if (!selectedFilial) {
             alert("Selecione a filial.");
@@ -1559,103 +1726,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             }
 
             if (shouldMergeStockOnly && data && !shouldReclassifyOpen) {
-                // Lógica de MERGE de estoque
-                const rowsStock = await readExcel(effectiveStockFile!);
-                const stockAcc: Record<string, { q: number; costAmount: number }> = {};
-                rowsStock.forEach(row => {
-                    if (!row) return;
-                    const reduced = normalizeBarcode(row[1]); // B (reduzido)
-                    if (!reduced) return;
-                    const q = parseStockNumber(row[14]); // O
-                    const c = parseStockNumber(row[15]); // P
-                    if (q <= 0) return;
-                    const prev = stockAcc[reduced] || { q: 0, costAmount: 0 };
-                    stockAcc[reduced] = {
-                        q: prev.q + q,
-                        costAmount: prev.costAmount + (q * c)
-                    };
+                const stockSource = fileStock ? 'local_upload' : (globalStockMeta ? 'global_base' : 'local_upload');
+                const syncedAt = globalStockMeta?.updated_at || globalStockMeta?.uploaded_at || null;
+                await applyStockMergeToOpenAudit(effectiveStockFile!, {
+                    source: stockSource,
+                    syncedAt,
+                    notify: true
                 });
-                const stockMap: Record<string, { q: number; c: number }> = {};
-                Object.entries(stockAcc).forEach(([reduced, acc]) => {
-                    stockMap[reduced] = {
-                        q: acc.q,
-                        c: acc.q > 0 ? (acc.costAmount / acc.q) : 0
-                    };
-                });
-
-                const newData = { ...data };
-                let appliedUnits = 0;
-                const matchedReduced = new Set<string>();
-                newData.groups.forEach(g => {
-                    g.departments.forEach(d => {
-                        d.categories.forEach(c => {
-                            if (!isDoneStatus(c.status)) {
-                                c.totalQuantity = 0;
-                                c.totalCost = 0;
-                                c.products.forEach(p => {
-                                    const reduced = normalizeBarcode(p.reducedCode || p.code);
-                                    const entry = stockMap[reduced] || { q: 0, c: 0 };
-                                    p.quantity = entry.q;
-                                    p.cost = entry.c;
-                                    c.totalQuantity += entry.q;
-                                    c.totalCost += (entry.q * entry.c);
-                                    appliedUnits += entry.q;
-                                    if (entry.q > 0 && reduced) matchedReduced.add(reduced);
-                                });
-                            }
-                        });
-                    });
-                });
-                const stockUnits = Object.values(stockMap).reduce((sum, e) => sum + e.q, 0);
-                let unmatchedUnits = 0;
-                Object.entries(stockMap).forEach(([reduced, entry]) => {
-                    if (!matchedReduced.has(reduced)) unmatchedUnits += entry.q;
-                });
-                if (Math.abs(stockUnits - appliedUnits) > 0.01 || unmatchedUnits > 0.01) {
-                    alert(`Reconciliação do estoque:\nArquivo: ${Math.round(stockUnits).toLocaleString()} unid.\nAplicado: ${Math.round(appliedUnits).toLocaleString()} unid.\nNão classificados: ${Math.round(unmatchedUnits).toLocaleString()} unid.`);
-                }
-
-                const nowIso = new Date().toISOString();
-                const prevSourceFiles = ((data as any).sourceFiles || {}) as any;
-                const stockMeta = toUploadedFileMeta(effectiveStockFile);
-                const stockUpdates = Array.isArray(prevSourceFiles.stockUpdates) ? prevSourceFiles.stockUpdates : [];
-                const nextSourceFiles = {
-                    ...prevSourceFiles,
-                    stock: stockMeta,
-                    lastStockUpdateAt: nowIso,
-                    stockUpdates: [
-                        ...stockUpdates,
-                        { ...stockMeta, updatedAt: nowIso }
-                    ]
-                };
-                const preservedTermDrafts = ((data as any).termDrafts || termDrafts || {}) as Record<string, any>;
-                const basePersistedData = { ...newData, termDrafts: preservedTermDrafts, sourceFiles: nextSourceFiles } as any;
-                const persistedData = applyPartialScopes(basePersistedData, safePartialStarts);
-                const progress = calculateProgress(persistedData as AuditData);
-                const savedSession = await persistAuditSession({
-                    id: dbSessionId,
-                    branch: selectedFilial,
-                    audit_number: nextAuditNumber,
-                    status: 'open',
-                    data: persistedData,
-                    progress: progress,
-                    user_email: userEmail
-                });
-                if (!savedSession) {
-                    throw new Error("Falha ao salvar atualização de saldos no Supabase.");
-                }
-
-                setDbSessionId(savedSession.id);
-                setNextAuditNumber(savedSession.audit_number);
-                setTermDrafts(preservedTermDrafts as any);
-                setData((savedSession.data as AuditData) || (persistedData as AuditData));
-                setGroupFiles(createInitialGroupFiles());
-                setFileDeptIds(null);
-                setFileCatIds(null);
-                setFileStock(null);
-                setIsUpdatingStock(false);
-                setView({ level: 'groups' });
-                alert("Estoques atualizados (apenas para itens não finalizados).");
                 return;
             }
 
