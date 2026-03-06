@@ -1186,33 +1186,30 @@ export async function fetchAuditsHistory(branch: string): Promise<DbAuditSession
 
 export async function fetchActiveSalesReport(companyId: string, branch: string): Promise<DbActiveSalesReport | null> {
   try {
-    const primaryQuery = async () => {
-      let q = supabase
-        .from('pv_active_sales_reports')
-        .select('*')
-        .eq('branch', branch)
-        .order('updated_at', { ascending: false })
-        .order('uploaded_at', { ascending: false })
-        .limit(1);
-      if (companyId) q = q.eq('company_id', companyId);
-      return q;
+    const runVariants = async (withCompany: boolean) => {
+      const variants = [
+        (q: any) => q.order('updated_at', { ascending: false }).order('uploaded_at', { ascending: false }).limit(1),
+        (q: any) => q.order('updated_at', { ascending: false }).limit(1),
+        (q: any) => q.limit(1)
+      ];
+
+      for (const variant of variants) {
+        let q = supabase.from('pv_active_sales_reports').select('*').eq('branch', branch);
+        if (withCompany && companyId) q = q.eq('company_id', companyId);
+        const res = await variant(q);
+        if (!res.error) return res.data?.[0] || null;
+      }
+      return null;
     };
 
-    const primary = await primaryQuery();
-    if (!primary.error) {
-      if (primary.data && primary.data.length > 0) return primary.data[0];
-      if (!companyId) return null;
+    if (companyId) {
+      const exact = await runVariants(true);
+      if (exact) return exact;
     }
 
-    // Fallback legado: sem company_id/uploaded_at (alguns bancos antigos).
-    const legacy = await supabase
-      .from('pv_active_sales_reports')
-      .select('*')
-      .eq('branch', branch)
-      .order('updated_at', { ascending: false })
-      .limit(1);
-    if (legacy.error) throw legacy.error;
-    if (legacy.data && legacy.data.length > 0) return legacy.data[0];
+    // Fallback legado: sem company_id.
+    const legacy = await runVariants(false);
+    if (legacy) return legacy;
     return null;
   } catch (error) {
     console.error('Error fetching active sales report:', error);
@@ -1563,33 +1560,27 @@ export async function updatePVBranchRecordDetails(
 
 export async function fetchPVSalesUploads(companyId: string, branch: string): Promise<DbPVSalesUpload[]> {
   try {
-    let primary = await supabase
-      .from('pv_sales_uploads')
-      .select('*')
-      .eq('branch', branch)
-      .order('uploaded_at', { ascending: false });
+    const runVariants = async (withCompany: boolean) => {
+      const variants = [
+        (q: any) => q.order('uploaded_at', { ascending: false }),
+        (q: any) => q
+      ];
+      for (const variant of variants) {
+        let q = supabase.from('pv_sales_uploads').select('*').eq('branch', branch);
+        if (withCompany && companyId) q = q.eq('company_id', companyId);
+        const res = await variant(q);
+        if (!res.error) return Array.isArray(res.data) ? res.data : [];
+      }
+      return [] as DbPVSalesUpload[];
+    };
+
     if (companyId) {
-      primary = await supabase
-        .from('pv_sales_uploads')
-        .select('*')
-        .eq('branch', branch)
-        .eq('company_id', companyId)
-        .order('uploaded_at', { ascending: false });
+      const exact = await runVariants(true);
+      if (exact.length > 0) return exact;
     }
 
-    if (!primary.error) {
-      if (primary.data && primary.data.length > 0) return primary.data;
-      if (!companyId) return [];
-    }
-
-    // Fallback legado: tabela sem company_id.
-    const legacy = await supabase
-      .from('pv_sales_uploads')
-      .select('*')
-      .eq('branch', branch)
-      .order('uploaded_at', { ascending: false });
-    if (legacy.error) throw legacy.error;
-    return legacy.data || [];
+    // Fallback legado: sem company_id.
+    return await runVariants(false);
   } catch (error) {
     console.error('Error fetching PV sales uploads:', error);
     return [];

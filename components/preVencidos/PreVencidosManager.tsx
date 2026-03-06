@@ -1388,60 +1388,53 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       try {
         console.log('🔍 [PV DEBUG] Buscando histórico de vendas...');
         const [historyRes, activeSalesRes] = await Promise.allSettled([
-          CacheService.fetchWithCache(
-            `pv_sales_history_${sessionInfo.companyId}_${sessionInfo.filial}`,
-            () => fetchPVSalesHistory(sessionInfo.companyId!, sessionInfo.filial!),
-            (data) => {
-              if (!cancelled) setHistoryRecords(Array.isArray(data) ? data : []);
-            }
-          ),
-          CacheService.fetchWithCache(
-            `pv_active_sales_${sessionInfo.companyId}_${sessionInfo.filial}`,
-            () => fetchActiveSalesReport(sessionInfo.companyId!, sessionInfo.filial!),
-            (report) => {
-              if (!report || cancelled) return;
-              if (report.sales_records && report.sales_records.length > 0) {
-                setSalesRecords(report.sales_records);
-              } else {
-                setSalesRecords([]);
-              }
-              setSalesPeriod(report.sales_period || '');
-              const { confirmed, finalized } = extractConfirmedSalesPayload(report.confirmed_sales || null);
-              setConfirmedPVSales(confirmed);
-              setFinalizedREDSByPeriod(finalized);
-              if (report.sales_period || report.uploaded_at) {
-                setLocalLastUpload({
-                  period_label: report.sales_period,
-                  file_name: report.file_name || 'Relatório Ativo',
-                  uploaded_at: report.uploaded_at || undefined,
-                  user_email: report.user_email || '',
-                  company_id: report.company_id,
-                  branch: report.branch,
-                  period_start: null,
-                  period_end: null
-                });
-              }
-            }
-          )
+          fetchPVSalesHistory(sessionInfo.companyId!, sessionInfo.filial!),
+          fetchActiveSalesReport(sessionInfo.companyId!, sessionInfo.filial!)
         ]);
 
         if (cancelled) return;
 
         if (historyRes.status === 'fulfilled' && historyRes.value) {
           setHistoryRecords(historyRes.value);
+          CacheService.set(`pv_sales_history_${sessionInfo.companyId}_${sessionInfo.filial}`, historyRes.value).catch(() => { });
         } else if (historyRes.status === 'rejected') {
           console.error('Erro carregando histórico de vendas:', historyRes.reason);
+          const cachedHistory = await CacheService.get<DbPVSalesHistory[]>(`pv_sales_history_${sessionInfo.companyId}_${sessionInfo.filial}`);
+          if (cachedHistory && !cancelled) setHistoryRecords(Array.isArray(cachedHistory) ? cachedHistory : []);
         }
 
         if (activeSalesRes.status === 'fulfilled') {
           const report = activeSalesRes.value;
-          if (!report) return;
+          if (!report) {
+            const cachedActive = await CacheService.get<any>(`pv_active_sales_${sessionInfo.companyId}_${sessionInfo.filial}`);
+            if (cachedActive && !cancelled) {
+              if (Array.isArray(cachedActive.sales_records)) setSalesRecords(cachedActive.sales_records);
+              setSalesPeriod(cachedActive.sales_period || '');
+              const { confirmed, finalized } = extractConfirmedSalesPayload(cachedActive.confirmed_sales || null);
+              setConfirmedPVSales(confirmed);
+              setFinalizedREDSByPeriod(finalized);
+              if (cachedActive.sales_period || cachedActive.uploaded_at) {
+                setLocalLastUpload({
+                  period_label: cachedActive.sales_period,
+                  file_name: cachedActive.file_name || 'Relatório Ativo (cache)',
+                  uploaded_at: cachedActive.uploaded_at || undefined,
+                  user_email: cachedActive.user_email || '',
+                  company_id: cachedActive.company_id || sessionInfo.companyId,
+                  branch: cachedActive.branch || sessionInfo.filial,
+                  period_start: null,
+                  period_end: null
+                });
+              }
+            }
+            return;
+          }
 
           if (report.sales_records && report.sales_records.length > 0) {
             console.log('✅ [PV Persistence] Relatório ativo restaurado:', report.sales_period);
             setSalesRecords(report.sales_records);
-            setSalesPeriod(report.sales_period || '');
           }
+          setSalesPeriod(report.sales_period || '');
+          CacheService.set(`pv_active_sales_${sessionInfo.companyId}_${sessionInfo.filial}`, report).catch(() => { });
 
           const { confirmed, finalized } = extractConfirmedSalesPayload(report.confirmed_sales || null);
           setConfirmedPVSales(confirmed);
@@ -1461,6 +1454,26 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           }
         } else {
           console.error('Erro carregando relatório de vendas ativo:', activeSalesRes.reason);
+          const cachedActive = await CacheService.get<any>(`pv_active_sales_${sessionInfo.companyId}_${sessionInfo.filial}`);
+          if (cachedActive && !cancelled) {
+            if (Array.isArray(cachedActive.sales_records)) setSalesRecords(cachedActive.sales_records);
+            setSalesPeriod(cachedActive.sales_period || '');
+            const { confirmed, finalized } = extractConfirmedSalesPayload(cachedActive.confirmed_sales || null);
+            setConfirmedPVSales(confirmed);
+            setFinalizedREDSByPeriod(finalized);
+            if (cachedActive.sales_period || cachedActive.uploaded_at) {
+              setLocalLastUpload({
+                period_label: cachedActive.sales_period,
+                file_name: cachedActive.file_name || 'Relatório Ativo (cache)',
+                uploaded_at: cachedActive.uploaded_at || undefined,
+                user_email: cachedActive.user_email || '',
+                company_id: cachedActive.company_id || sessionInfo.companyId,
+                branch: cachedActive.branch || sessionInfo.filial,
+                period_start: null,
+                period_end: null
+              });
+            }
+          }
         }
       } finally {
         branchFetchInFlightRef.current.delete(fetchKey);
@@ -1492,21 +1505,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
     branchFetchInFlightRef.current.add(fetchKey);
     setIsLoadingSalesUploads(true);
-    CacheService.fetchWithCache(
-      `pv_uploads_${sessionInfo.companyId}_${sessionInfo.filial}`,
-      () => fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial),
-      (reports) => {
-        if (cancelled) return;
-        setSalesUploads(Array.isArray(reports) ? reports : []);
-      }
-    )
+    fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial)
       .then(reports => {
         if (cancelled) return;
-        setSalesUploads(reports);
+        setSalesUploads(Array.isArray(reports) ? reports : []);
+        CacheService.set(`pv_uploads_${sessionInfo.companyId}_${sessionInfo.filial}`, Array.isArray(reports) ? reports : []).catch(() => { });
       })
       .catch(err => {
         if (cancelled) return;
         console.error('Erro carregando histórico de relatórios de vendas:', err);
+        CacheService.get<DbPVSalesUpload[]>(`pv_uploads_${sessionInfo.companyId}_${sessionInfo.filial}`)
+          .then(cached => {
+            if (cancelled) return;
+            if (cached) setSalesUploads(Array.isArray(cached) ? cached : []);
+          })
+          .catch(() => { });
       })
       .finally(() => {
         branchFetchInFlightRef.current.delete(fetchKey);
