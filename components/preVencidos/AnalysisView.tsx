@@ -23,6 +23,17 @@ const getExpiryMonthLabel = (expiryDate?: string) => {
   return `${monthLabel}/${normalizedYear}`;
 };
 
+const parseExpiryMonthStartTs = (expiryDate?: string): number | null => {
+  if (!expiryDate) return null;
+  const [monthPart, yearPart] = String(expiryDate).split('/');
+  const month = Number(monthPart);
+  if (Number.isNaN(month) || month < 1 || month > 12) return null;
+  const rawYear = String(yearPart || '').trim();
+  const year = rawYear.length === 2 ? Number(`20${rawYear}`) : Number(rawYear);
+  if (Number.isNaN(year) || year < 2000) return null;
+  return new Date(year, month - 1, 1).getTime();
+};
+
 interface AnalysisViewProps {
   pvRecords: PVRecord[];
   salesRecords: SalesRecord[];
@@ -83,15 +94,22 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
     return date;
   }, [lastUpload?.uploaded_at]);
 
+  const currentMonthStartTs = useMemo(() => {
+    const now = new Date();
+    return new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  }, []);
+
   const eligiblePVRecords = useMemo(() => {
-    if (!salesUploadCutoff) return pvRecords;
     return pvRecords.filter(record => {
-      if (!record.entryDate) return true;
+      const expiryTs = parseExpiryMonthStartTs(record.expiryDate);
+      if (expiryTs === null) return false;
+      if (expiryTs < currentMonthStartTs) return false;
+      if (!salesUploadCutoff || !record.entryDate) return true;
       const entryDate = new Date(record.entryDate);
       if (Number.isNaN(entryDate.getTime())) return true;
       return entryDate.getTime() <= salesUploadCutoff.getTime();
     });
-  }, [pvRecords, salesUploadCutoff]);
+  }, [pvRecords, salesUploadCutoff, currentMonthStartTs]);
 
   const handleFilterClick = (filter: 'pending' | 'finalized' | 'similar') => {
     setActiveFilter(prev => (prev === filter ? 'all' : filter));
