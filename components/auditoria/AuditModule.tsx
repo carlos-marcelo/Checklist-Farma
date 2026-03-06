@@ -5790,6 +5790,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 (sum: number, p: any) => sum + ((p.quantity || 0) * (p.cost || 0)),
                                                 0
                                             );
+                                            const scopeAuditedQty = (termScopeInfo?.products || []).reduce(
+                                                (sum: number, p: any) => sum + (p.quantity || 0),
+                                                0
+                                            );
                                             const representativity = getFinancialRepresentativity(scopeAuditedCost, termComparisonMetrics.diffCost);
                                             return (
                                                 <>
@@ -5847,6 +5851,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                                     )}
                                                                 </div>
                                                             </div>
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="mt-3 bg-white p-3 rounded border border-slate-100">
+                                                        <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-1">
+                                                            Totais dos Itens Conferidos
+                                                        </p>
+                                                        <div className="flex items-center justify-between gap-4">
+                                                            <span className="font-black text-slate-700">
+                                                                {Math.round(scopeAuditedQty).toLocaleString('pt-BR')} un.
+                                                            </span>
+                                                            <span className="font-black text-slate-700">
+                                                                {scopeAuditedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                            </span>
                                                         </div>
                                                     </div>
 
