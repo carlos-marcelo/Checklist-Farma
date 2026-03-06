@@ -1133,6 +1133,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
     const localSession = loadLocalPVSession(userEmail);
     const localCurrentView = (localSession?.session_data?.currentView || '').trim();
+    const localForcesSetupWithoutBranch = !!localSession && !String(localSession.branch || '').trim() && localCurrentView === 'setup';
     if (localSession) {
       applySessionFromData(localSession);
       // Otimização: Se tem cache local, libera o loading imediatamente para não travar a UI!
@@ -1148,6 +1149,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     fetchPVSession(userEmail)
       .then(session => {
         if (!isMounted || !session) return;
+        if (localForcesSetupWithoutBranch && String(session.branch || '').trim()) {
+          // Usuário saiu para trocar filial; não restaurar filial antiga do servidor no F5.
+          return;
+        }
         applySessionFromData(session, localCurrentView || undefined);
         const mergedSession: DbPVSession = {
           ...session,
@@ -3493,6 +3498,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         updated_at: new Date().toISOString()
       };
       saveLocalPVSession(userEmail, localResetPayload);
+      try {
+        await upsertPVSession(localResetPayload);
+      } catch (error) {
+        console.error('Erro ao resetar sessão PV no Supabase durante logout:', error);
+      }
     }
 
     setSetupDraftInfo(nextSetupInfo);
