@@ -576,15 +576,6 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       setIsBranchPrefetching(true);
       setBranchPrefetchReady(false);
       setBranchPrefetchError(null);
-      setSalesUploads([]);
-      setSalesRecords([]);
-      setSalesPeriod('');
-      setConfirmedPVSales({});
-      setFinalizedREDSByPeriod({});
-      setLocalLastUpload(null);
-      setInventoryReport(null);
-      setInventoryCostByBarcode({});
-      setInventoryStockByBarcode({});
 
       try {
         const [inventoryRes, activeSalesRes, uploadsRes] = await Promise.allSettled([
@@ -602,11 +593,15 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         if (inventory) {
           setInventoryReport(inventory);
           buildInventoryMaps(inventory.records || []);
+        } else {
+          setInventoryReport(null);
+          setInventoryCostByBarcode({});
+          setInventoryStockByBarcode({});
         }
 
         if (activeSales) {
           const normalizedSales = normalizeSalesRecordsPayload(activeSales.sales_records);
-          if (normalizedSales.length > 0) setSalesRecords(normalizedSales);
+          setSalesRecords(normalizedSales);
           setSalesPeriod(activeSales.sales_period || '');
           CacheService.set(`pv_active_sales_${companyId}_${branch}`, activeSales).catch(() => { });
           const { confirmed, finalized } = extractConfirmedSalesPayload(activeSales.confirmed_sales || null);
@@ -624,7 +619,15 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
               period_start: null,
               period_end: null
             });
+          } else {
+            setLocalLastUpload(null);
           }
+        } else {
+          setSalesRecords([]);
+          setSalesPeriod('');
+          setConfirmedPVSales({});
+          setFinalizedREDSByPeriod({});
+          setLocalLastUpload(null);
         }
 
         setSalesUploads(Array.isArray(uploads) ? uploads : []);
@@ -3714,6 +3717,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   useEffect(() => {
     // Se o contexto surge depois e ainda não está pronto, volta para a tela de sincronização.
+    if (currentView === AppView.SETUP) return;
     if (
       hasInitialHydrationCompleted &&
       hasReportsContext &&
@@ -3722,9 +3726,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       setHasInitialHydrationCompleted(false);
       setHydrationDelayDone(false);
     }
-  }, [hasInitialHydrationCompleted, hasReportsContext, isInitialSyncDone, reportsSyncStatus]);
+  }, [hasInitialHydrationCompleted, hasReportsContext, isInitialSyncDone, reportsSyncStatus, currentView]);
 
   useEffect(() => {
+    if (currentView === AppView.SETUP) return;
     if (
       hasInitialHydrationCompleted &&
       hasBranchContext &&
@@ -3733,7 +3738,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       setHasInitialHydrationCompleted(false);
       setHydrationDelayDone(false);
     }
-  }, [hasInitialHydrationCompleted, hasBranchContext, hasLoadedInitialBranchRecords]);
+  }, [hasInitialHydrationCompleted, hasBranchContext, hasLoadedInitialBranchRecords, currentView]);
 
   useEffect(() => {
     if (hasInitialHydrationCompleted) return;
