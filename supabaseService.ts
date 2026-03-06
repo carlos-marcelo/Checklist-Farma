@@ -1186,9 +1186,25 @@ export async function fetchAuditsHistory(branch: string): Promise<DbAuditSession
 
 export async function fetchActiveSalesReport(companyId: string, branch: string): Promise<DbActiveSalesReport | null> {
   try {
+    const hasSalesRows = (row: any) => {
+      if (Array.isArray(row?.sales_records)) return row.sales_records.length > 0;
+      if (typeof row?.sales_records === 'string') {
+        try {
+          const parsed = JSON.parse(row.sales_records);
+          return Array.isArray(parsed) ? parsed.length > 0 : !!parsed;
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    };
+
     const sortByRecency = (rows: any[]) => {
       const safe = Array.isArray(rows) ? [...rows] : [];
       safe.sort((a, b) => {
+        const qa = hasSalesRows(a) ? 1 : 0;
+        const qb = hasSalesRows(b) ? 1 : 0;
+        if (qa !== qb) return qb - qa;
         const ta = Date.parse(String(a?.updated_at || a?.uploaded_at || a?.created_at || '')) || 0;
         const tb = Date.parse(String(b?.updated_at || b?.uploaded_at || b?.created_at || '')) || 0;
         return tb - ta;
@@ -1631,20 +1647,35 @@ export async function insertPVSalesUpload(upload: DbPVSalesUpload): Promise<DbPV
 
 export async function fetchPVSalesAnalysisReports(companyId: string, branch: string): Promise<DbPVSalesAnalysisReport[]> {
   try {
-    let query = supabase
-      .from('pv_sales_analysis_reports')
-      .select('*')
-      .eq('branch', branch)
-      .order('uploaded_at', { ascending: false });
+    const sortByRecency = (rows: any[]) => {
+      const safe = Array.isArray(rows) ? [...rows] : [];
+      safe.sort((a, b) => {
+        const ta = Date.parse(String(a?.uploaded_at || a?.updated_at || a?.created_at || '')) || 0;
+        const tb = Date.parse(String(b?.uploaded_at || b?.updated_at || b?.created_at || '')) || 0;
+        return tb - ta;
+      });
+      return safe as DbPVSalesAnalysisReport[];
+    };
 
     if (companyId) {
-      query = query.or(`company_id.eq.${companyId},company_id.is.null`);
+      const exact = await supabase
+        .from('pv_sales_analysis_reports')
+        .select('*')
+        .eq('branch', branch)
+        .eq('company_id', companyId);
+      if (!exact.error) {
+        const sorted = sortByRecency(exact.data || []);
+        if (sorted.length > 0) return sorted;
+      }
     }
 
-    const { data, error } = await query;
-
-    if (error) throw error;
-    return data || [];
+    // Fallback legado: sem company_id.
+    const legacy = await supabase
+      .from('pv_sales_analysis_reports')
+      .select('*')
+      .eq('branch', branch);
+    if (!legacy.error) return sortByRecency(legacy.data || []);
+    return [];
   } catch (error) {
     console.error('Error fetching PV sales analysis reports:', error);
     return [];
@@ -1653,26 +1684,50 @@ export async function fetchPVSalesAnalysisReports(companyId: string, branch: str
 
 export async function upsertPVSalesAnalysisReport(report: DbPVSalesAnalysisReport): Promise<DbPVSalesAnalysisReport | null> {
   try {
-    const payload = {
+    const payloadBase: any = {
       company_id: report.company_id,
       branch: report.branch,
       period_label: report.period_label,
       period_start: report.period_start ?? null,
       period_end: report.period_end ?? null,
       file_name: report.file_name ?? null,
-      uploaded_at: report.uploaded_at ?? null,
       analysis_payload: report.analysis_payload,
       updated_at: new Date().toISOString()
     };
+    const payload: any = { ...payloadBase };
+    if (report.uploaded_at !== undefined) {
+      payload.uploaded_at = report.uploaded_at ?? null;
+    }
 
-    const { data, error } = await supabase
+    let result = await supabase
       .from('pv_sales_analysis_reports')
       .upsert(payload, { onConflict: 'company_id,branch,period_label' })
       .select()
       .single();
 
-    if (error) throw error;
-    return data || null;
+    // Fallback 1: sem uploaded_at ou sem unique(company_id,branch,period_label)
+    if (result.error) {
+      const noUploaded = { ...payloadBase };
+      result = await supabase
+        .from('pv_sales_analysis_reports')
+        .upsert(noUploaded, { onConflict: 'company_id,branch,period_label' })
+        .select()
+        .single();
+    }
+
+    // Fallback 2: schema legado com unique(branch,period_label)
+    if (result.error) {
+      const legacyPayload = { ...payloadBase };
+      delete legacyPayload.company_id;
+      result = await supabase
+        .from('pv_sales_analysis_reports')
+        .upsert(legacyPayload, { onConflict: 'branch,period_label' })
+        .select()
+        .single();
+    }
+
+    if (result.error) throw result.error;
+    return result.data || null;
   } catch (error) {
     console.error('Error upserting PV sales analysis report:', error);
     return null;

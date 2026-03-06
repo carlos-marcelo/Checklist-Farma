@@ -80,7 +80,15 @@ export const buildAnalysisReportPayload = (params: {
   finalizedCodes?: string[];
   meta?: AnalysisReportMeta;
 }): AnalysisReportPayload => {
-  const { pvRecords, salesRecords, periodLabel, finalizedCodes = [], meta } = params;
+  const {
+    pvRecords: rawPvRecords,
+    salesRecords: rawSalesRecords,
+    periodLabel,
+    finalizedCodes = [],
+    meta
+  } = params;
+  const pvRecords = Array.isArray(rawPvRecords) ? rawPvRecords : [];
+  const salesRecords = Array.isArray(rawSalesRecords) ? rawSalesRecords : [];
 
   const items: AnalysisReportItem[] = pvRecords.map(pv => {
     const directSales = salesRecords.filter(s => s.reducedCode === pv.reducedCode);

@@ -157,6 +157,29 @@ const normalizeReducedCode = (value?: string) => {
   return digits.replace(/^0+/, '') || digits;
 };
 
+const normalizeSalesRecordsPayload = (raw: any): SalesRecord[] => {
+  const normalizeParsed = (parsed: any): SalesRecord[] => {
+    if (Array.isArray(parsed)) return parsed as SalesRecord[];
+    if (parsed && typeof parsed === 'object') {
+      const values = Object.values(parsed);
+      if (values.length > 0 && values.every(v => v && typeof v === 'object')) {
+        return values as SalesRecord[];
+      }
+    }
+    return [];
+  };
+
+  if (Array.isArray(raw)) return raw as SalesRecord[];
+  if (typeof raw === 'string') {
+    try {
+      return normalizeParsed(JSON.parse(raw));
+    } catch {
+      return [];
+    }
+  }
+  return normalizeParsed(raw);
+};
+
 const buildSetupDraftKey = (email: string) => `PV_SETUP_DRAFT_${(email || '').trim().toLowerCase()}`;
 const GLOBAL_BASE_CACHE_TTL_MS = 60 * 1000;
 const buildSharedStockModuleKey = (branchRaw: string) => {
@@ -566,30 +589,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       try {
         const [inventoryRes, activeSalesRes, uploadsRes] = await Promise.allSettled([
           loadBranchInventoryWithGlobalFallback(companyId, branch),
-          CacheService.fetchWithCache(`pv_active_sales_${companyId}_${branch}`, () => fetchActiveSalesReport(companyId, branch), (data) => {
-            if (data && !cancelled) {
-              if (data.sales_records && data.sales_records.length > 0) setSalesRecords(data.sales_records);
-              setSalesPeriod(data.sales_period || '');
-              const { confirmed, finalized } = extractConfirmedSalesPayload(data.confirmed_sales || null);
-              setConfirmedPVSales(confirmed);
-              setFinalizedREDSByPeriod(finalized);
-              if (data.sales_period || data.uploaded_at) {
-                setLocalLastUpload({
-                  period_label: data.sales_period,
-                  file_name: data.file_name || 'Relatório Ativo',
-                  uploaded_at: data.uploaded_at || undefined,
-                  user_email: data.user_email || '',
-                  company_id: data.company_id,
-                  branch: data.branch,
-                  period_start: null,
-                  period_end: null
-                });
-              }
-            }
-          }),
-          CacheService.fetchWithCache(`pv_uploads_${companyId}_${branch}`, () => fetchPVSalesUploads(companyId, branch), (data) => {
-            if (data && !cancelled) setSalesUploads(Array.isArray(data) ? data : []);
-          })
+          fetchActiveSalesReport(companyId, branch),
+          fetchPVSalesUploads(companyId, branch)
         ]);
 
         if (cancelled) return;
@@ -604,10 +605,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         }
 
         if (activeSales) {
-          if (activeSales.sales_records && activeSales.sales_records.length > 0) {
-            setSalesRecords(activeSales.sales_records);
-          }
+          const normalizedSales = normalizeSalesRecordsPayload(activeSales.sales_records);
+          if (normalizedSales.length > 0) setSalesRecords(normalizedSales);
           setSalesPeriod(activeSales.sales_period || '');
+          CacheService.set(`pv_active_sales_${companyId}_${branch}`, activeSales).catch(() => { });
           const { confirmed, finalized } = extractConfirmedSalesPayload(activeSales.confirmed_sales || null);
           setConfirmedPVSales(confirmed);
           setFinalizedREDSByPeriod(finalized);
@@ -627,6 +628,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         }
 
         setSalesUploads(Array.isArray(uploads) ? uploads : []);
+        CacheService.set(`pv_uploads_${companyId}_${branch}`, Array.isArray(uploads) ? uploads : []).catch(() => { });
         setBranchPrefetchReady(true);
         const allFailed =
           inventoryRes.status === 'rejected' &&
@@ -1408,7 +1410,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           if (!report) {
             const cachedActive = await CacheService.get<any>(`pv_active_sales_${sessionInfo.companyId}_${sessionInfo.filial}`);
             if (cachedActive && !cancelled) {
-              if (Array.isArray(cachedActive.sales_records)) setSalesRecords(cachedActive.sales_records);
+              const normalizedSales = normalizeSalesRecordsPayload(cachedActive.sales_records);
+              if (normalizedSales.length > 0) setSalesRecords(normalizedSales);
               setSalesPeriod(cachedActive.sales_period || '');
               const { confirmed, finalized } = extractConfirmedSalesPayload(cachedActive.confirmed_sales || null);
               setConfirmedPVSales(confirmed);
@@ -1429,9 +1432,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
             return;
           }
 
-          if (report.sales_records && report.sales_records.length > 0) {
+          const normalizedSales = normalizeSalesRecordsPayload(report.sales_records);
+          if (normalizedSales.length > 0) {
             console.log('✅ [PV Persistence] Relatório ativo restaurado:', report.sales_period);
-            setSalesRecords(report.sales_records);
+            setSalesRecords(normalizedSales);
           }
           setSalesPeriod(report.sales_period || '');
           CacheService.set(`pv_active_sales_${sessionInfo.companyId}_${sessionInfo.filial}`, report).catch(() => { });
@@ -1456,7 +1460,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           console.error('Erro carregando relatório de vendas ativo:', activeSalesRes.reason);
           const cachedActive = await CacheService.get<any>(`pv_active_sales_${sessionInfo.companyId}_${sessionInfo.filial}`);
           if (cachedActive && !cancelled) {
-            if (Array.isArray(cachedActive.sales_records)) setSalesRecords(cachedActive.sales_records);
+            const normalizedSales = normalizeSalesRecordsPayload(cachedActive.sales_records);
+            if (normalizedSales.length > 0) setSalesRecords(normalizedSales);
             setSalesPeriod(cachedActive.sales_period || '');
             const { confirmed, finalized } = extractConfirmedSalesPayload(cachedActive.confirmed_sales || null);
             setConfirmedPVSales(confirmed);
@@ -1542,7 +1547,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
     let cancelled = false;
     setIsLoadingAnalysisReports(true);
-    CacheService.fetchWithCache(`pv_analysis_${sessionInfo.companyId}_${sessionInfo.filial}`, () => fetchPVSalesAnalysisReports(sessionInfo.companyId, sessionInfo.filial))
+    fetchPVSalesAnalysisReports(sessionInfo.companyId, sessionInfo.filial)
       .then(reports => {
         if (cancelled) return;
         const map: Record<string, AnalysisReportPayload> = {};
@@ -1553,10 +1558,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           }
         });
         setAnalysisReports(map);
+        CacheService.set(`pv_analysis_${sessionInfo.companyId}_${sessionInfo.filial}`, Array.isArray(reports) ? reports : []).catch(() => { });
       })
-      .catch(err => {
+      .catch(async err => {
         if (cancelled) return;
         console.error('Erro carregando relatórios de análise de vendas:', err);
+        const cached = await CacheService.get<DbPVSalesAnalysisReport[]>(`pv_analysis_${sessionInfo.companyId}_${sessionInfo.filial}`);
+        if (!cached || cancelled) return;
+        const map: Record<string, AnalysisReportPayload> = {};
+        cached.forEach(report => {
+          const label = (report.period_label || '').trim();
+          if (label && report.analysis_payload) {
+            map[label] = report.analysis_payload;
+          }
+        });
+        setAnalysisReports(map);
       })
       .finally(() => {
         if (cancelled) return;
@@ -1727,7 +1743,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   const getSalesUnitPrice = (seller: string, reducedCode: string, quantityHint?: number) => {
     if (!seller || !reducedCode) return 0;
-    const candidates = salesRecords.filter(s => s.reducedCode === reducedCode && s.salesperson === seller);
+    const candidates = effectiveSalesRecords.filter(s => s.reducedCode === reducedCode && s.salesperson === seller);
     if (!candidates.length) return 0;
     if (quantityHint !== undefined) {
       const match = candidates.find(c => c.quantity === quantityHint);
@@ -1852,15 +1868,63 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     };
   }, [salesPeriod, sessionInfo?.companyId, sessionInfo?.filial, salesUploads, localLastUpload, userEmail]);
 
+  const effectiveSalesRecords = useMemo<SalesRecord[]>(() => {
+    if (salesRecords.length > 0) return salesRecords;
+    const normalizedPeriod = (salesPeriod || '').trim();
+    if (!normalizedPeriod) return [];
+    const report = analysisReports[normalizedPeriod];
+    if (!report?.items || report.items.length === 0) return [];
+
+    const rebuilt: SalesRecord[] = [];
+    report.items.forEach((item: any) => {
+      const dcb = String(item?.dcb || '').trim() || 'N/A';
+      (item?.directSalesDetails || []).forEach((detail: any) => {
+        const quantity = Number(detail?.totalSoldInReport ?? detail?.qty ?? 0);
+        if (quantity <= 0) return;
+        rebuilt.push({
+          reducedCode: String(detail?.code || '').trim(),
+          productName: String(detail?.name || item?.name || '').trim(),
+          salesperson: String(detail?.seller || '').trim() || 'N/A',
+          quantity,
+          totalValue: Number(detail?.totalValue || 0),
+          unitPrice: Number(detail?.unitPrice || 0),
+          dcb,
+          lab: String(detail?.lab || '').trim(),
+          date: normalizedPeriod,
+          costUnit: Number(detail?.costUnit || 0),
+          costTotal: Number(detail?.costTotal || 0)
+        });
+      });
+      (item?.similarSalesDetails || []).forEach((detail: any) => {
+        const quantity = Number(detail?.qty ?? detail?.totalSoldInReport ?? 0);
+        if (quantity <= 0) return;
+        rebuilt.push({
+          reducedCode: String(detail?.code || '').trim(),
+          productName: String(detail?.name || '').trim() || String(item?.name || '').trim(),
+          salesperson: String(detail?.seller || '').trim() || 'N/A',
+          quantity,
+          totalValue: Number(detail?.totalValue || 0),
+          unitPrice: Number(detail?.unitPrice || 0),
+          dcb,
+          lab: String(detail?.lab || '').trim(),
+          date: normalizedPeriod,
+          costUnit: Number(detail?.costUnit || 0),
+          costTotal: Number(detail?.costTotal || 0)
+        });
+      });
+    });
+    return rebuilt;
+  }, [salesRecords, salesPeriod, analysisReports]);
+
   const currentAnalysisReport = useMemo(() => {
     const normalizedPeriod = (salesPeriod || '').trim();
-    if (!normalizedPeriod || salesRecords.length === 0 || pvRecords.length === 0) return null;
+    if (!normalizedPeriod || effectiveSalesRecords.length === 0 || pvRecords.length === 0) return null;
     const finalizedCodes = effectiveFinalizedByPeriod[normalizedPeriod] || [];
     const { fileName, uploadedAt, range } = resolveUploadMetaForPeriod(normalizedPeriod);
 
     return buildAnalysisReportPayload({
       pvRecords,
-      salesRecords,
+      effectiveSalesRecords,
       periodLabel: normalizedPeriod,
       finalizedCodes,
       meta: {
@@ -1875,7 +1939,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     });
   }, [
     salesPeriod,
-    salesRecords,
+    effectiveSalesRecords,
     pvRecords,
     effectiveFinalizedByPeriod,
     sessionInfo?.company,
@@ -1927,12 +1991,12 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     if (analysisReports[periodLabel]) return;
 
     const { range, fileName, uploadedAt } = resolveUploadMetaForPeriod(periodLabel);
-    persistAnalysisReport(salesRecords, periodLabel, range, fileName, uploadedAt)
+    persistAnalysisReport(effectiveSalesRecords, periodLabel, range, fileName, uploadedAt)
       .catch(err => console.error('Erro ao persistir relatório de análise atual:', err));
   }, [
     currentAnalysisReport,
     analysisReports,
-    salesRecords,
+    effectiveSalesRecords,
     sessionInfo?.companyId,
     sessionInfo?.filial
   ]);
@@ -2005,7 +2069,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         upsertActiveSalesReport({
           company_id: sessionInfo.companyId,
           branch: sessionInfo.filial,
-          sales_records: salesRecords,
+          sales_records: effectiveSalesRecords,
           sales_period: salesPeriod,
           confirmed_sales: buildConfirmedSalesPayload(newState, effectiveFinalizedByPeriod),
           uploaded_at: localLastUpload?.uploaded_at,
@@ -2017,7 +2081,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
             const updatedReport = {
               company_id: sessionInfo.companyId!,
               branch: sessionInfo.filial,
-              sales_records: salesRecords,
+              sales_records: effectiveSalesRecords,
               sales_period: salesPeriod,
               confirmed_sales: buildConfirmedSalesPayload(newState, effectiveFinalizedByPeriod),
               uploaded_at: localLastUpload?.uploaded_at,
@@ -2219,7 +2283,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       upsertActiveSalesReport({
         company_id: sessionInfo.companyId,
         branch: sessionInfo.filial,
-        sales_records: salesRecords,
+        sales_records: effectiveSalesRecords,
         sales_period: normalizedPeriod,
         confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedForPersist),
         uploaded_at: localLastUpload?.uploaded_at,
@@ -2251,10 +2315,10 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           analysis_payload: updatedPayload
         }).catch(err => console.error('Erro ao atualizar relatório de análise:', err));
       }
-    } else if (salesRecords.length > 0 && sessionInfo?.companyId && sessionInfo?.filial) {
+    } else if (effectiveSalesRecords.length > 0 && sessionInfo?.companyId && sessionInfo?.filial) {
       const fallbackPayload = buildAnalysisReportPayload({
         pvRecords,
-        salesRecords,
+        salesRecords: effectiveSalesRecords,
         periodLabel: normalizedPeriod,
         finalizedCodes: updatedFinalizedCodes,
         meta: {
@@ -3778,7 +3842,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
                 <div className="flex flex-col">
                   <span className="text-[10px] font-black uppercase tracking-tight">Vendas</span>
                   <span className="text-[8px] text-slate-500 font-bold -mt-0.5">
-                    {effectiveCurrentUpload?.uploaded_at ? formatUploadTimestamp(effectiveCurrentUpload.uploaded_at) : `${salesRecords.length} reg.`}
+                    {effectiveCurrentUpload?.uploaded_at ? formatUploadTimestamp(effectiveCurrentUpload.uploaded_at) : `${effectiveSalesRecords.length} reg.`}
                   </span>
                 </div>
                 <input type="file" className="hidden" accept=".xlsx,.xls,.csv,.txt" onChange={handleSalesUpload} />
@@ -3915,7 +3979,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
                   await reloadBranchRecords(info.companyId, info.filial);
 
                   // Keep sales records only when they belong to the selected branch/company.
-                  if (salesRecords.length === 0 || !uploadMatchesTargetBranch) {
+                  if (effectiveSalesRecords.length === 0 || !uploadMatchesTargetBranch) {
                     setConfirmedPVSales({});
                     setFinalizedREDSByPeriod({});
                     setSalesPeriod('');
@@ -3926,7 +3990,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
                       upsertActiveSalesReport({
                         company_id: info.companyId,
                         branch: info.filial,
-                        sales_records: salesRecords,
+                        sales_records: effectiveSalesRecords,
                         sales_period: salesPeriod,
                         confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedREDSByPeriod),
                         uploaded_at: localLastUpload?.uploaded_at,
@@ -4115,7 +4179,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
                 </div>
               )}
               <AnalysisView
-                pvRecords={pvRecords} salesRecords={salesRecords} confirmedPVSales={confirmedPVSales}
+                pvRecords={pvRecords} salesRecords={effectiveSalesRecords} confirmedPVSales={confirmedPVSales}
                 finalizedREDSByPeriod={effectiveFinalizedByPeriod}
                 currentSalesPeriod={salesPeriod}
                 sessionInfo={sessionInfo}
