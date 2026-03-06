@@ -1186,20 +1186,33 @@ export async function fetchAuditsHistory(branch: string): Promise<DbAuditSession
 
 export async function fetchActiveSalesReport(companyId: string, branch: string): Promise<DbActiveSalesReport | null> {
   try {
-    let query = supabase
+    const primaryQuery = async () => {
+      let q = supabase
+        .from('pv_active_sales_reports')
+        .select('*')
+        .eq('branch', branch)
+        .order('updated_at', { ascending: false })
+        .order('uploaded_at', { ascending: false })
+        .limit(1);
+      if (companyId) q = q.eq('company_id', companyId);
+      return q;
+    };
+
+    const primary = await primaryQuery();
+    if (!primary.error) {
+      if (primary.data && primary.data.length > 0) return primary.data[0];
+      if (!companyId) return null;
+    }
+
+    // Fallback legado: sem company_id/uploaded_at (alguns bancos antigos).
+    const legacy = await supabase
       .from('pv_active_sales_reports')
       .select('*')
       .eq('branch', branch)
+      .order('updated_at', { ascending: false })
       .limit(1);
-
-    if (companyId) {
-      query = query.or(`company_id.eq.${companyId},company_id.is.null`);
-    }
-
-    const { data, error } = await query;
-
-    if (error) throw error;
-    if (data && data.length > 0) return data[0];
+    if (legacy.error) throw legacy.error;
+    if (legacy.data && legacy.data.length > 0) return legacy.data[0];
     return null;
   } catch (error) {
     console.error('Error fetching active sales report:', error);
@@ -1253,7 +1266,7 @@ export async function deleteAuditPartialTermsForAudit(
 
 export async function upsertActiveSalesReport(report: DbActiveSalesReport): Promise<boolean> {
   try {
-    const payload: any = {
+    const payloadBase: any = {
       company_id: report.company_id,
       branch: report.branch,
       sales_records: report.sales_records,
@@ -1265,15 +1278,33 @@ export async function upsertActiveSalesReport(report: DbActiveSalesReport): Prom
     };
 
     // Keep original report extraction timestamp unless an explicit value is provided.
+    const payload: any = { ...payloadBase };
     if (report.uploaded_at !== undefined) {
       payload.uploaded_at = report.uploaded_at;
     }
 
-    const { error } = await supabase
+    let result = await supabase
       .from('pv_active_sales_reports')
       .upsert(payload, { onConflict: 'company_id,branch' });
 
-    if (error) throw error;
+    // Fallback 1: schema sem uploaded_at ou sem unique(company_id,branch)
+    if (result.error) {
+      const noUploaded = { ...payloadBase };
+      result = await supabase
+        .from('pv_active_sales_reports')
+        .upsert(noUploaded, { onConflict: 'company_id,branch' });
+    }
+
+    // Fallback 2: schema legado com unique somente por branch.
+    if (result.error) {
+      const legacyPayload = { ...payloadBase };
+      delete legacyPayload.company_id;
+      result = await supabase
+        .from('pv_active_sales_reports')
+        .upsert(legacyPayload, { onConflict: 'branch' });
+    }
+
+    if (result.error) throw result.error;
     return true;
   } catch (error) {
     console.error('Error upserting active sales report:', error);
@@ -1532,20 +1563,33 @@ export async function updatePVBranchRecordDetails(
 
 export async function fetchPVSalesUploads(companyId: string, branch: string): Promise<DbPVSalesUpload[]> {
   try {
-    let query = supabase
+    let primary = await supabase
       .from('pv_sales_uploads')
       .select('*')
       .eq('branch', branch)
       .order('uploaded_at', { ascending: false });
-
     if (companyId) {
-      query = query.or(`company_id.eq.${companyId},company_id.is.null`);
+      primary = await supabase
+        .from('pv_sales_uploads')
+        .select('*')
+        .eq('branch', branch)
+        .eq('company_id', companyId)
+        .order('uploaded_at', { ascending: false });
     }
 
-    const { data, error } = await query;
+    if (!primary.error) {
+      if (primary.data && primary.data.length > 0) return primary.data;
+      if (!companyId) return [];
+    }
 
-    if (error) throw error;
-    return data || [];
+    // Fallback legado: tabela sem company_id.
+    const legacy = await supabase
+      .from('pv_sales_uploads')
+      .select('*')
+      .eq('branch', branch)
+      .order('uploaded_at', { ascending: false });
+    if (legacy.error) throw legacy.error;
+    return legacy.data || [];
   } catch (error) {
     console.error('Error fetching PV sales uploads:', error);
     return [];

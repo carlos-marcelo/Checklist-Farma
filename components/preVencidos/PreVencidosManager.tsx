@@ -1388,8 +1388,41 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       try {
         console.log('🔍 [PV DEBUG] Buscando histórico de vendas...');
         const [historyRes, activeSalesRes] = await Promise.allSettled([
-          CacheService.fetchWithCache(`pv_sales_history_${sessionInfo.companyId}_${sessionInfo.filial}`, () => fetchPVSalesHistory(sessionInfo.companyId!, sessionInfo.filial!)),
-          CacheService.fetchWithCache(`pv_active_sales_${sessionInfo.companyId}_${sessionInfo.filial}`, () => fetchActiveSalesReport(sessionInfo.companyId!, sessionInfo.filial!))
+          CacheService.fetchWithCache(
+            `pv_sales_history_${sessionInfo.companyId}_${sessionInfo.filial}`,
+            () => fetchPVSalesHistory(sessionInfo.companyId!, sessionInfo.filial!),
+            (data) => {
+              if (!cancelled) setHistoryRecords(Array.isArray(data) ? data : []);
+            }
+          ),
+          CacheService.fetchWithCache(
+            `pv_active_sales_${sessionInfo.companyId}_${sessionInfo.filial}`,
+            () => fetchActiveSalesReport(sessionInfo.companyId!, sessionInfo.filial!),
+            (report) => {
+              if (!report || cancelled) return;
+              if (report.sales_records && report.sales_records.length > 0) {
+                setSalesRecords(report.sales_records);
+              } else {
+                setSalesRecords([]);
+              }
+              setSalesPeriod(report.sales_period || '');
+              const { confirmed, finalized } = extractConfirmedSalesPayload(report.confirmed_sales || null);
+              setConfirmedPVSales(confirmed);
+              setFinalizedREDSByPeriod(finalized);
+              if (report.sales_period || report.uploaded_at) {
+                setLocalLastUpload({
+                  period_label: report.sales_period,
+                  file_name: report.file_name || 'Relatório Ativo',
+                  uploaded_at: report.uploaded_at || undefined,
+                  user_email: report.user_email || '',
+                  company_id: report.company_id,
+                  branch: report.branch,
+                  period_start: null,
+                  period_end: null
+                });
+              }
+            }
+          )
         ]);
 
         if (cancelled) return;
@@ -1459,7 +1492,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
     branchFetchInFlightRef.current.add(fetchKey);
     setIsLoadingSalesUploads(true);
-    CacheService.fetchWithCache(`pv_uploads_${sessionInfo.companyId}_${sessionInfo.filial}`, () => fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial))
+    CacheService.fetchWithCache(
+      `pv_uploads_${sessionInfo.companyId}_${sessionInfo.filial}`,
+      () => fetchPVSalesUploads(sessionInfo.companyId, sessionInfo.filial),
+      (reports) => {
+        if (cancelled) return;
+        setSalesUploads(Array.isArray(reports) ? reports : []);
+      }
+    )
       .then(reports => {
         if (cancelled) return;
         setSalesUploads(reports);
@@ -1767,12 +1807,25 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   };
 
   const effectiveCurrentUpload = useMemo<SalesUploadRecord | null>(() => {
+    const scopedUploads = salesUploads.filter(report =>
+      !!report &&
+      !!sessionInfo?.companyId &&
+      !!sessionInfo?.filial &&
+      report.company_id === sessionInfo.companyId &&
+      report.branch === sessionInfo.filial
+    );
+    const latestScopedUpload = [...scopedUploads]
+      .sort((a, b) => {
+        const ta = a.uploaded_at ? new Date(a.uploaded_at).getTime() : 0;
+        const tb = b.uploaded_at ? new Date(b.uploaded_at).getTime() : 0;
+        return tb - ta;
+      })[0];
     const normalizedPeriod = (salesPeriod || '').trim();
-    if (!normalizedPeriod) return localLastUpload;
-    if (!sessionInfo?.companyId || !sessionInfo?.filial) return localLastUpload;
+    if (!normalizedPeriod) return localLastUpload || latestScopedUpload || null;
+    if (!sessionInfo?.companyId || !sessionInfo?.filial) return localLastUpload || latestScopedUpload || null;
 
     const { fileName, uploadedAt } = resolveUploadMetaForPeriod(normalizedPeriod);
-    if (!fileName && !uploadedAt) return localLastUpload;
+    if (!fileName && !uploadedAt) return localLastUpload || latestScopedUpload || null;
 
     return {
       user_email: localLastUpload?.user_email || userEmail || '',
@@ -1781,8 +1834,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       period_label: normalizedPeriod,
       period_start: null,
       period_end: null,
-      file_name: fileName || localLastUpload?.file_name || null,
-      uploaded_at: uploadedAt || localLastUpload?.uploaded_at
+      file_name: fileName || localLastUpload?.file_name || latestScopedUpload?.file_name || null,
+      uploaded_at: uploadedAt || localLastUpload?.uploaded_at || latestScopedUpload?.uploaded_at
     };
   }, [salesPeriod, sessionInfo?.companyId, sessionInfo?.filial, salesUploads, localLastUpload, userEmail]);
 
@@ -1819,6 +1872,33 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     localLastUpload,
     salesUploads
   ]);
+
+  const modalUploadHistory = useMemo<DbPVSalesUpload[]>(() => {
+    const scoped = salesUploads
+      .filter(report =>
+        !!report &&
+        !!sessionInfo?.companyId &&
+        !!sessionInfo?.filial &&
+        report.company_id === sessionInfo.companyId &&
+        report.branch === sessionInfo.filial
+      )
+      .sort((a, b) => {
+        const ta = a.uploaded_at ? new Date(a.uploaded_at).getTime() : 0;
+        const tb = b.uploaded_at ? new Date(b.uploaded_at).getTime() : 0;
+        return tb - ta;
+      });
+    if (scoped.length > 0) return scoped;
+    if (
+      effectiveCurrentUpload &&
+      !!sessionInfo?.companyId &&
+      !!sessionInfo?.filial &&
+      effectiveCurrentUpload.company_id === sessionInfo.companyId &&
+      effectiveCurrentUpload.branch === sessionInfo.filial
+    ) {
+      return [effectiveCurrentUpload];
+    }
+    return [];
+  }, [salesUploads, effectiveCurrentUpload, sessionInfo?.companyId, sessionInfo?.filial]);
 
   const pendingLaunchCount = useMemo(() => {
     if (!currentAnalysisReport) return 0;
@@ -2250,12 +2330,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   };
 
   const persistSalesUploadRecord = async (label: string, range: PeriodRange, fileName: string, uploadedAt?: string) => {
-    if (!sessionInfo?.companyId || !sessionInfo?.filial) return;
+    const contextInfo = sessionInfo || setupDraftInfo;
+    if (!contextInfo?.companyId || !contextInfo?.filial) return;
     const timestamp = uploadedAt || new Date().toISOString();
     const baseRecord: SalesUploadRecord = {
       user_email: userEmail || '',
-      company_id: sessionInfo.companyId,
-      branch: sessionInfo.filial,
+      company_id: contextInfo.companyId,
+      branch: contextInfo.filial,
       period_label: label,
       period_start: range.start ? range.start.toISOString() : null,
       period_end: range.end ? range.end.toISOString() : null,
@@ -2271,6 +2352,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     };
 
     addUploadRecord(baseRecord);
+    try {
+      const cacheKey = `pv_uploads_${contextInfo.companyId}_${contextInfo.filial}`;
+      const current = (await CacheService.get<SalesUploadRecord[]>(cacheKey)) || [];
+      const filtered = current.filter(r => r.period_label !== baseRecord.period_label);
+      await CacheService.set(cacheKey, [baseRecord, ...filtered]);
+    } catch (cacheError) {
+      console.warn('Falha ao atualizar cache local de uploads PV:', cacheError);
+    }
     if (userEmail) {
       saveLastSalesUpload(userEmail, baseRecord);
     }
@@ -2280,6 +2369,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       const saved = await insertPVSalesUpload(baseRecord);
       if (saved) {
         addUploadRecord(saved);
+        try {
+          const cacheKey = `pv_uploads_${contextInfo.companyId}_${contextInfo.filial}`;
+          const current = (await CacheService.get<SalesUploadRecord[]>(cacheKey)) || [];
+          const filtered = current.filter(r => r.period_label !== saved.period_label);
+          await CacheService.set(cacheKey, [saved, ...filtered]);
+        } catch (cacheError) {
+          console.warn('Falha ao atualizar cache local de uploads PV (registro salvo):', cacheError);
+        }
         if (userEmail) {
           saveLastSalesUpload(userEmail, saved);
         }
@@ -2290,7 +2387,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
   };
 
-  const processAndSetSales = (sales: SalesRecord[], period: string, fileName?: string, range?: PeriodRange, uploadedAt?: string) => {
+  const processAndSetSales = async (sales: SalesRecord[], period: string, fileName?: string, range?: PeriodRange, uploadedAt?: string) => {
+    const contextInfo = sessionInfo || setupDraftInfo;
     const cleanedPeriod = (period || '').trim() || 'Período não identificado';
     const enrichedSales = sales.map(s => {
       const product = masterProducts.find(p => p.reducedCode === s.reducedCode);
@@ -2302,29 +2400,32 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         lab: product?.lab || s.lab
       };
     });
+    // Novo arquivo de vendas substitui o contexto anterior de classificação.
+    setConfirmedPVSales({});
+    setFinalizedREDSByPeriod({});
     setSalesRecords(enrichedSales);
     setSalesPeriod(cleanedPeriod);
     setCurrentView(AppView.ANALYSIS);
 
     // Update localLastUpload immediately for UI feedback
-    if (sessionInfo?.companyId && sessionInfo?.filial) {
+    if (contextInfo?.companyId && contextInfo?.filial) {
       setLocalLastUpload({
         period_label: cleanedPeriod,
         file_name: fileName || 'Upload Manual',
         uploaded_at: uploadedAt,
         user_email: userEmail || '',
-        company_id: sessionInfo.companyId,
-        branch: sessionInfo.filial,
+        company_id: contextInfo.companyId,
+        branch: contextInfo.filial,
         period_start: null,
         period_end: null
       });
     }
 
     // Persist to DB
-    if (sessionInfo?.companyId && sessionInfo?.filial) {
-      upsertActiveSalesReport({
-        company_id: sessionInfo.companyId,
-        branch: sessionInfo.filial,
+    if (contextInfo?.companyId && contextInfo?.filial) {
+      const activeReportPayload = {
+        company_id: contextInfo.companyId,
+        branch: contextInfo.filial,
         sales_records: enrichedSales,
         sales_period: cleanedPeriod,
         confirmed_sales: buildConfirmedSalesPayload({}, {}), // Reset confirmed sales + metadata on new report
@@ -2332,15 +2433,24 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         user_email: userEmail || '',
         file_name: fileName,
         status: 'processed'
-      }).then(ok => {
-        if (ok) console.log('✅ [PV Persistence] Relatório de vendas salvo no banco.');
-      });
+      } as const;
+
+      // Sempre salva localmente primeiro para sobreviver a refresh imediato.
+      await CacheService.set(`pv_active_sales_${contextInfo.companyId}_${contextInfo.filial}`, activeReportPayload);
+      const ok = await upsertActiveSalesReport(activeReportPayload);
+      if (ok) {
+        console.log('✅ [PV Persistence] Relatório de vendas salvo no banco.');
+      } else {
+        console.warn('⚠️ [PV Persistence] Falha ao salvar relatório de vendas no Supabase. Mantido no cache local.');
+      }
+      return ok;
     }
 
     if (range) {
       persistAnalysisReport(enrichedSales, cleanedPeriod, range, fileName, uploadedAt)
         .catch(err => console.error('Erro ao salvar relatório de análise:', err));
     }
+    return true;
   };
 
   const handleParsedSales = async (
@@ -2350,12 +2460,21 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     reportExtractedAt?: string
   ) => {
     if (pendingLaunchCount > 0) {
-      alert(`Ainda existem ${pendingLaunchCount} itens com "Falta Lançar no Período".\n\nFinalize todos os lançamentos pendentes antes de carregar um novo arquivo de vendas.`);
-      return;
+      if (!isMaster) {
+        alert(`Ainda existem ${pendingLaunchCount} itens com "Falta Lançar no Período".\n\nFinalize todos os lançamentos pendentes antes de carregar um novo arquivo de vendas.`);
+        return;
+      }
+      const confirmMasterOverridePending = window.confirm(
+        `Existem ${pendingLaunchCount} itens com "Falta Lançar no Período".\n\n` +
+        `Como MASTER, deseja sobrescrever com o novo arquivo e DESCARTAR os pendentes do relatório anterior?\n` +
+        `Clique em OK somente se tem certeza.`
+      );
+      if (!confirmMasterOverridePending) return;
     }
     const normalizedLabel = (rawPeriodLabel || '').trim() || 'Período não identificado';
     const parsedRange = parsePeriodRange(normalizedLabel);
     const conflict = findConflictingUpload(parsedRange, normalizedLabel);
+    let forceOverride = false;
 
     const askMasterConflictOverride = (message: string) => {
       if (!isMaster) return false;
@@ -2365,45 +2484,24 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     // Check against currently loaded/active report in the same context (empresa + filial)
     if (localLastUpload && matchesContext(localLastUpload) && localLastUpload.period_label === normalizedLabel) {
       if (reportExtractedAt) {
-        const patchedUpload: SalesUploadRecord = {
-          ...localLastUpload,
-          file_name: fileName || localLastUpload.file_name,
-          uploaded_at: reportExtractedAt
-        };
-
-        setLocalLastUpload(patchedUpload);
-        if (userEmail) saveLastSalesUpload(userEmail, patchedUpload);
-        setSalesUploads(prev => prev.map(item => (
-          item.period_label === normalizedLabel
-            ? { ...item, uploaded_at: reportExtractedAt, file_name: fileName || item.file_name }
-            : item
-        )));
-
-        if (sessionInfo?.companyId && sessionInfo?.filial) {
-          upsertActiveSalesReport({
-            company_id: sessionInfo.companyId,
-            branch: sessionInfo.filial,
-            sales_records: salesRecords,
-            sales_period: normalizedLabel,
-            confirmed_sales: buildConfirmedSalesPayload(confirmedPVSales, finalizedREDSByPeriod),
-            uploaded_at: reportExtractedAt,
-            user_email: userEmail || '',
-            file_name: fileName || localLastUpload.file_name,
-            status: 'processed'
-          }).catch(err => console.error('Erro ao atualizar horário do relatório ativo:', err));
-
-          if (salesRecords.length > 0) {
-            persistAnalysisReport(
-              salesRecords,
-              normalizedLabel,
-              parsedRange,
-              fileName || localLastUpload.file_name || undefined,
-              reportExtractedAt
-            ).catch(err => console.error('Erro ao atualizar horário da análise:', err));
+        if (isMaster) {
+          const allowMasterOverwriteSamePeriod = window.confirm(
+            `Período já existe para esta filial (${normalizedLabel}).\n\n` +
+            `Deseja SOBRESCREVER o relatório com o arquivo atual?\n` +
+            `Clique em OK somente se tem certeza.`
+          );
+          if (allowMasterOverwriteSamePeriod) {
+            forceOverride = true;
           }
         }
-
-        alert(`Período já existente. Horário do relatório atualizado para ${formatUploadTimestamp(reportExtractedAt)}.`);
+        const effectiveUploadedAt = reportExtractedAt || new Date().toISOString();
+        await processAndSetSales(sales, normalizedLabel, fileName, parsedRange, effectiveUploadedAt);
+        await persistSalesUploadRecord(normalizedLabel, parsedRange, fileName, effectiveUploadedAt);
+        if (forceOverride) {
+          alert(`Relatório sobrescrito com sucesso para ${normalizedLabel}.`);
+        } else {
+          alert(`Período já existente. Arquivo reprocessado e atualizado em ${formatUploadTimestamp(effectiveUploadedAt)}.`);
+        }
         return;
       }
 
@@ -2415,7 +2513,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       }
     }
 
-    if (conflict) {
+    if (conflict && !forceOverride) {
       const friendlyTimestamp = formatUploadTimestamp(conflict.uploaded_at);
       const fileHint = conflict.file_name ? `Arquivo original: ${conflict.file_name}` : 'Arquivo anterior';
       const type = conflict.period_label === normalizedLabel ? 'PERÍODO DUPLICADO' : 'CHOQUE DE DATAS';
@@ -2429,13 +2527,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       const allowMasterOverride = askMasterConflictOverride(baseMessage);
       if (allowMasterOverride) {
         const effectiveUploadedAt = reportExtractedAt || new Date().toISOString();
-        processAndSetSales(sales, normalizedLabel, fileName, parsedRange, effectiveUploadedAt);
+        await processAndSetSales(sales, normalizedLabel, fileName, parsedRange, effectiveUploadedAt);
         await persistSalesUploadRecord(normalizedLabel, parsedRange, fileName, effectiveUploadedAt);
-        if (sessionInfo?.companyId && sessionInfo?.filial) {
+        const contextInfo = sessionInfo || setupDraftInfo;
+        if (contextInfo?.companyId && contextInfo?.filial) {
           insertAppEventLog({
-            company_id: sessionInfo.companyId,
-            branch: sessionInfo.filial,
-            area: sessionInfo.area || null,
+            company_id: contextInfo.companyId,
+            branch: contextInfo.filial,
+            area: contextInfo.area || null,
             user_email: userEmail || null,
             user_name: userName || null,
             app: 'pre_vencidos',
@@ -2468,13 +2567,14 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     }
 
     const effectiveUploadedAt = reportExtractedAt || new Date().toISOString();
-    processAndSetSales(sales, normalizedLabel, fileName, parsedRange, effectiveUploadedAt);
+    await processAndSetSales(sales, normalizedLabel, fileName, parsedRange, effectiveUploadedAt);
     await persistSalesUploadRecord(normalizedLabel, parsedRange, fileName, effectiveUploadedAt);
-    if (sessionInfo?.companyId && sessionInfo?.filial) {
+    const contextInfo = sessionInfo || setupDraftInfo;
+    if (contextInfo?.companyId && contextInfo?.filial) {
       insertAppEventLog({
-        company_id: sessionInfo.companyId,
-        branch: sessionInfo.filial,
-        area: sessionInfo.area || null,
+        company_id: contextInfo.companyId,
+        branch: contextInfo.filial,
+        area: contextInfo.area || null,
         user_email: userEmail || null,
         user_name: userName || null,
         app: 'pre_vencidos',
@@ -2495,9 +2595,20 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   const handleSalesUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (pendingLaunchCount > 0) {
-      alert(`Ainda existem ${pendingLaunchCount} itens com "Falta Lançar no Período".\n\nFinalize todos os lançamentos pendentes antes de carregar um novo arquivo de vendas.`);
-      e.target.value = '';
-      return;
+      if (!isMaster) {
+        alert(`Ainda existem ${pendingLaunchCount} itens com "Falta Lançar no Período".\n\nFinalize todos os lançamentos pendentes antes de carregar um novo arquivo de vendas.`);
+        e.target.value = '';
+        return;
+      }
+      const confirmMasterOverridePending = window.confirm(
+        `Existem ${pendingLaunchCount} itens com "Falta Lançar no Período".\n\n` +
+        `Como MASTER, deseja sobrescrever com o novo arquivo e DESCARTAR os pendentes do relatório anterior?\n` +
+        `Clique em OK somente se tem certeza.`
+      );
+      if (!confirmMasterOverridePending) {
+        e.target.value = '';
+        return;
+      }
     }
     const file = e.target.files?.[0];
     if (!file) return;
@@ -3625,28 +3736,37 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2 bg-slate-800/50 p-1 rounded-xl border border-slate-700/50">
               {isMaster ? (
-                <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-slate-700 text-slate-300 transition-colors group">
-                  <Package size={16} className="text-amber-400" />
+                <label className="flex items-center gap-2.5 px-3.5 py-2 rounded-lg cursor-pointer hover:bg-slate-700 text-slate-300 transition-colors group">
+                  <Package size={18} className="text-amber-400" />
                   <div className="flex flex-col">
-                    <span className="text-[9px] font-black uppercase tracking-tighter">Estoque</span>
-                    {inventoryReport?.uploaded_at && <span className="text-[7px] text-slate-500 font-bold -mt-0.5">{formatUploadTimestamp(inventoryReport.uploaded_at)}</span>}
+                    <span className="text-[10px] font-black uppercase tracking-tight">Estoque</span>
+                    <span className="text-[8px] text-slate-500 font-bold -mt-0.5">
+                      {inventoryReport?.uploaded_at ? formatUploadTimestamp(inventoryReport.uploaded_at) : 'Sem arquivo carregado'}
+                    </span>
                   </div>
                   <input type="file" className="hidden" accept=".xlsx,.xls" onChange={handleInventoryUpload} />
                 </label>
               ) : (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-slate-600 cursor-not-allowed" title="Somente Master">
-                  <Package size={16} />
-                  <span className="text-[9px] font-black uppercase tracking-tighter">Estoque</span>
+                <div className="flex items-center gap-2.5 px-3.5 py-2 rounded-lg text-slate-500 cursor-not-allowed" title="Somente Master">
+                  <Package size={18} />
+                  <div className="flex flex-col">
+                    <span className="text-[10px] font-black uppercase tracking-tight">Estoque</span>
+                    <span className="text-[8px] text-slate-500 font-bold -mt-0.5">
+                      {inventoryReport?.uploaded_at ? formatUploadTimestamp(inventoryReport.uploaded_at) : 'Sem arquivo carregado'}
+                    </span>
+                  </div>
                 </div>
               )}
 
               <div className="w-px h-6 bg-slate-700 mx-1"></div>
 
-              <label className="flex items-center gap-2 px-3 py-1.5 rounded-lg cursor-pointer hover:bg-slate-700 text-slate-300 transition-colors group">
-                <TrendingUp size={16} className="text-emerald-400" />
+              <label className="flex items-center gap-2.5 px-3.5 py-2 rounded-lg cursor-pointer hover:bg-slate-700 text-slate-300 transition-colors group">
+                <TrendingUp size={18} className="text-emerald-400" />
                 <div className="flex flex-col">
-                  <span className="text-[9px] font-black uppercase tracking-tighter">Vendas</span>
-                  <span className="text-[7px] text-slate-500 font-bold -mt-0.5">{salesRecords.length} reg.</span>
+                  <span className="text-[10px] font-black uppercase tracking-tight">Vendas</span>
+                  <span className="text-[8px] text-slate-500 font-bold -mt-0.5">
+                    {effectiveCurrentUpload?.uploaded_at ? formatUploadTimestamp(effectiveCurrentUpload.uploaded_at) : `${salesRecords.length} reg.`}
+                  </span>
                 </div>
                 <input type="file" className="hidden" accept=".xlsx,.xls,.csv,.txt" onChange={handleSalesUpload} />
               </label>
@@ -3655,11 +3775,11 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
               <button
                 onClick={() => setShowHistoryModal(true)}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg hover:bg-slate-700 text-slate-300 transition-colors"
+                className="flex items-center gap-2.5 px-3.5 py-2 rounded-lg hover:bg-slate-700 text-slate-300 transition-colors"
                 title="Histórico de Uploads"
               >
-                <Clock size={16} className="text-blue-400" />
-                <span className="text-[9px] font-black uppercase tracking-tighter">Uploads</span>
+                <Clock size={18} className="text-blue-400" />
+                <span className="text-[10px] font-black uppercase tracking-tight">Uploads</span>
               </button>
             </div>
 
@@ -4238,7 +4358,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
       <SalesHistoryModal
         isOpen={showHistoryModal}
         onClose={() => setShowHistoryModal(false)}
-        history={salesUploads}
+        history={modalUploadHistory}
+        inventoryReport={inventoryReport}
         analysisReports={{
           ...analysisReports,
           ...(currentAnalysisReport && currentAnalysisReport.period_label

@@ -1,17 +1,18 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { X, FileText, User, Eye, Printer } from 'lucide-react';
-import { DbPVSalesUpload } from '../../supabaseService';
+import { X, FileText, User, Eye, Printer, Package } from 'lucide-react';
+import { DbPVInventoryReport, DbPVSalesUpload } from '../../supabaseService';
 import { AnalysisReportPayload, buildAnalysisReportHtml } from '../../preVencidos/analysisReport';
 
 interface SalesHistoryModalProps {
     isOpen: boolean;
     onClose: () => void;
     history: DbPVSalesUpload[];
+    inventoryReport?: DbPVInventoryReport | null;
     analysisReports?: Record<string, AnalysisReportPayload>;
 }
 
-const SalesHistoryModal: React.FC<SalesHistoryModalProps> = ({ isOpen, onClose, history, analysisReports = {} }) => {
+const SalesHistoryModal: React.FC<SalesHistoryModalProps> = ({ isOpen, onClose, history, inventoryReport, analysisReports = {} }) => {
     if (!isOpen) return null;
     if (typeof document === 'undefined') return null;
 
@@ -55,68 +56,94 @@ const SalesHistoryModal: React.FC<SalesHistoryModalProps> = ({ isOpen, onClose, 
                 </div>
 
                 <div className="flex-1 overflow-auto p-0 custom-scrollbar">
-                    {history.length === 0 ? (
+                    {history.length === 0 && !inventoryReport ? (
                         <div className="p-12 text-center text-slate-400">
                             <p>Nenhum histórico de upload encontrado.</p>
                         </div>
                     ) : (
-                        <table className="w-full text-sm text-left">
-                            <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs sticky top-0 z-10 shadow-sm">
-                                <tr>
-                                    <th className="px-6 py-4">Data/Hora Relatório</th>
-                                    <th className="px-6 py-4">Período Venda</th>
-                                    <th className="px-6 py-4">Arquivo</th>
-                                    <th className="px-6 py-4">Responsável</th>
-                                    <th className="px-6 py-4">Ações</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                                {history.map((upload) => {
-                                    const label = (upload.period_label || '').trim();
-                                    const report = analysisReports[label];
-                                    return (
-                                    <tr key={upload.id} className="hover:bg-blue-50/50 transition-colors group">
-                                        <td className="px-6 py-4 text-slate-600 font-medium group-hover:text-blue-700">
-                                            {formatUploadDate(upload.uploaded_at)}
-                                        </td>
-                                        <td className="px-6 py-4 font-bold text-slate-800">
-                                            {upload.period_label}
-                                        </td>
-                                        <td className="px-6 py-4 text-slate-500 text-xs font-mono group-hover:text-slate-700">
-                                            {upload.file_name || '-'}
-                                        </td>
-                                        <td className="px-6 py-4 text-slate-500 flex items-center gap-2">
-                                            <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
-                                                <User size={12} />
-                                            </div>
-                                            {upload.user_email?.split('@')[0]}
-                                        </td>
-                                        <td className="px-6 py-4">
-                                            {report ? (
-                                                <div className="flex items-center gap-2">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => openReportWindow(report, false)}
-                                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-[10px] font-black uppercase tracking-widest text-slate-600 hover:text-blue-600 hover:border-blue-200 transition"
-                                                    >
-                                                        <Eye size={12} /> Visualizar
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => openReportWindow(report, true)}
-                                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-[10px] font-black uppercase tracking-widest text-slate-600 hover:text-blue-600 hover:border-blue-200 transition"
-                                                    >
-                                                        <Printer size={12} /> Imprimir
-                                                    </button>
-                                                </div>
-                                            ) : (
-                                                <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Sem análise</span>
-                                            )}
-                                        </td>
-                                    </tr>
-                                )})}
-                            </tbody>
-                        </table>
+                        <div className="space-y-5 p-4">
+                            {inventoryReport && (
+                                <div className="rounded-2xl border border-amber-200 bg-amber-50/40 p-4">
+                                    <div className="text-[11px] font-black uppercase tracking-widest text-amber-700 mb-3 flex items-center gap-2">
+                                        <Package size={14} /> Upload de Estoque (Filial)
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                                        <div>
+                                            <div className="text-slate-400 font-bold uppercase">Data/Hora</div>
+                                            <div className="text-slate-700 font-semibold">{formatUploadDate(inventoryReport.uploaded_at)}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-slate-400 font-bold uppercase">Arquivo</div>
+                                            <div className="text-slate-700 font-semibold">{inventoryReport.file_name || '-'}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-slate-400 font-bold uppercase">Itens</div>
+                                            <div className="text-slate-700 font-semibold">{(inventoryReport.records || []).length.toLocaleString('pt-BR')}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {history.length > 0 && (
+                                <table className="w-full text-sm text-left">
+                                    <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-xs sticky top-0 z-10 shadow-sm">
+                                        <tr>
+                                            <th className="px-6 py-4">Data/Hora Relatório</th>
+                                            <th className="px-6 py-4">Período Venda</th>
+                                            <th className="px-6 py-4">Arquivo</th>
+                                            <th className="px-6 py-4">Responsável</th>
+                                            <th className="px-6 py-4">Ações</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-100">
+                                        {history.map((upload) => {
+                                            const label = (upload.period_label || '').trim();
+                                            const report = analysisReports[label];
+                                            return (
+                                            <tr key={upload.id || `${upload.period_label}-${upload.uploaded_at}`} className="hover:bg-blue-50/50 transition-colors group">
+                                                <td className="px-6 py-4 text-slate-600 font-medium group-hover:text-blue-700">
+                                                    {formatUploadDate(upload.uploaded_at)}
+                                                </td>
+                                                <td className="px-6 py-4 font-bold text-slate-800">
+                                                    {upload.period_label}
+                                                </td>
+                                                <td className="px-6 py-4 text-slate-500 text-xs font-mono group-hover:text-slate-700">
+                                                    {upload.file_name || '-'}
+                                                </td>
+                                                <td className="px-6 py-4 text-slate-500 flex items-center gap-2">
+                                                    <div className="w-6 h-6 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                                                        <User size={12} />
+                                                    </div>
+                                                    {upload.user_email?.split('@')[0]}
+                                                </td>
+                                                <td className="px-6 py-4">
+                                                    {report ? (
+                                                        <div className="flex items-center gap-2">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openReportWindow(report, false)}
+                                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-[10px] font-black uppercase tracking-widest text-slate-600 hover:text-blue-600 hover:border-blue-200 transition"
+                                                            >
+                                                                <Eye size={12} /> Visualizar
+                                                            </button>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => openReportWindow(report, true)}
+                                                                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-[10px] font-black uppercase tracking-widest text-slate-600 hover:text-blue-600 hover:border-blue-200 transition"
+                                                            >
+                                                                <Printer size={12} /> Imprimir
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">Sem análise</span>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        )})}
+                                    </tbody>
+                                </table>
+                            )}
+                        </div>
                     )}
                 </div>
 
