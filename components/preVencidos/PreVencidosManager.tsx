@@ -2213,7 +2213,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
 
   const findConflictingUpload = (range: PeriodRange, label: string) => {
     // Check history (DB)
-    for (const report of salesUploads) {
+    const scopedUploads = salesUploads.filter(report => matchesContext(report));
+    for (const report of scopedUploads) {
       const conflict = evaluateConflict(report, label, range);
       if (conflict) return conflict;
     }
@@ -2356,8 +2357,13 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
     const parsedRange = parsePeriodRange(normalizedLabel);
     const conflict = findConflictingUpload(parsedRange, normalizedLabel);
 
-    // Check against currently loaded/active report (Already handled by findConflictingUpload if localLastUpload is checked there, but keeping strict label check for clarity)
-    if (localLastUpload && localLastUpload.period_label === normalizedLabel) {
+    const askMasterConflictOverride = (message: string) => {
+      if (!isMaster) return false;
+      return window.confirm(`${message}\n\nUsuário MASTER: deseja sobrescrever mesmo assim?\nClique em OK somente se tem certeza.`);
+    };
+
+    // Check against currently loaded/active report in the same context (empresa + filial)
+    if (localLastUpload && matchesContext(localLastUpload) && localLastUpload.period_label === normalizedLabel) {
       if (reportExtractedAt) {
         const patchedUpload: SalesUploadRecord = {
           ...localLastUpload,
@@ -2401,22 +2407,61 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         return;
       }
 
-      alert(`Já existe um relatório ativo para este período: "${normalizedLabel}".\n\nArquivo atual: ${fileName}\nArquivo ativo: ${localLastUpload.file_name}\n\nNão é permitido carregar novamente o mesmo período de venda.`);
-      return;
+      const samePeriodMessage = `Já existe um relatório ativo para este período nesta filial: "${normalizedLabel}".\n\nArquivo atual: ${fileName}\nArquivo ativo: ${localLastUpload.file_name}`;
+      const allowMasterOverride = askMasterConflictOverride(samePeriodMessage);
+      if (!allowMasterOverride) {
+        alert(`${samePeriodMessage}\n\nNão é permitido carregar novamente o mesmo período de venda.`);
+        return;
+      }
     }
 
     if (conflict) {
       const friendlyTimestamp = formatUploadTimestamp(conflict.uploaded_at);
       const fileHint = conflict.file_name ? `Arquivo original: ${conflict.file_name}` : 'Arquivo anterior';
       const type = conflict.period_label === normalizedLabel ? 'PERÍODO DUPLICADO' : 'CHOQUE DE DATAS';
-
-      alert(
+      const baseMessage =
         `⛔ BLOQUEADO: ${type}\n\n` +
         `O período que você está tentando carregar (${normalizedLabel}) entra em conflito com um relatório já processado.\n\n` +
         `Detalhes do conflito:\n` +
         `Relatório Existente: ${conflict.period_label}\n` +
         `${fileHint}\n` +
-        `Relatório extraído em: ${friendlyTimestamp}\n\n` +
+        `Relatório extraído em: ${friendlyTimestamp}`;
+      const allowMasterOverride = askMasterConflictOverride(baseMessage);
+      if (allowMasterOverride) {
+        const effectiveUploadedAt = reportExtractedAt || new Date().toISOString();
+        processAndSetSales(sales, normalizedLabel, fileName, parsedRange, effectiveUploadedAt);
+        await persistSalesUploadRecord(normalizedLabel, parsedRange, fileName, effectiveUploadedAt);
+        if (sessionInfo?.companyId && sessionInfo?.filial) {
+          insertAppEventLog({
+            company_id: sessionInfo.companyId,
+            branch: sessionInfo.filial,
+            area: sessionInfo.area || null,
+            user_email: userEmail || null,
+            user_name: userName || null,
+            app: 'pre_vencidos',
+            event_type: 'pv_sales_upload_success',
+            entity_type: 'sales_upload',
+            entity_id: normalizedLabel,
+            status: 'warning',
+            success: true,
+            source: 'web',
+            event_meta: {
+              period_label: normalizedLabel,
+              file_name: fileName,
+              total_sales: sales.length,
+              conflict_override: true,
+              conflict_type: type,
+              conflicting_period: conflict.period_label,
+              conflicting_file: conflict.file_name || null,
+              conflicting_uploaded_at: conflict.uploaded_at || null
+            }
+          }).catch(() => { });
+        }
+        return;
+      }
+
+      alert(
+        `${baseMessage}\n\n` +
         `Para manter a integridade do histórico, não é permitido carregar períodos sobrepostos.`
       );
       return;
@@ -3686,6 +3731,22 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
               onComplete={async (info) => {
                 setIsStartingLaunches(true);
                 try {
+                  const uploadMatchesTargetBranch = !!(
+                    localLastUpload &&
+                    localLastUpload.company_id === info.companyId &&
+                    localLastUpload.branch === info.filial
+                  );
+
+                  // Segurança: nunca reaproveitar vendas de outra filial ao trocar contexto.
+                  if (!uploadMatchesTargetBranch) {
+                    setSalesRecords([]);
+                    setSalesPeriod('');
+                    setSalesUploads([]);
+                    setLocalLastUpload(null);
+                    setConfirmedPVSales({});
+                    setFinalizedREDSByPeriod({});
+                  }
+
                   if (userEmail) {
                     setSetupDraftInfo(info);
                     if (typeof window !== 'undefined') {
@@ -3720,9 +3781,8 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
                   // Sync immediately after setup completion, without needing F5/remount.
                   await reloadBranchRecords(info.companyId, info.filial);
 
-                  // Keep sales records if they were uploaded during setup
-                  // If not, clear the classifications
-                  if (salesRecords.length === 0) {
+                  // Keep sales records only when they belong to the selected branch/company.
+                  if (salesRecords.length === 0 || !uploadMatchesTargetBranch) {
                     setConfirmedPVSales({});
                     setFinalizedREDSByPeriod({});
                     setSalesPeriod('');
