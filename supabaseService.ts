@@ -1186,30 +1186,37 @@ export async function fetchAuditsHistory(branch: string): Promise<DbAuditSession
 
 export async function fetchActiveSalesReport(companyId: string, branch: string): Promise<DbActiveSalesReport | null> {
   try {
-    const runVariants = async (withCompany: boolean) => {
-      const variants = [
-        (q: any) => q.order('updated_at', { ascending: false }).order('uploaded_at', { ascending: false }).limit(1),
-        (q: any) => q.order('updated_at', { ascending: false }).limit(1),
-        (q: any) => q.limit(1)
-      ];
-
-      for (const variant of variants) {
-        let q = supabase.from('pv_active_sales_reports').select('*').eq('branch', branch);
-        if (withCompany && companyId) q = q.eq('company_id', companyId);
-        const res = await variant(q);
-        if (!res.error) return res.data?.[0] || null;
-      }
-      return null;
+    const sortByRecency = (rows: any[]) => {
+      const safe = Array.isArray(rows) ? [...rows] : [];
+      safe.sort((a, b) => {
+        const ta = Date.parse(String(a?.updated_at || a?.uploaded_at || a?.created_at || '')) || 0;
+        const tb = Date.parse(String(b?.updated_at || b?.uploaded_at || b?.created_at || '')) || 0;
+        return tb - ta;
+      });
+      return safe;
     };
 
     if (companyId) {
-      const exact = await runVariants(true);
-      if (exact) return exact;
+      const exact = await supabase
+        .from('pv_active_sales_reports')
+        .select('*')
+        .eq('branch', branch)
+        .eq('company_id', companyId);
+      if (!exact.error) {
+        const sorted = sortByRecency(exact.data || []);
+        if (sorted.length > 0) return sorted[0];
+      }
     }
 
-    // Fallback legado: sem company_id.
-    const legacy = await runVariants(false);
-    if (legacy) return legacy;
+    // Fallback legado: sem company_id e sem colunas novas de ordenação.
+    const legacy = await supabase
+      .from('pv_active_sales_reports')
+      .select('*')
+      .eq('branch', branch);
+    if (!legacy.error) {
+      const sorted = sortByRecency(legacy.data || []);
+      if (sorted.length > 0) return sorted[0];
+    }
     return null;
   } catch (error) {
     console.error('Error fetching active sales report:', error);
@@ -1560,27 +1567,35 @@ export async function updatePVBranchRecordDetails(
 
 export async function fetchPVSalesUploads(companyId: string, branch: string): Promise<DbPVSalesUpload[]> {
   try {
-    const runVariants = async (withCompany: boolean) => {
-      const variants = [
-        (q: any) => q.order('uploaded_at', { ascending: false }),
-        (q: any) => q
-      ];
-      for (const variant of variants) {
-        let q = supabase.from('pv_sales_uploads').select('*').eq('branch', branch);
-        if (withCompany && companyId) q = q.eq('company_id', companyId);
-        const res = await variant(q);
-        if (!res.error) return Array.isArray(res.data) ? res.data : [];
-      }
-      return [] as DbPVSalesUpload[];
+    const sortByRecency = (rows: any[]) => {
+      const safe = Array.isArray(rows) ? [...rows] : [];
+      safe.sort((a, b) => {
+        const ta = Date.parse(String(a?.uploaded_at || a?.created_at || a?.updated_at || '')) || 0;
+        const tb = Date.parse(String(b?.uploaded_at || b?.created_at || b?.updated_at || '')) || 0;
+        return tb - ta;
+      });
+      return safe as DbPVSalesUpload[];
     };
 
     if (companyId) {
-      const exact = await runVariants(true);
-      if (exact.length > 0) return exact;
+      const exact = await supabase
+        .from('pv_sales_uploads')
+        .select('*')
+        .eq('branch', branch)
+        .eq('company_id', companyId);
+      if (!exact.error) {
+        const sorted = sortByRecency(exact.data || []);
+        if (sorted.length > 0) return sorted;
+      }
     }
 
     // Fallback legado: sem company_id.
-    return await runVariants(false);
+    const legacy = await supabase
+      .from('pv_sales_uploads')
+      .select('*')
+      .eq('branch', branch);
+    if (!legacy.error) return sortByRecency(legacy.data || []);
+    return [];
   } catch (error) {
     console.error('Error fetching PV sales uploads:', error);
     return [];
