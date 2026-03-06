@@ -15,6 +15,7 @@ import {
     upsertAuditSession,
     insertAppEventLog,
     fetchLatestAuditMetadata,
+    fetchGlobalBaseFileMeta,
     upsertGlobalBaseFile,
     type DbGlobalBaseFile,
     type DbAuditSession
@@ -874,11 +875,35 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     if (!silent) {
                         const isNewSession = dbSessionId !== latest.id;
                         const alreadyConfirmed = sessionStorage.getItem(CONFIRMED_SESSION_KEY) === latest.id;
+                        const resolveLatestStockTimestampForPrompt = async (sessionTsRaw?: string | null) => {
+                            let bestRaw = sessionTsRaw || latest.created_at || null;
+                            const bestTs = bestRaw ? new Date(bestRaw).getTime() : NaN;
+                            let finalTs = Number.isFinite(bestTs) ? bestTs : Number.NEGATIVE_INFINITY;
+                            try {
+                                const companyId = selectedCompany?.id;
+                                if (companyId && requestedFilial) {
+                                    const moduleKey = buildSharedStockModuleKey(requestedFilial);
+                                    const remoteMeta = await fetchGlobalBaseFileMeta(companyId, moduleKey);
+                                    const remoteRaw = String(remoteMeta?.updated_at || remoteMeta?.uploaded_at || '');
+                                    const remoteTs = remoteRaw ? new Date(remoteRaw).getTime() : NaN;
+                                    if (Number.isFinite(remoteTs) && remoteTs > finalTs) {
+                                        bestRaw = remoteRaw;
+                                        finalTs = remoteTs;
+                                    }
+                                }
+                            } catch (error) {
+                                console.warn('Falha ao buscar timestamp remoto do estoque para o popup:', error);
+                            }
+                            return bestRaw;
+                        };
 
                         if (isMaster) {
                             if ((isNewSession || !data) && !alreadyConfirmed) {
-                                const lastLoadStr = (latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at)
-                                    ? new Date(latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at).toLocaleString('pt-BR')
+                                const latestStockTs = await resolveLatestStockTimestampForPrompt(
+                                    latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at
+                                );
+                                const lastLoadStr = latestStockTs
+                                    ? new Date(latestStockTs).toLocaleString('pt-BR')
                                     : 'nao informada';
                                 const wantsToUpdate = window.confirm(`Auditoria N ${latest.audit_number} em aberto encontrada.\nData do Estoque: ${lastLoadStr}\n\nDeseja abrir a tela para carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
                                 if (wantsToUpdate) {
@@ -897,8 +922,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             setIsUpdatingStock(false);
                             setView({ level: 'groups' });
                             if ((isNewSession || !data) && !alreadyConfirmed) {
-                                const lastLoadStr = (latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at)
-                                    ? new Date(latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at).toLocaleString('pt-BR')
+                                const latestStockTs = await resolveLatestStockTimestampForPrompt(
+                                    latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at
+                                );
+                                const lastLoadStr = latestStockTs
+                                    ? new Date(latestStockTs).toLocaleString('pt-BR')
                                     : 'nao informada';
                                 alert(`ENTRANDO EM MODO CONSULTA.\n\nAviso: O estoque exibido reflete a carga de estoque realizada pelo usuário Master em ${lastLoadStr}. As contagens em andamento são atualizadas em tempo real.`);
                             }
@@ -932,7 +960,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         } catch (error) {
             console.error('Error loading audit info:', error);
         }
-    }, [selectedFilial, dbSessionId, isMaster, data, isUpdatingStock]);
+    }, [selectedFilial, selectedCompany?.id, dbSessionId, isMaster, data, isUpdatingStock]);
 
     // Carga Inicial
     useEffect(() => {
@@ -1057,10 +1085,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     AUDIT_CAT_IDS_GLOBAL_KEY,
                     ...(selectedFilial ? [buildSharedStockModuleKey(selectedFilial)] : [])
                 ];
+                const stockModuleKey = selectedFilial ? buildSharedStockModuleKey(selectedFilial) : '';
                 const files = [];
                 for (const key of keysToFetch) {
                     if (cancelled) break;
-                    const file = await CadastrosBaseService.getGlobalBaseFileCached(companyId, key);
+                    const file = await CadastrosBaseService.getGlobalBaseFileCached(
+                        companyId,
+                        key,
+                        key === stockModuleKey ? { forceFresh: true, preferRemote: true } : undefined
+                    );
                     files.push(file);
                 }
                 if (cancelled) return;
@@ -1593,11 +1626,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         (async () => {
             try {
-                await applyStockMergeToOpenAudit(globalStockFile, {
+                const synced = await applyStockMergeToOpenAudit(globalStockFile, {
                     source: 'global_base',
                     syncedAt: globalTsRaw,
                     notify: false
                 });
+                if (synced) {
+                    await loadAuditNum(true);
+                }
             } catch (error) {
                 console.error('Falha ao aplicar estoque global mais recente na auditoria:', error);
             } finally {
@@ -1613,7 +1649,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         globalStockFile,
         globalStockMeta,
         dbSessionId,
-        applyStockMergeToOpenAudit
+        applyStockMergeToOpenAudit,
+        loadAuditNum
     ]);
 
     const handleStartAudit = async () => {

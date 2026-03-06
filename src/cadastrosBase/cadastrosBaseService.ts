@@ -55,8 +55,14 @@ export const CadastrosBaseService = {
    * ou baixa do Supabase (e salva nos caches).
    * Segue o padrão Cache-First: retorna do local imediatamente e valida em background.
    */
-  async getGlobalBaseFileCached(companyId: string, moduleKey: string): Promise<DbGlobalBaseFile | null> {
+  async getGlobalBaseFileCached(
+    companyId: string,
+    moduleKey: string,
+    options?: { forceFresh?: boolean; preferRemote?: boolean }
+  ): Promise<DbGlobalBaseFile | null> {
     const cacheKey = `global_base_${companyId}_${moduleKey}`;
+    const forceFresh = !!options?.forceFresh;
+    const preferRemote = !!options?.preferRemote;
 
     // Se já existe uma promessa idêntica em andamento, retorna ela
     if (pendingRequests.has(cacheKey)) {
@@ -69,10 +75,43 @@ export const CadastrosBaseService = {
       const startTime = performance.now();
 
       try {
+        // 0. Caminho preferencial remoto: usado em telas sensíveis a "arquivo mais recente" (ex: Auditoria).
+        if (preferRemote) {
+          try {
+            const fullRemoteData = await SupabaseService.fetchGlobalBaseFileFull(companyId, moduleKey);
+            if (fullRemoteData) {
+              const preparedData = await attachParsedFile(fullRemoteData);
+              const dataToSave = { ...preparedData, file_data_base64: null };
+              await localforage.setItem(cacheKey, dataToSave);
+              inMemoryCache.set(cacheKey, preparedData);
+              return preparedData;
+            }
+          } catch (remoteError) {
+            console.warn(`[CadastrosBaseService] preferRemote falhou para ${moduleKey}, usando cache:`, remoteError);
+          }
+        }
+
         // 0. Verifica cache em memória primeiro (Instantâneo)
         if (inMemoryCache.has(cacheKey)) {
           console.log(`[CadastrosBaseService] Memória HIT para ${moduleKey}`);
           const memData = inMemoryCache.get(cacheKey)!;
+
+          if (forceFresh) {
+            const remoteMeta = await SupabaseService.fetchGlobalBaseFileMeta(companyId, moduleKey);
+            const remoteUpdated = remoteMeta?.updated_at || remoteMeta?.uploaded_at || '';
+            const localUpdated = memData.updated_at || memData.uploaded_at || '';
+            if (remoteMeta && remoteUpdated && remoteUpdated !== localUpdated) {
+              console.log(`[CadastrosBaseService] forceFresh: atualizando memória para ${moduleKey}`);
+              const fullRemoteData = await SupabaseService.fetchGlobalBaseFileFull(companyId, moduleKey);
+              if (fullRemoteData) {
+                const preparedData = await attachParsedFile(fullRemoteData);
+                const dataToSave = { ...preparedData, file_data_base64: null };
+                await localforage.setItem(cacheKey, dataToSave);
+                inMemoryCache.set(cacheKey, preparedData);
+                return preparedData;
+              }
+            }
+          }
 
           // Background sync
           this.syncInBackground(companyId, moduleKey, cacheKey, memData);
@@ -85,6 +124,24 @@ export const CadastrosBaseService = {
         if (cachedData && (cachedData.file_data_base64 || cachedData._blob || cachedData._parsedFile)) {
           console.log(`[CadastrosBaseService] IndexedDB HIT para ${moduleKey}`);
           const preparedCachedData = await attachParsedFile(cachedData);
+
+          if (forceFresh) {
+            const remoteMeta = await SupabaseService.fetchGlobalBaseFileMeta(companyId, moduleKey);
+            const remoteUpdated = remoteMeta?.updated_at || remoteMeta?.uploaded_at || '';
+            const localUpdated = preparedCachedData.updated_at || preparedCachedData.uploaded_at || '';
+            if (remoteMeta && remoteUpdated && remoteUpdated !== localUpdated) {
+              console.log(`[CadastrosBaseService] forceFresh: atualizando IndexedDB para ${moduleKey}`);
+              const fullRemoteData = await SupabaseService.fetchGlobalBaseFileFull(companyId, moduleKey);
+              if (fullRemoteData) {
+                const preparedData = await attachParsedFile(fullRemoteData);
+                const dataToSave = { ...preparedData, file_data_base64: null };
+                await localforage.setItem(cacheKey, dataToSave);
+                inMemoryCache.set(cacheKey, preparedData);
+                return preparedData;
+              }
+            }
+          }
+
           inMemoryCache.set(cacheKey, preparedCachedData);
 
           // Background sync
