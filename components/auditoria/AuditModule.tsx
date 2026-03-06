@@ -713,6 +713,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
     const [selectedFilial, setSelectedFilial] = useState("");
     const selectedCompany = useMemo(() => companies.find(c => c.name === selectedEmpresa), [companies, selectedEmpresa]);
+    const [isTermsPanelCollapsed, setIsTermsPanelCollapsed] = useState(false);
     const [nextAuditNumber, setNextAuditNumber] = useState(1);
     // Persiste o ID da sessão no sessionStorage para sobreviver a refresh/troca de aba
     const CONFIRMED_SESSION_KEY = 'audit_confirmed_session_id';
@@ -877,19 +878,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         const alreadyConfirmed = sessionStorage.getItem(CONFIRMED_SESSION_KEY) === latest.id;
                         const resolveLatestStockTimestampForPrompt = async (sessionTsRaw?: string | null) => {
                             let bestRaw = sessionTsRaw || latest.created_at || null;
-                            const bestTs = bestRaw ? new Date(bestRaw).getTime() : NaN;
-                            let finalTs = Number.isFinite(bestTs) ? bestTs : Number.NEGATIVE_INFINITY;
                             try {
-                                const companyId = selectedCompany?.id;
+                                const companyId = selectedCompany?.id || companies?.[0]?.id;
                                 if (companyId && requestedFilial) {
                                     const moduleKey = buildSharedStockModuleKey(requestedFilial);
                                     const remoteMeta = await fetchGlobalBaseFileMeta(companyId, moduleKey);
-                                    const remoteRaw = String(remoteMeta?.updated_at || remoteMeta?.uploaded_at || '');
-                                    const remoteTs = remoteRaw ? new Date(remoteRaw).getTime() : NaN;
-                                    if (Number.isFinite(remoteTs) && remoteTs > finalTs) {
-                                        bestRaw = remoteRaw;
-                                        finalTs = remoteTs;
-                                    }
+                                    const officialUploadRaw = String(remoteMeta?.uploaded_at || '').trim();
+                                    if (officialUploadRaw) return officialUploadRaw;
                                 }
                             } catch (error) {
                                 console.warn('Falha ao buscar timestamp remoto do estoque para o popup:', error);
@@ -900,7 +895,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         if (isMaster) {
                             if ((isNewSession || !data) && !alreadyConfirmed) {
                                 const latestStockTs = await resolveLatestStockTimestampForPrompt(
-                                    latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at
+                                    latest.data?.sourceFiles?.stock?.syncedAt || latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at
                                 );
                                 const lastLoadStr = latestStockTs
                                     ? new Date(latestStockTs).toLocaleString('pt-BR')
@@ -923,7 +918,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             setView({ level: 'groups' });
                             if ((isNewSession || !data) && !alreadyConfirmed) {
                                 const latestStockTs = await resolveLatestStockTimestampForPrompt(
-                                    latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at
+                                    latest.data?.sourceFiles?.stock?.syncedAt || latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at
                                 );
                                 const lastLoadStr = latestStockTs
                                     ? new Date(latestStockTs).toLocaleString('pt-BR')
@@ -1463,22 +1458,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 groupId,
                 source: groupFiles[groupId] ? 'local_upload' : 'global_base',
                 file: toUploadedFileMeta(file),
-                syncedAt: globalGroupMeta[groupId]?.updated_at || globalGroupMeta[groupId]?.uploaded_at || null
+                syncedAt: globalGroupMeta[groupId]?.uploaded_at || globalGroupMeta[groupId]?.updated_at || null
             })),
             stock: effectiveStockFile ? {
                 ...toUploadedFileMeta(effectiveStockFile),
                 source: stockSource,
-                syncedAt: globalStockMeta?.updated_at || globalStockMeta?.uploaded_at || null
+                syncedAt: globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || null
             } : null,
             deptIds: effectiveDeptIdsFile ? {
                 ...toUploadedFileMeta(effectiveDeptIdsFile),
                 source: fileDeptIds ? 'local_upload' : (globalDeptIdsMeta ? 'global_base' : 'none'),
-                syncedAt: globalDeptIdsMeta?.updated_at || globalDeptIdsMeta?.uploaded_at || null
+                syncedAt: globalDeptIdsMeta?.uploaded_at || globalDeptIdsMeta?.updated_at || null
             } : null,
             catIds: effectiveCatIdsFile ? {
                 ...toUploadedFileMeta(effectiveCatIdsFile),
                 source: fileCatIds ? 'local_upload' : (globalCatIdsMeta ? 'global_base' : 'none'),
-                syncedAt: globalCatIdsMeta?.updated_at || globalCatIdsMeta?.uploaded_at || null
+                syncedAt: globalCatIdsMeta?.uploaded_at || globalCatIdsMeta?.updated_at || null
             } : null
         };
     };
@@ -1608,7 +1603,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         if (!globalStockFile || !globalStockMeta) return;
         if (autoStockSyncInFlightRef.current) return;
 
-        const globalTsRaw = globalStockMeta.updated_at || globalStockMeta.uploaded_at || null;
+        const globalTsRaw = globalStockMeta.uploaded_at || globalStockMeta.updated_at || null;
         const globalTs = globalTsRaw ? new Date(globalTsRaw).getTime() : NaN;
         if (!Number.isFinite(globalTs)) return;
 
@@ -1628,7 +1623,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             try {
                 const synced = await applyStockMergeToOpenAudit(globalStockFile, {
                     source: 'global_base',
-                    syncedAt: globalTsRaw,
+                    syncedAt: globalStockMeta.uploaded_at || globalTsRaw,
                     notify: false
                 });
                 if (synced) {
@@ -1764,7 +1759,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
             if (shouldMergeStockOnly && data && !shouldReclassifyOpen) {
                 const stockSource = fileStock ? 'local_upload' : (globalStockMeta ? 'global_base' : 'local_upload');
-                const syncedAt = globalStockMeta?.updated_at || globalStockMeta?.uploaded_at || null;
+                const syncedAt = globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || null;
                 await applyStockMergeToOpenAudit(effectiveStockFile!, {
                     source: stockSource,
                     syncedAt,
@@ -4715,18 +4710,57 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const batchSummaryList = useMemo(() => {
         if (!data?.partialCompleted || data.partialCompleted.length === 0) return [];
-        const buckets = new Map<string, { batchId: string; count: number; lastAt: string }>();
+        const buckets = new Map<string, { batchId: string; count: number; lastAt: string; groupIds: Set<string> }>();
         data.partialCompleted.forEach(p => {
             const batchId = getEntryBatchId(p);
-            const entry = buckets.get(batchId) || { batchId, count: 0, lastAt: p.completedAt || p.startedAt || new Date(0).toISOString() };
+            const entry = buckets.get(batchId) || { batchId, count: 0, lastAt: p.completedAt || p.startedAt || new Date(0).toISOString(), groupIds: new Set<string>() };
             entry.count += 1;
+            const normalizedGroupId = normalizeScopeId(p.groupId);
+            if (normalizedGroupId) entry.groupIds.add(normalizedGroupId);
             const currentTs = new Date(entry.lastAt).getTime();
             const incomingTs = new Date(p.completedAt || p.startedAt || 0).getTime();
             if (incomingTs > currentTs) entry.lastAt = p.completedAt || p.startedAt || entry.lastAt;
             buckets.set(batchId, entry);
         });
-        return Array.from(buckets.values()).sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
-    }, [data?.partialCompleted]);
+        const resolveGroupLabel = (groupIds: Set<string>) => {
+            const labels = Array.from(groupIds)
+                .map(groupId => data.groups.find(g => normalizeScopeId(g.id) === normalizeScopeId(groupId)))
+                .filter((group): group is Group => !!group)
+                .map(group => `Grupo ${group.id} - ${group.name}`);
+            if (labels.length === 0) return 'Grupo N/D';
+            return labels.join(' | ');
+        };
+        return Array.from(buckets.values())
+            .map(entry => ({
+                ...entry,
+                groupLabel: resolveGroupLabel(entry.groupIds)
+            }))
+            .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
+    }, [data?.partialCompleted, data?.groups]);
+
+    const batchSummaryByGroup = useMemo(() => {
+        if (!batchSummaryList.length) return [] as Array<{
+            groupLabel: string;
+            lastAt: string;
+            items: typeof batchSummaryList;
+        }>;
+        const map = new Map<string, { groupLabel: string; lastAt: string; items: typeof batchSummaryList }>();
+        batchSummaryList.forEach(item => {
+            const key = item.groupLabel || 'Grupo N/D';
+            const current = map.get(key) || { groupLabel: key, lastAt: item.lastAt, items: [] as typeof batchSummaryList };
+            current.items.push(item);
+            if (new Date(item.lastAt).getTime() > new Date(current.lastAt).getTime()) {
+                current.lastAt = item.lastAt;
+            }
+            map.set(key, current);
+        });
+        return Array.from(map.values())
+            .map(group => ({
+                ...group,
+                items: [...group.items].sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime())
+            }))
+            .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
+    }, [batchSummaryList]);
 
     if (!data || isUpdatingStock) {
         const structureLocked = !!(data && data.groups && data.groups.length > 0);
@@ -4790,7 +4824,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         </p>
                                         {!selectedFile && globalMeta && (
                                             <p className="text-[8px] font-bold text-emerald-700 mt-1">
-                                                {formatGlobalTimestamp(globalMeta.updated_at || globalMeta.uploaded_at)}
+                                                {formatGlobalTimestamp(globalMeta.uploaded_at || globalMeta.updated_at)}
                                             </p>
                                         )}
                                     </label>
@@ -4810,7 +4844,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 </p>
                                 {!fileStock && globalStockMeta && (
                                     <p className="text-[8px] font-bold text-emerald-700 mt-1">
-                                        {formatGlobalTimestamp(globalStockMeta.updated_at || globalStockMeta.uploaded_at)}
+                                        {formatGlobalTimestamp(globalStockMeta.uploaded_at || globalStockMeta.updated_at)}
                                     </p>
                                 )}
                             </label>
@@ -4828,7 +4862,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 </p>
                                 {!fileDeptIds && globalDeptIdsMeta && (
                                     <p className="text-[8px] font-bold text-emerald-700 mt-1">
-                                        {formatGlobalTimestamp(globalDeptIdsMeta.updated_at || globalDeptIdsMeta.uploaded_at)}
+                                        {formatGlobalTimestamp(globalDeptIdsMeta.uploaded_at || globalDeptIdsMeta.updated_at)}
                                     </p>
                                 )}
                             </label>
@@ -4846,7 +4880,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 </p>
                                 {!fileCatIds && globalCatIdsMeta && (
                                     <p className="text-[8px] font-bold text-emerald-700 mt-1">
-                                        {formatGlobalTimestamp(globalCatIdsMeta.updated_at || globalCatIdsMeta.uploaded_at)}
+                                        {formatGlobalTimestamp(globalCatIdsMeta.uploaded_at || globalCatIdsMeta.updated_at)}
                                     </p>
                                 )}
                             </label>
@@ -5045,37 +5079,60 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         )}
                                     </div>
                                     <div className="rounded-2xl border border-blue-100 bg-white/70 p-3">
-                                        <div className="text-[9px] font-black uppercase tracking-widest text-blue-700/60 mb-2">Termos Personalizados (Concluídos)</div>
-                                        <div className="flex flex-wrap gap-2">
-                                            {completedInfoList.map(info => (
-                                                <button
-                                                    key={`term-${info.key}`}
-                                                    onClick={() => openPartialTerm(info.scope)}
-                                                    className="text-xs font-semibold bg-white border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-600 hover:text-white transition-colors whitespace-nowrap"
-                                                    title={info.completedAtLabel ? `Concluído em ${info.completedAtLabel}` : undefined}
-                                                >
-                                                    {info.label}{info.completedAtLabel ? ` • ${info.completedAtLabel}` : ''}
-                                                </button>
-                                            ))}
+                                        <div className="flex items-center justify-between mb-2">
+                                            <div className="text-[9px] font-black uppercase tracking-widest text-blue-700/60">Termos Personalizados (Concluídos)</div>
+                                            <button
+                                                onClick={() => setIsTermsPanelCollapsed(prev => !prev)}
+                                                className="inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-widest text-blue-700 bg-white border border-blue-200 px-2 py-1 rounded-lg hover:bg-blue-600 hover:text-white transition-colors"
+                                                title={isTermsPanelCollapsed ? 'Expandir quadro de termos' : 'Minimizar quadro de termos'}
+                                            >
+                                                <ChevronRight className={`w-3 h-3 transition-transform ${isTermsPanelCollapsed ? '' : 'rotate-90'}`} />
+                                                {isTermsPanelCollapsed ? 'Expandir' : 'Minimizar'}
+                                            </button>
                                         </div>
-                                        {batchSummaryList.length > 0 && (
-                                            <div className="mt-4 pt-3 border-t border-blue-100/70">
-                                                <div className="text-[9px] font-black uppercase tracking-widest text-blue-700/60 mb-2">Termos Únicos (Por Lote)</div>
+                                        {!isTermsPanelCollapsed && (
+                                            <>
                                                 <div className="flex flex-wrap gap-2">
-                                                    {batchSummaryList.map(batch => (
+                                                    {completedInfoList.map(info => (
                                                         <button
-                                                            key={`batch-${batch.batchId}`}
-                                                            onClick={() => openUnifiedPartialTerm(batch.batchId)}
+                                                            key={`term-${info.key}`}
+                                                            onClick={() => openPartialTerm(info.scope)}
                                                             className="text-xs font-semibold bg-white border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-600 hover:text-white transition-colors whitespace-nowrap"
-                                                            title={batch.lastAt ? `Concluído em ${new Date(batch.lastAt).toLocaleString('pt-BR', { hour12: false })}` : undefined}
+                                                            title={info.completedAtLabel ? `Concluído em ${info.completedAtLabel}` : undefined}
                                                         >
-                                                            Termo único • {batch.count} contagens • {batch.lastAt ? new Date(batch.lastAt).toLocaleString('pt-BR', { hour12: false }) : ''}
+                                                            {info.label}{info.completedAtLabel ? ` • ${info.completedAtLabel}` : ''}
                                                         </button>
                                                     ))}
                                                 </div>
-                                            </div>
+                                            </>
                                         )}
                                     </div>
+                                    {batchSummaryByGroup.length > 0 && (
+                                        <div className="mt-3 rounded-2xl border border-blue-100 bg-white/70 p-3">
+                                            <div className="text-[9px] font-black uppercase tracking-widest text-blue-700/60 mb-2">Termos Únicos (Por Lote)</div>
+                                            <div className="space-y-3">
+                                                {batchSummaryByGroup.map(group => (
+                                                    <div key={`group-${group.groupLabel}`} className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+                                                        <div className="text-[9px] font-black uppercase tracking-widest text-blue-700/70 mb-2">
+                                                            {group.groupLabel}
+                                                        </div>
+                                                        <div className="flex flex-wrap gap-2">
+                                                            {group.items.map(batch => (
+                                                                <button
+                                                                    key={`batch-${batch.batchId}`}
+                                                                    onClick={() => openUnifiedPartialTerm(batch.batchId)}
+                                                                    className="text-xs font-semibold bg-white border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-600 hover:text-white transition-colors whitespace-nowrap"
+                                                                    title={batch.lastAt ? `Concluído em ${new Date(batch.lastAt).toLocaleString('pt-BR', { hour12: false })}` : undefined}
+                                                                >
+                                                                    Termo único • {batch.count} contagens • {batch.lastAt ? new Date(batch.lastAt).toLocaleString('pt-BR', { hour12: false }) : ''}
+                                                                </button>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             )}
                         </div>

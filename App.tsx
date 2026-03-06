@@ -7073,7 +7073,7 @@ const App: React.FC = () => {
                                                     {uploadedFile?.file_name || 'Sem arquivo'}
                                                 </p>
                                                 <p className="mt-1 text-[11px] text-gray-500 font-semibold">
-                                                    {uploadedFile ? `${formatFileSize(uploadedFile.file_size)} • ${formatFullDateTime(uploadedFile.uploaded_at || uploadedFile.updated_at)}` : 'Nenhum envio registrado'}
+                                                    {uploadedFile ? `${formatFileSize(uploadedFile.file_size)} • ${formatFullDateTime(uploadedFile.uploaded_at)}` : 'Nenhum envio registrado'}
                                                 </p>
                                                 <p className="mt-1 text-[11px] text-gray-400 font-semibold truncate">
                                                     {uploadedFile?.uploaded_by ? `Responsável: ${uploadedFile.uploaded_by}` : 'Responsável: —'}
@@ -7141,7 +7141,7 @@ const App: React.FC = () => {
                                                                     {uploadedFile?.file_name || 'Sem arquivo'}
                                                                 </p>
                                                                 <p className="mt-1 text-[11px] text-gray-500 font-semibold">
-                                                                    {uploadedFile ? `${formatFileSize(uploadedFile.file_size)} • ${formatFullDateTime(uploadedFile.uploaded_at || uploadedFile.updated_at)}` : 'Nenhum envio registrado'}
+                                                                    {uploadedFile ? `${formatFileSize(uploadedFile.file_size)} • ${formatFullDateTime(uploadedFile.uploaded_at)}` : 'Nenhum envio registrado'}
                                                                 </p>
                                                                 <p className="mt-1 text-[11px] text-gray-400 font-semibold truncate">
                                                                     {uploadedFile?.uploaded_by ? `Responsável: ${uploadedFile.uploaded_by}` : 'Responsável: —'}
