@@ -362,13 +362,31 @@ const AnalysisView: React.FC<AnalysisViewProps> = ({
 
   const filteredResults = useMemo(() => {
     const searchLower = searchTerm.toLowerCase();
-    return results.filter(r => {
+    const parseExpiryToTs = (expiry?: string) => {
+      if (!expiry) return Number.POSITIVE_INFINITY;
+      const [monthPart, yearPart] = String(expiry).split('/');
+      const month = Number(monthPart);
+      if (Number.isNaN(month) || month < 1 || month > 12) return Number.POSITIVE_INFINITY;
+      const yearRaw = String(yearPart || '').trim();
+      const year = yearRaw.length === 2 ? Number(`20${yearRaw}`) : Number(yearRaw);
+      if (Number.isNaN(year) || year < 2000) return Number.POSITIVE_INFINITY;
+      return new Date(year, month - 1, 1).getTime();
+    };
+
+    const filtered = results.filter(r => {
       const matchesSearch = r.name.toLowerCase().includes(searchLower) || r.reducedCode.includes(searchTerm);
       if (!matchesSearch) return false;
       if (activeFilter === 'all') return true;
       if (activeFilter === 'finalized') return r.isFinalized;
       if (activeFilter === 'similar') return !r.isFinalized && r.status === 'replaced';
       return !r.isFinalized && r.status === 'sold';
+    });
+
+    return filtered.sort((a, b) => {
+      const ta = parseExpiryToTs(a.expiryDate);
+      const tb = parseExpiryToTs(b.expiryDate);
+      if (ta !== tb) return ta - tb;
+      return String(a.name || '').localeCompare(String(b.name || ''), 'pt-BR');
     });
   }, [results, searchTerm, activeFilter]);
 
