@@ -2726,6 +2726,46 @@ const App: React.FC = () => {
         };
     }, [currentUser?.email, handleLogout, remoteForceLogoutDeadline]);
 
+    // Polling curto para fila de aprovação de usuários (evita atraso para aparecer novos cadastros).
+    useEffect(() => {
+        if (!currentUser) return;
+        if (!hasModuleAccess('userApproval')) return;
+
+        let cancelled = false;
+        let inFlight = false;
+
+        const refreshUsers = async () => {
+            if (inFlight) return;
+            inFlight = true;
+            try {
+                const dbUsers = await SupabaseService.fetchUsers();
+                if (cancelled) return;
+                const mapped = (dbUsers || []).map(u => ({ ...u, preferredTheme: u.preferred_theme as ThemeColor | undefined }));
+                setUsers(mapped);
+                await CacheService.set('users_list', dbUsers || []);
+            } catch (error) {
+                console.error('Erro ao atualizar usuários pendentes:', error);
+            } finally {
+                inFlight = false;
+            }
+        };
+
+        refreshUsers();
+        const interval = setInterval(refreshUsers, 4000);
+        const handleWake = () => {
+            if (!document.hidden) refreshUsers();
+        };
+        document.addEventListener('visibilitychange', handleWake);
+        window.addEventListener('focus', handleWake);
+
+        return () => {
+            cancelled = true;
+            clearInterval(interval);
+            document.removeEventListener('visibilitychange', handleWake);
+            window.removeEventListener('focus', handleWake);
+        };
+    }, [currentUser?.email, currentUser?.role, accessMatrix]);
+
     const handleRegister = async (newUser: User) => {
         try {
             const created = await SupabaseService.createUser(newUser);
