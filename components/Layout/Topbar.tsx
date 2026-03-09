@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
     Menu,
     X,
@@ -52,18 +52,18 @@ export const Topbar: React.FC<TopbarProps> = ({
 }) => {
     const isMaster = currentUser.role === 'MASTER';
     const navItems = [
-        { label: 'Dashboard', view: 'dashboard', color: 'blue', icon: <LayoutDashboard size={18} /> },
-        { label: 'Checklists', view: 'checklist', color: 'emerald', icon: <ClipboardList size={18} /> },
+        { label: 'Dashboard', view: 'dashboard', color: 'blue', icon: <LayoutDashboard size={18} />, shortcut: 'Ctrl + D' },
+        { label: 'Checklists', view: 'checklist', color: 'emerald', icon: <ClipboardList size={18} />, shortcut: 'Ctrl + L' },
         { label: 'Visão Geral', view: 'summary', color: 'indigo', icon: <LayoutGrid size={18} /> },
-        { label: 'Pré-Vencidos', view: 'pre', color: 'amber', icon: <Package size={18} /> },
-        { label: 'Conferência', view: 'stock', color: 'cyan', icon: <Search size={18} /> },
-        { label: 'Auditoria', view: 'audit', color: 'indigo', icon: <ClipboardList size={18} /> },
-        { label: 'Histórico', view: 'history', color: 'purple', icon: <History size={18} /> },
+        { label: 'Pré-Vencidos', view: 'pre', color: 'amber', icon: <Package size={18} />, shortcut: 'Ctrl + V' },
+        { label: 'Conferência', view: 'stock', color: 'cyan', icon: <Search size={18} />, shortcut: 'Ctrl + C' },
+        { label: 'Auditoria', view: 'audit', color: 'indigo', icon: <ClipboardList size={18} />, shortcut: 'Ctrl + A' },
+        { label: 'Histórico', view: 'history', color: 'purple', icon: <History size={18} />, shortcut: 'Ctrl + H' },
         { label: 'Suporte', view: 'support', color: 'rose', icon: <MessageSquareQuote size={18} /> }
     ].filter(item => (item.view !== 'logs' || isMaster));
 
     if (isMaster) {
-        navItems.splice(navItems.findIndex(item => item.view === 'support'), 0, { label: 'Métricas Gerenciais', view: 'logs', color: 'slate', icon: <FileSearch size={18} /> });
+        navItems.splice(navItems.findIndex(item => item.view === 'support'), 0, { label: 'Métricas Gerenciais', view: 'logs', color: 'slate', icon: <FileSearch size={18} />, shortcut: 'Ctrl + M' });
     }
 
     const commonAdminItems = [
@@ -72,8 +72,51 @@ export const Topbar: React.FC<TopbarProps> = ({
 
     const masterOnlyAdminItems = [
         { label: 'Acessos', view: 'access', color: 'indigo', icon: <Lock size={18} /> },
-        { label: 'Cadastros Base', view: 'cadastros_globais', color: 'slate', icon: <FolderArchive size={18} /> }
+        { label: 'Cadastros Base', view: 'cadastros_globais', color: 'slate', icon: <FolderArchive size={18} />, shortcut: 'Ctrl + B' }
     ];
+
+    const shortcutMap = useMemo<Record<string, string>>(() => {
+        const map: Record<string, string> = {
+            d: 'dashboard',
+            l: 'checklist',
+            v: 'pre',
+            c: 'stock',
+            a: 'audit',
+            h: 'history'
+        };
+        if (isMaster) {
+            map.m = 'logs';
+            map.b = 'cadastros_globais';
+        }
+        return map;
+    }, [isMaster]);
+
+    useEffect(() => {
+        const isEditableTarget = (target: EventTarget | null) => {
+            const element = target as HTMLElement | null;
+            if (!element) return false;
+            const tag = element.tagName?.toLowerCase();
+            return (
+                tag === 'input' ||
+                tag === 'textarea' ||
+                tag === 'select' ||
+                !!element.closest('input, textarea, select, [contenteditable=\"true\"]')
+            );
+        };
+
+        const onKeyDown = (event: KeyboardEvent) => {
+            if ((!event.ctrlKey && !event.metaKey) || event.altKey || event.shiftKey) return;
+            if (isEditableTarget(event.target)) return;
+            const key = event.key.toLowerCase();
+            const targetView = shortcutMap[key];
+            if (!targetView) return;
+            event.preventDefault();
+            handleViewChange(targetView);
+        };
+
+        window.addEventListener('keydown', onKeyDown);
+        return () => window.removeEventListener('keydown', onKeyDown);
+    }, [handleViewChange, shortcutMap]);
 
     const company = currentUser.company_id ? companies.find((c: any) => c.id === currentUser.company_id) : null;
 
@@ -156,6 +199,7 @@ export const Topbar: React.FC<TopbarProps> = ({
                             active={currentView === item.view}
                             onClick={() => handleViewChange(item.view)}
                             color={item.color as TopbarButtonProps['color']}
+                            title={item.shortcut ? `${item.label} (${item.shortcut})` : item.label}
                         />
                     ))}
 
@@ -168,6 +212,7 @@ export const Topbar: React.FC<TopbarProps> = ({
                             active={currentView === item.view}
                             onClick={() => handleViewChange(item.view)}
                             color={item.color as TopbarButtonProps['color']}
+                            title={item.label}
                         />
                     ))}
 
@@ -181,6 +226,7 @@ export const Topbar: React.FC<TopbarProps> = ({
                                     active={currentView === item.view}
                                     onClick={() => handleViewChange(item.view)}
                                     color={item.color as TopbarButtonProps['color']}
+                                    title={item.shortcut ? `${item.label} (${item.shortcut})` : item.label}
                                 />
                             ))}
                         </>
@@ -197,9 +243,10 @@ interface TopbarButtonProps {
     active: boolean;
     onClick: () => void;
     color: 'blue' | 'emerald' | 'amber' | 'cyan' | 'purple' | 'rose' | 'slate' | 'indigo';
+    title?: string;
 }
 
-const TopbarButton: React.FC<TopbarButtonProps> = ({ icon, label, active, onClick, color }) => {
+const TopbarButton: React.FC<TopbarButtonProps> = ({ icon, label, active, onClick, color, title }) => {
     const colorClasses = {
         blue: active ? 'bg-blue-50 text-blue-600 border-blue-100' : 'text-gray-500 hover:bg-blue-50/60 hover:text-blue-600',
         emerald: active ? 'bg-emerald-50 text-emerald-600 border-emerald-100' : 'text-gray-500 hover:bg-emerald-50/60 hover:text-emerald-600',
@@ -225,6 +272,7 @@ const TopbarButton: React.FC<TopbarButtonProps> = ({ icon, label, active, onClic
     return (
         <button
             onClick={onClick}
+            title={title || label}
             className={`flex items-center gap-2 px-4 py-2 rounded-full border text-xs font-black uppercase tracking-wider transition-all duration-300 group ${colorClasses[color]}`}
         >
             <span className={`transition-transform duration-300 group-hover:scale-110 ${iconColorClasses[color]}`}>
