@@ -878,35 +878,48 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         const alreadyConfirmed = sessionStorage.getItem(CONFIRMED_SESSION_KEY) === latest.id;
                         const resolveLatestStockTimestampForPrompt = async (sessionTsRaw?: string | null) => {
                             let bestRaw = sessionTsRaw || latest.created_at || null;
+                            let officialUploadRaw: string | null = null;
                             try {
                                 const companyId = selectedCompany?.id || companies?.[0]?.id;
                                 if (companyId && requestedFilial) {
                                     const moduleKey = buildSharedStockModuleKey(requestedFilial);
                                     const remoteMeta = await fetchGlobalBaseFileMeta(companyId, moduleKey);
-                                    const officialUploadRaw = String(remoteMeta?.uploaded_at || '').trim();
-                                    if (officialUploadRaw) return officialUploadRaw;
+                                    const raw = String(remoteMeta?.uploaded_at || '').trim();
+                                    officialUploadRaw = raw || null;
+                                    if (officialUploadRaw && !bestRaw) bestRaw = officialUploadRaw;
                                 }
                             } catch (error) {
                                 console.warn('Falha ao buscar timestamp remoto do estoque para o popup:', error);
                             }
-                            return bestRaw;
+
+                            const sessionTs = bestRaw ? new Date(bestRaw).getTime() : NaN;
+                            const remoteTs = officialUploadRaw ? new Date(officialUploadRaw).getTime() : NaN;
+                            const hasNewerGlobalStock = Number.isFinite(remoteTs) && (!Number.isFinite(sessionTs) || remoteTs > sessionTs + 1000);
+                            return { latestStockTs: officialUploadRaw || bestRaw, hasNewerGlobalStock };
                         };
 
                         if (isMaster) {
                             if ((isNewSession || !data) && !alreadyConfirmed) {
-                                const latestStockTs = await resolveLatestStockTimestampForPrompt(
+                                const { latestStockTs, hasNewerGlobalStock } = await resolveLatestStockTimestampForPrompt(
                                     latest.data?.sourceFiles?.stock?.syncedAt || latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at
                                 );
                                 const lastLoadStr = latestStockTs
                                     ? new Date(latestStockTs).toLocaleString('pt-BR')
                                     : 'nao informada';
-                                const wantsToUpdate = window.confirm(`Auditoria N ${latest.audit_number} em aberto encontrada.\nData do Estoque: ${lastLoadStr}\n\nDeseja abrir a tela para carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
-                                if (wantsToUpdate) {
-                                    setIsUpdatingStock(true);
-                                    setGroupFiles(createInitialGroupFiles());
-                                    setFileDeptIds(null);
-                                    setFileCatIds(null);
-                                    setFileStock(null);
+
+                                // Se existe estoque novo no Cadastro Base, nao exibe este popup aqui.
+                                // O fluxo correto passa pelo aviso de "estoque novo" + botao de reclassificacao.
+                                if (!hasNewerGlobalStock) {
+                                    const wantsToUpdate = window.confirm(`Auditoria N ${latest.audit_number} em aberto encontrada.\nData do Estoque: ${lastLoadStr}\n\nDeseja abrir a tela para carregar um NOVO arquivo de SALDOS para atualizar o estoque pendente?`);
+                                    if (wantsToUpdate) {
+                                        setIsUpdatingStock(true);
+                                        setGroupFiles(createInitialGroupFiles());
+                                        setFileDeptIds(null);
+                                        setFileCatIds(null);
+                                        setFileStock(null);
+                                    } else {
+                                        setIsUpdatingStock(false);
+                                    }
                                 } else {
                                     setIsUpdatingStock(false);
                                 }
@@ -917,7 +930,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             setIsUpdatingStock(false);
                             setView({ level: 'groups' });
                             if ((isNewSession || !data) && !alreadyConfirmed) {
-                                const latestStockTs = await resolveLatestStockTimestampForPrompt(
+                                const { latestStockTs } = await resolveLatestStockTimestampForPrompt(
                                     latest.data?.sourceFiles?.stock?.syncedAt || latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at
                                 );
                                 const lastLoadStr = latestStockTs
@@ -1025,7 +1038,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [globalStockFile, setGlobalStockFile] = useState<File | null>(null);
     const [globalStockMeta, setGlobalStockMeta] = useState<DbGlobalBaseFile | null>(null);
     const [isLoadingGlobalBases, setIsLoadingGlobalBases] = useState(false);
-    const autoStockSyncInFlightRef = useRef(false);
     const lastAutoStockSyncKeyRef = useRef('');
 
     const localGroupFilesCount = useMemo(
@@ -1599,9 +1611,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     useEffect(() => {
         if (!selectedFilial || !data || isProcessing || isUpdatingStock) return;
+        if (!isMaster) return;
         if (fileStock) return; // upload local sempre prevalece
         if (!globalStockFile || !globalStockMeta) return;
-        if (autoStockSyncInFlightRef.current) return;
 
         const globalTsRaw = globalStockMeta.uploaded_at || globalStockMeta.updated_at || null;
         const globalTs = globalTsRaw ? new Date(globalTsRaw).getTime() : NaN;
@@ -1615,37 +1627,31 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         const syncKey = `${dbSessionId || 'no_session'}|${selectedFilial}|${globalStockMeta.module_key}|${globalTs}`;
         if (lastAutoStockSyncKeyRef.current === syncKey) return;
-
-        autoStockSyncInFlightRef.current = true;
         lastAutoStockSyncKeyRef.current = syncKey;
 
-        (async () => {
-            try {
-                const synced = await applyStockMergeToOpenAudit(globalStockFile, {
-                    source: 'global_base',
-                    syncedAt: globalStockMeta.uploaded_at || globalTsRaw,
-                    notify: false
-                });
-                if (synced) {
-                    await loadAuditNum(true);
-                }
-            } catch (error) {
-                console.error('Falha ao aplicar estoque global mais recente na auditoria:', error);
-            } finally {
-                autoStockSyncInFlightRef.current = false;
-            }
-        })();
+        const stockTsLabel = new Date(globalTs).toLocaleString('pt-BR');
+        window.alert(
+            `Novo estoque detectado no Cadastro Base (${stockTsLabel}).\n\nVocê será direcionado para a tela de reclassificação dos estoques.\nA reclassificação só será executada ao clicar no botão de atualização.`
+        );
+
+        // Ao detectar estoque global novo, manter a tela de atualização aberta.
+        // A reclassificação só deve ocorrer no clique do botão (handleStartAudit).
+        setIsUpdatingStock(true);
+        setGroupFiles(createInitialGroupFiles());
+        setFileDeptIds(null);
+        setFileCatIds(null);
+        setFileStock(null);
+        setView({ level: 'groups' });
     }, [
         selectedFilial,
         data,
         isProcessing,
         isUpdatingStock,
+        isMaster,
         fileStock,
         globalStockFile,
         globalStockMeta,
-        dbSessionId,
-        applyStockMergeToOpenAudit,
-        loadAuditNum
+        dbSessionId
     ]);
 
     const handleStartAudit = async () => {
@@ -1658,7 +1664,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const hasLocalStructureFiles = localGroupFilesCount > 0;
         const hasOpenStructure = !!(data && data.groups && data.groups.length > 0);
         const shouldMergeStockOnly = hasOpenStructure;
-        const shouldReclassifyOpen = hasOpenStructure && hasStructureFiles;
+        const sourceFiles = ((data as any)?.sourceFiles || {}) as any;
+        const currentStockSyncedAt = sourceFiles?.stock?.syncedAt || sourceFiles?.lastStockUpdateAt || null;
+        const currentStockTs = currentStockSyncedAt ? new Date(currentStockSyncedAt).getTime() : NaN;
+        const globalStockSyncedAt = globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || null;
+        const globalStockTs = globalStockSyncedAt ? new Date(globalStockSyncedAt).getTime() : NaN;
+        const hasNewerGlobalStock = Number.isFinite(globalStockTs)
+            && (!Number.isFinite(currentStockTs) || globalStockTs > currentStockTs + 1000);
+        const shouldReclassifyOpen = hasOpenStructure && hasStructureFiles && (hasLocalStructureFiles || !!fileStock || hasNewerGlobalStock);
         const mergePreservingDone = (baseData: AuditData, rebuiltData: AuditData): AuditData => {
             const merged: AuditData = {
                 ...rebuiltData,
