@@ -4453,7 +4453,16 @@ const App: React.FC = () => {
                 };
             })
             .filter(entry => entry.slots.length > 0)
-            .sort((a, b) => a.areaName.localeCompare(b.areaName, 'pt-BR'));
+            .sort((a, b) => {
+                const numA = Number((a.areaName.match(/\d+/)?.[0] || ''));
+                const numB = Number((b.areaName.match(/\d+/)?.[0] || ''));
+                const hasNumA = Number.isFinite(numA) && numA > 0;
+                const hasNumB = Number.isFinite(numB) && numB > 0;
+                if (hasNumA && hasNumB && numA !== numB) return numB - numA;
+                if (hasNumA && !hasNumB) return -1;
+                if (!hasNumA && hasNumB) return 1;
+                return a.areaName.localeCompare(b.areaName, 'pt-BR');
+            });
     }, [currentUser?.company_id, companies]);
 
     const resolveAreaFromCompanyBranch = (companyId?: string | null, branchName?: string | null) => {
