@@ -2043,7 +2043,6 @@ const App: React.FC = () => {
                 return;
             }
             if (currentUser.company_id && companies.length === 0) return;
-            if (!currentUser.company_id) return;
             if (branchPromptCheckedForUser === currentUser.email) return;
 
             const currentBranch = (currentUser.filial || '').trim();
@@ -2053,7 +2052,11 @@ const App: React.FC = () => {
                 setBranchSelectionMode('required');
                 setBranchSelectionValue('');
                 setBranchSelectionArea('');
-                setBranchSelectionMessage('Selecione sua filial para continuar. A área será preenchida automaticamente. Você pode trocar em Configurações quando necessário.');
+                setBranchSelectionMessage(
+                    currentUser.company_id
+                        ? 'Selecione sua filial para continuar. A área será preenchida automaticamente. Você pode trocar em Configurações quando necessário.'
+                        : 'Selecione sua filial para continuar. Como não há empresa vinculada, a área pode permanecer em branco.'
+                );
                 setShowBranchSelectionModal(true);
                 setBranchPromptCheckedForUser(currentUser.email);
                 return;
@@ -2562,6 +2565,7 @@ const App: React.FC = () => {
         setCurrentUser(user);
         setBranchPromptCheckedForUser(null);
         setShowBranchSelectionModal(false);
+
         SupabaseService.insertAppEventLog({
             company_id: user.company_id || null,
             branch: user.filial || null,
@@ -3003,6 +3007,10 @@ const App: React.FC = () => {
     const handleCreateUserInternal = async () => {
         if (!newUserName || !newUserEmail || !newUserPass || !newUserPhone || !newUserConfirmPass) {
             alert("Preencha todos os campos.");
+            return;
+        }
+        if (newUserRole !== 'MASTER' && isMissingBranchValue(newUserFilial)) {
+            alert("Usuários não-master devem ser criados com filial definida.");
             return;
         }
 
@@ -4478,22 +4486,50 @@ const App: React.FC = () => {
         return foundArea?.name || '';
     };
 
-    const branchSelectionOptions = useMemo(() => {
-        if (!currentUser?.company_id) return [] as { branch: string; area: string }[];
+    const branchSelectionGroups = useMemo(() => {
+        if (!currentUser?.company_id) return [] as Array<{ area: string; options: { branch: string; area: string }[] }>;
         const company = companies.find((c: any) => c.id === currentUser.company_id);
-        if (!company?.areas) return [] as { branch: string; area: string }[];
-        const options: { branch: string; area: string }[] = [];
-        company.areas.forEach((area: any) => {
-            (area.branches || []).forEach((branch: string) => {
-                const normalized = String(branch || '').trim();
-                if (!normalized) return;
-                if (!options.some(opt => opt.branch === normalized)) {
-                    options.push({ branch: normalized, area: area.name || '' });
-                }
+        if (!company?.areas) return [] as Array<{ area: string; options: { branch: string; area: string }[] }>;
+
+        const sortBranchAscending = (a: string, b: string) => {
+            const numA = Number((a.match(/\d+/)?.[0] || ''));
+            const numB = Number((b.match(/\d+/)?.[0] || ''));
+            const hasNumA = Number.isFinite(numA) && numA > 0;
+            const hasNumB = Number.isFinite(numB) && numB > 0;
+            if (hasNumA && hasNumB && numA !== numB) return numA - numB;
+            if (hasNumA && !hasNumB) return -1;
+            if (!hasNumA && hasNumB) return 1;
+            return normalizeBranchLabel(a).localeCompare(normalizeBranchLabel(b), 'pt-BR');
+        };
+
+        const grouped = (company.areas || [])
+            .map((area: any) => {
+                const areaName = String(area?.name || 'Sem Área').trim() || 'Sem Área';
+                const options = Array.from(
+                    new Set(
+                        (area?.branches || [])
+                            .map((branch: string) => String(branch || '').trim())
+                            .filter(Boolean)
+                    )
+                )
+                    .sort(sortBranchAscending)
+                    .map((branch: string) => ({ branch, area: areaName }));
+                return { area: areaName, options };
+            })
+            .filter(group => group.options.length > 0)
+            .sort((a, b) => {
+                if (a.area === 'Sem Área') return 1;
+                if (b.area === 'Sem Área') return -1;
+                return a.area.localeCompare(b.area, 'pt-BR');
             });
-        });
-        return options.sort((a, b) => a.branch.localeCompare(b.branch));
+
+        return grouped;
     }, [companies, currentUser?.company_id]);
+
+    const branchSelectionOptions = useMemo(
+        () => branchSelectionGroups.flatMap(group => group.options),
+        [branchSelectionGroups]
+    );
 
     const scopedCompanies = useMemo(() => {
         if (!currentUser?.company_id) return companies;
@@ -9218,10 +9254,14 @@ const App: React.FC = () => {
                                                 disabled={isSavingBranchSelection}
                                             >
                                                 <option value="">Selecione...</option>
-                                                {branchSelectionOptions.map(option => (
-                                                    <option key={option.branch} value={option.branch}>
-                                                        {option.branch}
-                                                    </option>
+                                                {branchSelectionGroups.map(group => (
+                                                    <optgroup key={group.area} label={group.area}>
+                                                        {group.options.map(option => (
+                                                            <option key={`${group.area}-${option.branch}`} value={option.branch}>
+                                                                {option.branch}
+                                                            </option>
+                                                        ))}
+                                                    </optgroup>
                                                 ))}
                                             </select>
                                         ) : (

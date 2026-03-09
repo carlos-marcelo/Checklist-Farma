@@ -2591,7 +2591,26 @@ export async function upsertActiveSession(session: Partial<DbActiveSession>): Pr
       .from('active_sessions')
       .insert([{ ...heartbeatPayload, client_id: clientId, command: null }]);
 
-    if (insertError) throw insertError;
+    if (insertError) {
+      // Corrida entre abas/pings: outra requisição pode ter inserido o mesmo client_id.
+      // Nesse caso, faz fallback para UPDATE e evita erro 409 no console.
+      const isConflict =
+        (insertError as any)?.code === '23505' ||
+        String((insertError as any)?.message || '').toLowerCase().includes('duplicate key') ||
+        String((insertError as any)?.details || '').toLowerCase().includes('already exists');
+
+      if (isConflict) {
+        const { data: retryRows, error: retryError } = await supabase
+          .from('active_sessions')
+          .update(heartbeatPayload)
+          .eq('client_id', clientId)
+          .select('client_id');
+
+        if (retryError) throw retryError;
+        return Array.isArray(retryRows) && retryRows.length > 0;
+      }
+      throw insertError;
+    }
     return true;
   } catch (error) {
     console.error('Error upserting active session:', error);
