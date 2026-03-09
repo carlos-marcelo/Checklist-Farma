@@ -892,7 +892,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 console.warn('Falha ao buscar timestamp remoto do estoque para o popup:', error);
                             }
 
-                            const sessionTs = bestRaw ? new Date(bestRaw).getTime() : NaN;
+                            const processedRaw = latest.data?.sourceFiles?.globalStockProcessedAt || bestRaw;
+                            const sessionTs = processedRaw ? new Date(processedRaw).getTime() : NaN;
                             const remoteTs = officialUploadRaw ? new Date(officialUploadRaw).getTime() : NaN;
                             const hasNewerGlobalStock = Number.isFinite(remoteTs) && (!Number.isFinite(sessionTs) || remoteTs > sessionTs + 1000);
                             return { latestStockTs: officialUploadRaw || bestRaw, hasNewerGlobalStock };
@@ -1463,10 +1464,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const buildStructureSourceMeta = () => {
         const nowIso = new Date().toISOString();
         const stockSource = fileStock ? 'local_upload' : (globalStockMeta ? 'global_base' : 'none');
+        const prevSourceFiles = ((data as any)?.sourceFiles || {}) as any;
+        const previousGlobalStockProcessedAt = prevSourceFiles?.globalStockProcessedAt || null;
+        const globalStockProcessedAt = stockSource === 'global_base'
+            ? (globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || previousGlobalStockProcessedAt || nowIso)
+            : previousGlobalStockProcessedAt;
         return {
             mode: 'initial-structure-import',
             importedAt: nowIso,
             lastStockUpdateAt: nowIso,
+            globalStockProcessedAt,
             groups: effectiveGroupFiles.map(({ groupId, file }) => ({
                 groupId,
                 source: groupFiles[groupId] ? 'local_upload' : 'global_base',
@@ -1572,6 +1579,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 syncedAt
             },
             lastStockUpdateAt: nowIso,
+            globalStockProcessedAt: source === 'global_base'
+                ? (syncedAt || nowIso)
+                : (prevSourceFiles.globalStockProcessedAt || null),
             stockUpdates: [
                 ...stockUpdates,
                 { ...stockMeta, source, syncedAt, updatedAt: nowIso }
@@ -1621,7 +1631,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         if (!Number.isFinite(globalTs)) return;
 
         const sourceFiles = ((data as any).sourceFiles || {}) as any;
-        const currentStockSyncedAt = sourceFiles?.stock?.syncedAt || sourceFiles?.lastStockUpdateAt || null;
+        const currentStockSyncedAt = sourceFiles?.globalStockProcessedAt || sourceFiles?.stock?.syncedAt || sourceFiles?.lastStockUpdateAt || null;
         const currentTs = currentStockSyncedAt ? new Date(currentStockSyncedAt).getTime() : NaN;
         const hasNewerGlobalStock = !Number.isFinite(currentTs) || globalTs > currentTs + 1000;
         if (!hasNewerGlobalStock) return;
@@ -1666,7 +1676,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const hasOpenStructure = !!(data && data.groups && data.groups.length > 0);
         const shouldMergeStockOnly = hasOpenStructure;
         const sourceFiles = ((data as any)?.sourceFiles || {}) as any;
-        const currentStockSyncedAt = sourceFiles?.stock?.syncedAt || sourceFiles?.lastStockUpdateAt || null;
+        const currentStockSyncedAt = sourceFiles?.globalStockProcessedAt || sourceFiles?.stock?.syncedAt || sourceFiles?.lastStockUpdateAt || null;
         const currentStockTs = currentStockSyncedAt ? new Date(currentStockSyncedAt).getTime() : NaN;
         const globalStockSyncedAt = globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || null;
         const globalStockTs = globalStockSyncedAt ? new Date(globalStockSyncedAt).getTime() : NaN;
