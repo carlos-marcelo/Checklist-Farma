@@ -713,7 +713,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
     const [selectedFilial, setSelectedFilial] = useState("");
     const selectedCompany = useMemo(() => companies.find(c => c.name === selectedEmpresa), [companies, selectedEmpresa]);
-    const [isTermsPanelCollapsed, setIsTermsPanelCollapsed] = useState(false);
+    const [isTermsPanelCollapsed, setIsTermsPanelCollapsed] = useState(true);
     const [nextAuditNumber, setNextAuditNumber] = useState(1);
     // Persiste o ID da sessão no sessionStorage para sobreviver a refresh/troca de aba
     const CONFIRMED_SESSION_KEY = 'audit_confirmed_session_id';
@@ -976,6 +976,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setTermDrafts({});
         setDbSessionId(undefined);
         setIsUpdatingStock(false);
+        setIsTermsPanelCollapsed(true);
         setTermModal(null);
         setTermForm(null);
         setTermComparisonMetrics(null);
