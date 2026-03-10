@@ -2580,9 +2580,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             ? null
             : (draft?.excelMetrics || mergeExcelMetricsPools(fallbackPools as any[]));
 
-        let nextMetrics = null;
+        const hasDirectExcelMetrics = !!draft?.excelMetrics;
+        let nextMetrics = hasDirectExcelMetrics ? rawPool : null;
 
-        if (rawPool?.groupedDifferences && scope.type === 'custom') {
+        if (!hasDirectExcelMetrics && rawPool?.groupedDifferences && scope.type === 'custom') {
             if (scopeGroupIds.length > 0 && data?.groups) {
                 const acceptedNames = new Set<string>();
                 scopeGroupIds.forEach(id => {
@@ -2635,7 +2636,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             }
         }
 
-        if (rawPool?.groupedDifferences && scope.groupId) {
+        if (!hasDirectExcelMetrics && rawPool?.groupedDifferences && scope.groupId) {
             const group = data?.groups?.find(g => normalizeScopeId(g.id) === normalizeScopeId(scope.groupId));
             if (group) {
                 const gName = normalizeText(group.name);
@@ -2719,7 +2720,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         // Corrigir apenas groupName e tentar upgrade de DIVERSOS via data.groups
         // NÃO re-classifica itens que já têm dept/cat válidos — apenas corrige o grupo
-        if (nextMetrics && scope.groupId) {
+        if (!hasDirectExcelMetrics && nextMetrics && scope.groupId) {
             const termGroupName = GROUP_CONFIG_DEFAULTS[scope.groupId] || `Grupo ${scope.groupId}`;
 
             // Build localLookup only to TRY to upgrade DIVERSOS items that might now be in data.groups
