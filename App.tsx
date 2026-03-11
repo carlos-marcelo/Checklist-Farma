@@ -2236,7 +2236,6 @@ const App: React.FC = () => {
                     file_size: file.size
                 }
             }).catch(() => { });
-            alert('Arquivo base salvo com sucesso.');
         } catch (error) {
             console.error('Erro ao carregar arquivo base global:', error);
             alert('Erro ao carregar arquivo base.');
