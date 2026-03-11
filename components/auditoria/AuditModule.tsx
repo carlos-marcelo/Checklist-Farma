@@ -4255,7 +4255,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 source: 'web',
                 event_meta: { groupId, deptId, catId }
             }).catch(() => { });
-            alert(allSelected ? "Contagem parcial desativada." : "Auditoria iniciada. Contagem parcial registrada.");
         } catch (err) {
             console.error("Error persisting start:", err);
             alert("Erro ao registrar início no Supabase. O progresso foi salvo localmente.");
