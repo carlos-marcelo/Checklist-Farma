@@ -1932,14 +1932,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         };
     };
 
-    const buildStructureSourceMeta = () => {
+    const buildStructureSourceMeta = (options?: { stockSyncedAt?: string | null }) => {
         const nowIso = new Date().toISOString();
         const stockSource = fileStock ? 'local_upload' : (globalStockMeta ? 'global_base' : 'none');
         const prevSourceFiles = ((data as any)?.sourceFiles || {}) as any;
+        const forcedStockSyncedAt = options?.stockSyncedAt || null;
         const previousGlobalStockProcessedAt = prevSourceFiles?.globalStockProcessedAt || null;
-        const globalStockProcessedAt = stockSource === 'global_base'
-            ? (globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || previousGlobalStockProcessedAt || nowIso)
-            : previousGlobalStockProcessedAt;
+        const globalStockProcessedAt = forcedStockSyncedAt
+            ? forcedStockSyncedAt
+            : (stockSource === 'global_base'
+                ? (globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || previousGlobalStockProcessedAt || nowIso)
+                : previousGlobalStockProcessedAt);
         return {
             mode: 'initial-structure-import',
             importedAt: nowIso,
@@ -1954,7 +1957,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             stock: effectiveStockFile ? {
                 ...toUploadedFileMeta(effectiveStockFile),
                 source: stockSource,
-                syncedAt: globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || null
+                syncedAt: forcedStockSyncedAt || globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || null
             } : null,
             deptIds: effectiveDeptIdsFile ? {
                 ...toUploadedFileMeta(effectiveDeptIdsFile),
@@ -2052,7 +2055,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             lastStockUpdateAt: nowIso,
             globalStockProcessedAt: source === 'global_base'
                 ? (syncedAt || nowIso)
-                : (prevSourceFiles.globalStockProcessedAt || null),
+                : (syncedAt || prevSourceFiles.globalStockProcessedAt || null),
             stockUpdates: [
                 ...stockUpdates,
                 { ...stockMeta, source, syncedAt, updatedAt: nowIso }
@@ -2236,6 +2239,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setIsProcessing(true);
         try {
             const safePartialStarts = Array.isArray(data?.partialStarts) ? data.partialStarts : [];
+            let syncedGlobalStockAt: string | null = null;
 
             if (isMaster && selectedCompany?.id && selectedFilial && fileStock) {
                 try {
@@ -2245,7 +2249,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         reader.onerror = reject;
                         reader.readAsDataURL(fileStock);
                     });
-                    await upsertGlobalBaseFile({
+                    const syncedGlobalFile = await upsertGlobalBaseFile({
                         company_id: selectedCompany.id,
                         module_key: buildSharedStockModuleKey(selectedFilial),
                         file_name: fileStock.name,
@@ -2254,6 +2258,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         file_data_base64: stockDataUrl,
                         uploaded_by: userEmail
                     });
+                    syncedGlobalStockAt =
+                        String(syncedGlobalFile?.uploaded_at || syncedGlobalFile?.updated_at || '').trim() ||
+                        new Date().toISOString();
                     await CadastrosBaseService.clearCache();
                 } catch (syncError) {
                     console.warn('Falha ao sincronizar arquivo de saldos para Cadastros Base:', syncError);
@@ -2262,7 +2269,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
             if (shouldMergeStockOnly && data && !shouldReclassifyOpen) {
                 const stockSource = fileStock ? 'local_upload' : (globalStockMeta ? 'global_base' : 'local_upload');
-                const syncedAt = globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || null;
+                const syncedAt = syncedGlobalStockAt || globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || null;
                 await applyStockMergeToOpenAudit(effectiveStockFile!, {
                     source: stockSource,
                     syncedAt,
@@ -2578,7 +2585,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const basePersistedData = {
                 ...finalData,
                 termDrafts: finalTermDrafts,
-                sourceFiles: buildStructureSourceMeta()
+                sourceFiles: buildStructureSourceMeta({ stockSyncedAt: syncedGlobalStockAt })
             } as any;
             const persistedData = applyPartialScopes(
                 basePersistedData,

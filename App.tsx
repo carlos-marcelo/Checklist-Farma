@@ -4859,6 +4859,8 @@ const App: React.FC = () => {
             pendingUnits: number;
             diffQty: number;
             diffCost: number;
+            countedCost: number;
+            divergencePct: number;
             termsWithExcel: number;
         };
 
@@ -4904,18 +4906,21 @@ const App: React.FC = () => {
             let countedSkus = 0;
             let totalUnits = 0;
             let countedUnits = 0;
+            let countedCost = 0;
 
             groups.forEach((group: any) => {
                 (group?.departments || []).forEach((dept: any) => {
                     (dept?.categories || []).forEach((cat: any) => {
                         const itemsCount = Number(cat?.itemsCount || 0);
                         const units = Number(cat?.totalQuantity || 0);
+                        const cost = Number(cat?.totalCost || 0);
                         const status = normalizeAuditCategoryStatus(cat?.status);
                         totalSkus += itemsCount;
                         totalUnits += units;
                         if (status === 'done') {
                             countedSkus += itemsCount;
                             countedUnits += units;
+                            countedCost += cost;
                         }
                     });
                 });
@@ -4940,6 +4945,7 @@ const App: React.FC = () => {
             const progressPct = totalSkus > 0
                 ? (countedSkus / totalSkus) * 100
                 : Number(session.progress || 0);
+            const divergencePct = countedCost > 0 ? (diffCost / countedCost) * 100 : 0;
 
             branches.push({
                 branch: branchLabel,
@@ -4955,14 +4961,17 @@ const App: React.FC = () => {
                 pendingUnits,
                 diffQty,
                 diffCost,
+                countedCost,
+                divergencePct,
                 termsWithExcel
             });
         });
 
-        branches.sort((a, b) => {
-            if (b.pendingSkus !== a.pendingSkus) return b.pendingSkus - a.pendingSkus;
-            return Math.abs(b.diffCost) - Math.abs(a.diffCost);
-        });
+        const getBranchOrder = (label: string) => {
+            const numeric = Number((String(label || '').match(/\d+/)?.[0] || '999999'));
+            return Number.isFinite(numeric) ? numeric : 999999;
+        };
+        branches.sort((a, b) => getBranchOrder(a.branch) - getBranchOrder(b.branch));
 
         const areaMap = new Map<string, {
             area: string;
@@ -4972,6 +4981,8 @@ const App: React.FC = () => {
             pendingSkus: number;
             countedUnits: number;
             pendingUnits: number;
+            countedCost: number;
+            diffQty: number;
             diffCost: number;
         }>();
 
@@ -4984,6 +4995,8 @@ const App: React.FC = () => {
                 pendingSkus: 0,
                 countedUnits: 0,
                 pendingUnits: 0,
+                countedCost: 0,
+                diffQty: 0,
                 diffCost: 0
             };
             current.branches += 1;
@@ -4992,11 +5005,13 @@ const App: React.FC = () => {
             current.pendingSkus += item.pendingSkus;
             current.countedUnits += item.countedUnits;
             current.pendingUnits += item.pendingUnits;
+            current.countedCost += item.countedCost;
+            current.diffQty += item.diffQty;
             current.diffCost += item.diffCost;
             areaMap.set(item.area, current);
         });
 
-        const areas = Array.from(areaMap.values()).sort((a, b) => b.pendingSkus - a.pendingSkus);
+        const areas = Array.from(areaMap.values()).sort((a, b) => a.area.localeCompare(b.area, 'pt-BR'));
         const summary = branches.reduce((acc, item) => {
             acc.openAudits += 1;
             acc.totalSkus += item.totalSkus;
@@ -5005,6 +5020,7 @@ const App: React.FC = () => {
             acc.totalUnits += item.totalUnits;
             acc.countedUnits += item.countedUnits;
             acc.pendingUnits += item.pendingUnits;
+            acc.countedCost += item.countedCost;
             acc.diffQty += item.diffQty;
             acc.diffCost += item.diffCost;
             return acc;
@@ -5016,6 +5032,7 @@ const App: React.FC = () => {
             totalUnits: 0,
             countedUnits: 0,
             pendingUnits: 0,
+            countedCost: 0,
             diffQty: 0,
             diffCost: 0
         });
@@ -5023,8 +5040,11 @@ const App: React.FC = () => {
         const accumulatedPct = summary.totalSkus > 0
             ? (summary.countedSkus / summary.totalSkus) * 100
             : 0;
+        const summaryDivergencePct = summary.countedCost > 0
+            ? (summary.diffCost / summary.countedCost) * 100
+            : 0;
 
-        return { summary, accumulatedPct, areas, branches };
+        return { summary, accumulatedPct, summaryDivergencePct, areas, branches };
     }, [dashboardAuditSessions, scopedCompanies, scopedUsers]);
 
     // --- RENDER ---
@@ -8679,33 +8699,45 @@ const App: React.FC = () => {
                                         </div>
                                     )}
 
-                                    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-                                        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 px-4 py-3">
+                                    <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-4 gap-3">
+                                        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Auditorias abertas</p>
-                                            <p className="text-2xl font-black text-indigo-700">{dashboardAuditOverview.summary.openAudits}</p>
+                                            <p className="text-[1.65rem] leading-none font-black text-indigo-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.summary.openAudits}</p>
                                         </div>
-                                        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 px-4 py-3">
-                                            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Contado (SKUs)</p>
-                                            <p className="text-2xl font-black text-emerald-700">{dashboardAuditOverview.summary.countedSkus.toLocaleString('pt-BR')}</p>
+                                        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Qtde contada</p>
+                                            <p className="text-[1.65rem] leading-none font-black text-emerald-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.summary.countedUnits.toLocaleString('pt-BR')}</p>
                                         </div>
-                                        <div className="rounded-2xl border border-amber-100 bg-amber-50/50 px-4 py-3">
+                                        <div className="rounded-2xl border border-amber-100 bg-amber-50/50 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-amber-500">Falta contar</p>
-                                            <p className="text-2xl font-black text-amber-700">{dashboardAuditOverview.summary.pendingSkus.toLocaleString('pt-BR')}</p>
+                                            <p className="text-[1.65rem] leading-none font-black text-amber-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.summary.pendingSkus.toLocaleString('pt-BR')}</p>
                                         </div>
-                                        <div className="rounded-2xl border border-blue-100 bg-blue-50/50 px-4 py-3">
+                                        <div className="rounded-2xl border border-blue-100 bg-blue-50/50 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">% acumulada</p>
-                                            <p className="text-2xl font-black text-blue-700">{dashboardAuditOverview.accumulatedPct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</p>
+                                            <p className="text-[1.65rem] leading-none font-black text-blue-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.accumulatedPct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</p>
                                         </div>
-                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Qtde divergência</p>
-                                            <p className={`text-2xl font-black ${dashboardAuditOverview.summary.diffQty < 0 ? 'text-red-600' : dashboardAuditOverview.summary.diffQty > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
+                                            <p className={`text-[1.65rem] leading-none font-black whitespace-nowrap tabular-nums ${dashboardAuditOverview.summary.diffQty < 0 ? 'text-red-600' : dashboardAuditOverview.summary.diffQty > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
                                                 {dashboardAuditOverview.summary.diffQty > 0 ? '+' : ''}{dashboardAuditOverview.summary.diffQty.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
                                             </p>
                                         </div>
-                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Divergência R$</p>
-                                            <p className={`text-lg font-black ${dashboardAuditOverview.summary.diffCost < 0 ? 'text-red-600' : dashboardAuditOverview.summary.diffCost > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
+                                            <p className={`text-[1.5rem] leading-none font-black whitespace-nowrap tabular-nums ${dashboardAuditOverview.summary.diffCost < 0 ? 'text-red-600' : dashboardAuditOverview.summary.diffCost > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
                                                 {dashboardAuditOverview.summary.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total contado R$</p>
+                                            <p className="text-[1.5rem] leading-none font-black text-slate-700 whitespace-nowrap tabular-nums">
+                                                {dashboardAuditOverview.summary.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Rep. divergência</p>
+                                            <p className={`text-[1.65rem] leading-none font-black whitespace-nowrap tabular-nums ${dashboardAuditOverview.summaryDivergencePct < 0 ? 'text-red-600' : dashboardAuditOverview.summaryDivergencePct > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
+                                                {dashboardAuditOverview.summaryDivergencePct > 0 ? '+' : ''}{dashboardAuditOverview.summaryDivergencePct.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
                                             </p>
                                         </div>
                                     </div>
@@ -8719,15 +8751,26 @@ const App: React.FC = () => {
                                                 ) : (
                                                     dashboardAuditOverview.areas.map(area => {
                                                         const pct = area.totalSkus > 0 ? (area.countedSkus / area.totalSkus) * 100 : 0;
+                                                        const areaDivergencePct = area.countedCost > 0 ? (area.diffCost / area.countedCost) * 100 : 0;
                                                         return (
                                                             <div key={area.area} className="rounded-xl border border-gray-100 px-3 py-2">
                                                                 <div className="flex items-center justify-between">
                                                                     <p className="text-sm font-black text-gray-800">{area.area}</p>
                                                                     <p className="text-[11px] font-bold text-gray-500">{area.branches} filial(is)</p>
                                                                 </div>
-                                                                <div className="mt-1 flex items-center justify-between text-xs">
-                                                                    <span className="font-bold text-emerald-600">{area.countedSkus.toLocaleString('pt-BR')} contados</span>
-                                                                    <span className="font-bold text-amber-600">{area.pendingSkus.toLocaleString('pt-BR')} pendentes</span>
+                                                                <div className="mt-1 grid grid-cols-2 gap-2 text-[11px] font-bold">
+                                                                    <span className="text-emerald-600 whitespace-nowrap tabular-nums">{area.countedUnits.toLocaleString('pt-BR')} un. contadas</span>
+                                                                    <span className={`text-right ${area.diffQty < 0 ? 'text-red-600' : area.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                                        {area.diffQty > 0 ? '+' : ''}{area.diffQty.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} un.
+                                                                    </span>
+                                                                    <span className="text-slate-600 whitespace-nowrap tabular-nums">{area.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                                                                    <span className={`text-right ${area.diffCost < 0 ? 'text-red-600' : area.diffCost > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                                        {area.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                    </span>
+                                                                    <span className="text-slate-500">Rep. divergência</span>
+                                                                    <span className={`text-right whitespace-nowrap tabular-nums ${areaDivergencePct < 0 ? 'text-red-600' : areaDivergencePct > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                                        {areaDivergencePct > 0 ? '+' : ''}{areaDivergencePct.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
+                                                                    </span>
                                                                 </div>
                                                                 <div className="mt-2 h-2 rounded-full bg-gray-100 overflow-hidden">
                                                                     <div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
@@ -8752,11 +8795,17 @@ const App: React.FC = () => {
                                                                 <span className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Inv. {branch.auditNumber}</span>
                                                             </div>
                                                             <div className="mt-1 grid grid-cols-2 gap-2 text-[11px] font-bold">
-                                                                <span className="text-gray-600">{branch.countedSkus.toLocaleString('pt-BR')} / {branch.totalSkus.toLocaleString('pt-BR')} SKUs</span>
-                                                                <span className="text-right text-amber-600">{branch.pendingSkus.toLocaleString('pt-BR')} faltando</span>
+                                                                <span className="text-gray-600 whitespace-nowrap tabular-nums">{branch.countedUnits.toLocaleString('pt-BR')} un. contadas</span>
+                                                                <span className={`text-right ${branch.diffQty < 0 ? 'text-red-600' : branch.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                                    {branch.diffQty > 0 ? '+' : ''}{branch.diffQty.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} un.
+                                                                </span>
                                                                 <span className="text-gray-500">{branch.area}</span>
-                                                                <span className={`text-right ${branch.diffCost < 0 ? 'text-red-600' : branch.diffCost > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                                <span className={`text-right whitespace-nowrap tabular-nums ${branch.diffCost < 0 ? 'text-red-600' : branch.diffCost > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
                                                                     {branch.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                </span>
+                                                                <span className="text-slate-600 whitespace-nowrap tabular-nums">{branch.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                                                                <span className={`text-right whitespace-nowrap tabular-nums ${branch.divergencePct < 0 ? 'text-red-600' : branch.divergencePct > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                                    {branch.divergencePct > 0 ? '+' : ''}{branch.divergencePct.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
                                                                 </span>
                                                             </div>
                                                             <div className="mt-2 h-2 rounded-full bg-gray-100 overflow-hidden">
