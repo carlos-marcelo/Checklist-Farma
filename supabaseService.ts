@@ -1618,6 +1618,22 @@ export async function fetchPVSalesUploads(companyId: string, branch: string): Pr
   }
 }
 
+export async function deleteAuditSession(branch: string, auditNumber: number): Promise<boolean> {
+  try {
+    const { error } = await supabase
+      .from('audit_sessions')
+      .delete()
+      .eq('branch', branch)
+      .eq('audit_number', auditNumber);
+
+    if (error) throw error;
+    return true;
+  } catch (error) {
+    console.error('Error deleting audit session:', error);
+    return false;
+  }
+}
+
 export async function insertPVSalesUpload(upload: DbPVSalesUpload): Promise<DbPVSalesUpload | null> {
   try {
     const payload = {

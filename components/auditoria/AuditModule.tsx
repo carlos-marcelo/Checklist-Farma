@@ -12,7 +12,10 @@ import {
 } from './types';
 import {
     fetchLatestAudit,
+    fetchAuditSession,
+    fetchAuditsHistory,
     upsertAuditSession,
+    deleteAuditSession,
     insertAppEventLog,
     fetchLatestAuditMetadata,
     fetchGlobalBaseFileMeta,
@@ -642,6 +645,8 @@ interface AuditModuleProps {
 
 const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole, companies }) => {
     const isMaster = userRole === 'MASTER';
+    const isAdmin = userRole === 'ADMINISTRATIVO';
+    const canManageAuditLifecycle = isMaster || isAdmin;
     const [data, setData] = useState<AuditData | null>(null);
     const [view, setView] = useState<ViewState>({ level: 'groups' });
     const [isProcessing, setIsProcessing] = useState(false);
@@ -713,6 +718,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
     const [selectedFilial, setSelectedFilial] = useState("");
     const selectedCompany = useMemo(() => companies.find(c => c.name === selectedEmpresa), [companies, selectedEmpresa]);
+    const [branchAuditsHistory, setBranchAuditsHistory] = useState<DbAuditSession[]>([]);
+    const [isLoadingBranchAudits, setIsLoadingBranchAudits] = useState(false);
+    const [showCompletedAuditsModal, setShowCompletedAuditsModal] = useState(false);
+    const [isReadOnlyCompletedView, setIsReadOnlyCompletedView] = useState(false);
+    const [consultingAuditNumber, setConsultingAuditNumber] = useState<number | null>(null);
+    const [allowActiveAuditAutoOpen, setAllowActiveAuditAutoOpen] = useState(false);
     const [isTermsPanelCollapsed, setIsTermsPanelCollapsed] = useState(true);
     const [nextAuditNumber, setNextAuditNumber] = useState(1);
     // Persiste o ID da sessão no sessionStorage para sobreviver a refresh/troca de aba
@@ -826,6 +837,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
             if (isStaleRequest()) return;
             if (latest && latest.status !== 'completed') {
+                setIsReadOnlyCompletedView(false);
+                setConsultingAuditNumber(null);
                 setNextAuditNumber(latest.audit_number);
                 setDbSessionId(latest.id);
 
@@ -958,6 +971,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             } else {
                 if (latest !== undefined) {
                     if (isStaleRequest()) return;
+                    if (isReadOnlyCompletedView && consultingAuditNumber !== null) {
+                        setNextAuditNumber(consultingAuditNumber);
+                        if (!silent) {
+                            setDbSessionId(undefined);
+                        }
+                        return;
+                    }
+                    setIsReadOnlyCompletedView(false);
+                    setConsultingAuditNumber(null);
                     setNextAuditNumber(latest ? latest.audit_number + 1 : 1);
                     setDbSessionId(undefined);
                     if (!silent) {
@@ -969,7 +991,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         } catch (error) {
             console.error('Error loading audit info:', error);
         }
-    }, [selectedFilial, selectedCompany?.id, dbSessionId, isMaster, data, isUpdatingStock]);
+    }, [selectedFilial, selectedCompany?.id, dbSessionId, isMaster, data, isUpdatingStock, isReadOnlyCompletedView, consultingAuditNumber, allowActiveAuditAutoOpen]);
 
     // Carga Inicial
     useEffect(() => {
@@ -981,12 +1003,54 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setTermModal(null);
         setTermForm(null);
         setTermComparisonMetrics(null);
+        setIsReadOnlyCompletedView(false);
+        setConsultingAuditNumber(null);
+        setAllowActiveAuditAutoOpen(false);
         removedExcelDraftKeysRef.current.clear();
         lastAuditUpdateRef.current = null;
         if (selectedFilial) {
             loadAuditNum();
         }
     }, [selectedFilial]);
+
+    useEffect(() => {
+        if (!selectedFilial) {
+            setBranchAuditsHistory([]);
+            setShowCompletedAuditsModal(false);
+            return;
+        }
+        let cancelled = false;
+        const loadBranchHistory = async () => {
+            setIsLoadingBranchAudits(true);
+            try {
+                const history = await fetchAuditsHistory(selectedFilial);
+                if (cancelled) return;
+                const sorted = [...history].sort((a, b) => {
+                    if (a.audit_number !== b.audit_number) return b.audit_number - a.audit_number;
+                    const at = new Date(a.updated_at || a.created_at || 0).getTime();
+                    const bt = new Date(b.updated_at || b.created_at || 0).getTime();
+                    return bt - at;
+                });
+                setBranchAuditsHistory(sorted);
+            } catch (error) {
+                console.error("Erro ao carregar histórico de auditorias da filial:", error);
+                if (!cancelled) setBranchAuditsHistory([]);
+            } finally {
+                if (!cancelled) setIsLoadingBranchAudits(false);
+            }
+        };
+        void loadBranchHistory();
+        return () => { cancelled = true; };
+    }, [selectedFilial, dbSessionId, nextAuditNumber]);
+
+    const latestOpenAudit = useMemo(
+        () => branchAuditsHistory.find(item => item.status !== 'completed') || null,
+        [branchAuditsHistory]
+    );
+    const completedAudits = useMemo(
+        () => branchAuditsHistory.filter(item => item.status === 'completed'),
+        [branchAuditsHistory]
+    );
 
     // Polling de sincronização entre usuários
     useEffect(() => {
@@ -1192,6 +1256,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const allowProgressRegression = !!options?.allowProgressRegression;
 
         const freshLatest = isSameAudit ? await fetchLatestAudit(branch) : null;
+        const latestSession = freshLatest || await fetchLatestAudit(branch);
+        if (
+            latestSession &&
+            latestSession.status !== 'completed' &&
+            latestSession.audit_number !== session.audit_number
+        ) {
+            setNextAuditNumber(latestSession.audit_number);
+            setDbSessionId(latestSession.id);
+            alert(
+                `Não é permitido criar/iniciar o inventário Nº ${session.audit_number} enquanto o inventário Nº ${latestSession.audit_number} estiver em aberto.\n\n` +
+                `Finalize, reabra o mesmo número ou exclua o inventário aberto para continuar.`
+            );
+            return null;
+        }
         const incomingData = (session.data as AuditData) || null;
         const incomingStrength = getAuditDataStrength(incomingData);
         const remoteStrength = getAuditDataStrength((freshLatest?.data as AuditData) || null);
@@ -1276,6 +1354,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             sessionStorage.removeItem(CONFIRMED_SESSION_KEY);
             setData(null);
             setDbSessionId(undefined);
+            setAllowActiveAuditAutoOpen(false);
             setSelectedFilial("");
             setGroupFiles(createInitialGroupFiles());
             setFileStock(null);
@@ -1299,6 +1378,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }
 
         if (window.confirm("Deseja sair da auditoria? Seu progresso será salvo automaticamente e você poderá retomar depois.")) {
+            if (isReadOnlyCompletedView) {
+                resetAuditUi();
+                void AuditStorage.clearLocalAuditSession();
+                return;
+            }
             const snapshotData = data
                 ? ({ ...data, termDrafts: ((data as any)?.termDrafts || termDrafts || {}) } as any)
                 : null;
@@ -1336,24 +1420,31 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const handleFinishAudit = async () => {
         if (!data) return;
-
-        const progress = calculateProgress(data);
-
-        if (progress < 100) {
-            alert("A auditoria ainda não está 100% completa. Verifique os itens pendentes.");
+        if (isReadOnlyCompletedView) {
+            alert("Modo consulta ativo: reabra o inventário para editar/encerrar novamente.");
             return;
         }
+        if (!dbSessionId) {
+            alert("Nenhum inventário aberto ativo para encerrar.");
+            return;
+        }
+        if (!canManageAuditLifecycle) {
+            alert("Somente Master e Administrativo podem encerrar inventário.");
+            return;
+        }
+        const progress = calculateProgress(data);
+        const auditNumberToPersist = consultingAuditNumber ?? nextAuditNumber;
 
-        if (window.confirm(`ATENÇÃO: Você está prestes a FINALIZAR a auditoria Nº ${nextAuditNumber}.\n\nIsso irá concluir o processo e não permitirá mais edições.\n\nDeseja continuar?`)) {
+        if (window.confirm(`ATENÇÃO: Você está prestes a FINALIZAR a auditoria Nº ${auditNumberToPersist}.\n\nEssa ação salvará a auditoria no Supabase como CONCLUÍDA.\nDepois você poderá iniciar a próxima auditoria da filial.\n\nDeseja continuar?`)) {
             try {
                 setIsProcessing(true);
                 const savedSession = await persistAuditSession({
                     id: dbSessionId,
                     branch: selectedFilial,
-                    audit_number: nextAuditNumber,
+                    audit_number: auditNumberToPersist,
                     status: 'completed',
                     data: { ...data, termDrafts: ((data as any)?.termDrafts || termDrafts || {}) } as any,
-                    progress: 100,
+                    progress,
                     user_email: userEmail
                 });
                 if (savedSession) {
@@ -1367,6 +1458,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 sessionStorage.removeItem(CONFIRMED_SESSION_KEY);
                 setData(null);
                 setDbSessionId(undefined);
+                setAllowActiveAuditAutoOpen(false);
                 setSelectedFilial("");
                 setGroupFiles(createInitialGroupFiles());
                 setFileStock(null);
@@ -1381,6 +1473,315 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             } finally {
                 setIsProcessing(false);
             }
+        }
+    };
+
+    const reopenAuditByNumber = async (targetAuditNumber: number) => {
+        if (!isMaster) {
+            alert("Somente Master pode reabrir inventário.");
+            return false;
+        }
+        if (!selectedFilial) {
+            alert("Selecione a filial.");
+            return false;
+        }
+        if (!Number.isFinite(targetAuditNumber) || targetAuditNumber <= 0) {
+            alert("Número de inventário inválido.");
+            return false;
+        }
+
+        try {
+            const target = await fetchAuditSession(selectedFilial, targetAuditNumber);
+            if (!target) {
+                alert(`Inventário Nº ${targetAuditNumber} não encontrado na filial ${selectedFilial}.`);
+                return false;
+            }
+            if (target.status !== 'completed') {
+                alert(`Inventário Nº ${targetAuditNumber} já está em aberto.`);
+                return false;
+            }
+
+            const latest = await fetchLatestAudit(selectedFilial);
+            if (latest && latest.status !== 'completed' && latest.audit_number !== targetAuditNumber) {
+                alert(
+                    `Já existe um inventário em aberto (Nº ${latest.audit_number}) nesta filial.\n\n` +
+                    `Finalize ou exclua o inventário aberto antes de reabrir outro número.`
+                );
+                return false;
+            }
+
+            const confirmed = window.confirm(
+                `Você está reabrindo o inventário Nº ${targetAuditNumber}.\n\n` +
+                `Isso mudará o status para EM ABERTO e permitirá novas alterações.\n` +
+                `Deseja continuar?`
+            );
+            if (!confirmed) return false;
+
+            setIsProcessing(true);
+            const reopened = await persistAuditSession({
+                id: target.id,
+                branch: target.branch,
+                audit_number: target.audit_number,
+                status: 'open',
+                data: target.data,
+                progress: Number(target.progress || 0),
+                user_email: userEmail
+            }, { allowProgressRegression: true });
+
+            if (!reopened) {
+                alert("Não foi possível reabrir o inventário agora.");
+                return false;
+            }
+
+            await CacheService.set(`audit_session_${selectedFilial}`, reopened as any);
+            sessionStorage.setItem(CONFIRMED_SESSION_KEY, reopened.id || '');
+            const payload = ((reopened.data || {}) as AuditData);
+            if (payload.groups) {
+                payload.groups.forEach((g: any) => {
+                    g.departments?.forEach((d: any) => {
+                        d.categories?.forEach((c: any) => {
+                            c.status = normalizeAuditStatus(c.status);
+                            if (c.totalCost === undefined || c.totalCost === null || (c.totalCost === 0 && c.totalQuantity > 0)) {
+                                let catCost = 0;
+                                c.products?.forEach((p: any) => { catCost += (p.quantity * (p.cost || 0)); });
+                                c.totalCost = catCost;
+                            }
+                        });
+                    });
+                });
+            }
+            const reconciled = reconcileAuditStateFromCompletedScopes(payload);
+            setAllowActiveAuditAutoOpen(true);
+            setConsultingAuditNumber(null);
+            setIsReadOnlyCompletedView(false);
+            setNextAuditNumber(reopened.audit_number);
+            setDbSessionId(reopened.id);
+            setData(reconciled);
+            setTermDrafts(((reconciled as any)?.termDrafts || {}) as Record<string, TermForm>);
+            setView({ level: 'groups' });
+            setShowCompletedAuditsModal(false);
+            alert(`Inventário Nº ${targetAuditNumber} reaberto com sucesso.`);
+            return true;
+        } catch (error) {
+            console.error("Erro ao reabrir inventário:", error);
+            alert("Erro ao reabrir inventário.");
+            return false;
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const handleReopenAudit = async () => {
+        if (!isMaster) {
+            alert("Somente Master pode reabrir inventário.");
+            return;
+        }
+        if (!selectedFilial) {
+            alert("Selecione a filial.");
+            return;
+        }
+
+        const completed = completedAudits;
+        if (completed.length === 0) {
+            alert("Não há inventários concluídos para reabrir nesta filial.");
+            return;
+        }
+
+        const options = completed
+            .slice(0, 15)
+            .map(h => `Nº ${h.audit_number} (${h.updated_at ? new Date(h.updated_at).toLocaleString('pt-BR') : 'sem data'})`)
+            .join('\n');
+        const input = window.prompt(
+            `REABRIR INVENTÁRIO\n\nInventários concluídos recentes:\n${options}\n\nDigite o número do inventário que deseja reabrir:`
+        );
+        if (!input) return;
+        const targetAuditNumber = Number(String(input).trim());
+        await reopenAuditByNumber(targetAuditNumber);
+    };
+
+    const accessCompletedAuditByNumber = async (targetAuditNumber: number) => {
+        if (!selectedFilial) {
+            alert("Selecione a filial.");
+            return false;
+        }
+        if (!Number.isFinite(targetAuditNumber) || targetAuditNumber <= 0) {
+            alert("Número de inventário inválido.");
+            return false;
+        }
+
+        try {
+            setIsProcessing(true);
+            const target = await fetchAuditSession(selectedFilial, targetAuditNumber);
+            if (!target) {
+                alert(`Inventário Nº ${targetAuditNumber} não encontrado na filial ${selectedFilial}.`);
+                return false;
+            }
+            if (target.status !== 'completed') {
+                alert(`Inventário Nº ${targetAuditNumber} não está concluído.`);
+                return false;
+            }
+
+            const payload = (target.data || {}) as AuditData;
+            if (payload.groups) {
+                payload.groups.forEach((g: any) => {
+                    g.departments?.forEach((d: any) => {
+                        d.categories?.forEach((c: any) => {
+                            c.status = normalizeAuditStatus(c.status);
+                        });
+                    });
+                });
+            }
+            const reconciled = reconcileAuditStateFromCompletedScopes(payload);
+            setData(reconciled);
+            setTermDrafts(((reconciled as any)?.termDrafts || {}) as Record<string, TermForm>);
+            setNextAuditNumber(target.audit_number);
+            setDbSessionId(target.id);
+            setView({ level: 'groups' });
+            setAllowActiveAuditAutoOpen(false);
+            setIsUpdatingStock(false);
+            setIsReadOnlyCompletedView(true);
+            setConsultingAuditNumber(target.audit_number);
+            setShowCompletedAuditsModal(false);
+            alert(
+                isMaster
+                    ? `Inventário Nº ${targetAuditNumber} aberto. Você está no modo de consulta de inventário concluído.`
+                    : `Inventário Nº ${targetAuditNumber} aberto em modo consulta (sem edição).`
+            );
+            return true;
+        } catch (error) {
+            console.error("Erro ao acessar inventário concluído:", error);
+            alert("Erro ao acessar inventário concluído.");
+            return false;
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const resumeLatestOpenAudit = async () => {
+        if (!selectedFilial) {
+            alert("Selecione a filial.");
+            return;
+        }
+        const targetAuditNumber = latestOpenAudit?.audit_number;
+        if (!targetAuditNumber) {
+            alert("Não há inventário aberto para retomar nesta filial.");
+            return;
+        }
+
+        try {
+            setIsProcessing(true);
+            const target = await fetchAuditSession(selectedFilial, targetAuditNumber);
+            if (!target) {
+                alert(`Inventário Nº ${targetAuditNumber} não encontrado na filial ${selectedFilial}.`);
+                return;
+            }
+            if (target.status === 'completed') {
+                alert(`Inventário Nº ${targetAuditNumber} já está concluído.`);
+                return;
+            }
+
+            const payload = (target.data || {}) as AuditData;
+            if (payload.groups) {
+                payload.groups.forEach((g: any) => {
+                    g.departments?.forEach((d: any) => {
+                        d.categories?.forEach((c: any) => {
+                            c.status = normalizeAuditStatus(c.status);
+                            if (c.totalCost === undefined || c.totalCost === null || (c.totalCost === 0 && c.totalQuantity > 0)) {
+                                let catCost = 0;
+                                c.products?.forEach((p: any) => { catCost += (p.quantity * (p.cost || 0)); });
+                                c.totalCost = catCost;
+                            }
+                        });
+                    });
+                });
+            }
+            const reconciled = reconcileAuditStateFromCompletedScopes(payload);
+            setData(reconciled);
+            setTermDrafts(((reconciled as any)?.termDrafts || {}) as Record<string, TermForm>);
+            setNextAuditNumber(target.audit_number);
+            setDbSessionId(target.id);
+            setAllowActiveAuditAutoOpen(true);
+            setIsUpdatingStock(false);
+            setIsReadOnlyCompletedView(false);
+            setConsultingAuditNumber(null);
+            setView({ level: 'groups' });
+        } catch (error) {
+            console.error("Erro ao retomar inventário aberto:", error);
+            alert("Erro ao retomar inventário.");
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const handleDeleteCurrentAudit = async () => {
+        if (!isMaster) {
+            alert("Somente Master pode excluir inventário.");
+            return;
+        }
+        if (!selectedFilial) {
+            alert("Selecione a filial.");
+            return;
+        }
+        const suggestedNumber = Number.isFinite(Number(nextAuditNumber)) ? String(nextAuditNumber) : '';
+        const input = window.prompt(
+            `EXCLUIR INVENTÁRIO\n\nDigite o número do inventário que deseja excluir permanentemente da filial ${selectedFilial}:`,
+            suggestedNumber
+        );
+        if (!input) return;
+        const targetAuditNumber = Number(String(input).trim());
+        if (!Number.isFinite(targetAuditNumber) || targetAuditNumber <= 0) {
+            alert("Número de inventário inválido.");
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `EXCLUSÃO PERMANENTE\n\n` +
+            `Você está prestes a excluir definitivamente o inventário Nº ${targetAuditNumber} da filial ${selectedFilial}.\n` +
+            `Essa ação não pode ser desfeita.\n\n` +
+            `Deseja continuar?`
+        );
+        if (!confirmed) return;
+
+        try {
+            setIsProcessing(true);
+            const target = await fetchAuditSession(selectedFilial, targetAuditNumber);
+            if (!target) {
+                alert(`Inventário Nº ${targetAuditNumber} não encontrado nesta filial.`);
+                return;
+            }
+
+            const ok = await deleteAuditSession(selectedFilial, targetAuditNumber);
+            if (!ok) {
+                alert("Não foi possível excluir o inventário.");
+                return;
+            }
+
+            await AuditStorage.clearLocalAuditSession();
+            sessionStorage.removeItem(CONFIRMED_SESSION_KEY);
+            await CacheService.remove(`audit_session_${selectedFilial}`);
+            await CacheService.remove(`audit_session_lastgood_${selectedFilial}`);
+
+            if (targetAuditNumber === nextAuditNumber || target.id === dbSessionId) {
+                setData(null);
+                setTermDrafts({});
+                setDbSessionId(undefined);
+                setAllowActiveAuditAutoOpen(false);
+                setGroupFiles(createInitialGroupFiles());
+                setFileStock(null);
+                setFileDeptIds(null);
+                setFileCatIds(null);
+                setInitialDoneUnits(0);
+                setSessionStartTime(Date.now());
+                setView({ level: 'groups' });
+            }
+
+            await loadAuditNum(false);
+            alert(`Inventário Nº ${targetAuditNumber} excluído permanentemente.`);
+        } catch (error) {
+            console.error("Erro ao excluir inventário:", error);
+            alert("Erro ao excluir inventário.");
+        } finally {
+            setIsProcessing(false);
         }
     };
 
@@ -1666,6 +2067,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     ]);
 
     const handleStartAudit = async () => {
+        if (isReadOnlyCompletedView) {
+            alert("Modo consulta ativo: este inventário concluído não pode ser editado.");
+            return;
+        }
+        if (!data && latestOpenAudit) {
+            alert(`Já existe um inventário aberto (Nº ${latestOpenAudit.audit_number}) nesta filial. Retome o inventário aberto antes de criar outro.`);
+            return;
+        }
         if (!selectedFilial) {
             alert("Selecione a filial.");
             return;
@@ -2121,6 +2530,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
             setDbSessionId(savedSession.id);
             setNextAuditNumber(savedSession.audit_number);
+            setAllowActiveAuditAutoOpen(true);
             setTermDrafts(finalTermDrafts as any);
             setData((savedSession.data as AuditData) || finalData);
             setGroupFiles(createInitialGroupFiles());
@@ -2146,6 +2556,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     };
 
     const handleLoadFromTrier = async () => {
+        if (isReadOnlyCompletedView) {
+            alert("Modo consulta ativo: este inventário concluído não pode ser editado.");
+            return;
+        }
         if (!selectedFilial) {
             alert("Selecione a filial antes de carregar do Trier.");
             return;
@@ -2198,6 +2612,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
             setDbSessionId(savedSession.id);
             setNextAuditNumber(savedSession.audit_number);
+            setAllowActiveAuditAutoOpen(true);
             setTermDrafts(preservedTermDrafts as any);
             setData((savedSession.data as AuditData) || (nextData as AuditData));
             setView({ level: 'groups' });
@@ -2840,7 +3255,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setTermForm(null);
         setTermComparisonMetrics(null);
 
-        if (isMaster && currentScope && currentForm && currentData) {
+        if (isMaster && !isReadOnlyCompletedView && currentScope && currentForm && currentData) {
             const key = buildTermKey(currentScope);
             const forceCleared = removedExcelDraftKeysRef.current.has(key);
             const persistedMetrics =
@@ -2889,9 +3304,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 removedExcelDraftKeysRef.current.delete(key);
             }
         }
-    }, [termModal, termForm, termComparisonMetrics, isMaster, data, termDrafts, dbSessionId, selectedFilial, nextAuditNumber, userEmail]);
+    }, [termModal, termForm, termComparisonMetrics, isMaster, data, termDrafts, dbSessionId, selectedFilial, nextAuditNumber, userEmail, isReadOnlyCompletedView]);
 
     const handleProcessTermComparisonExcel = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (isReadOnlyCompletedView) {
+            alert("Modo consulta ativo: não é possível alterar Excel de termo.");
+            e.target.value = '';
+            return;
+        }
         const file = e.target.files?.[0];
         if (!file) {
             setTermComparisonMetrics(null);
@@ -3324,6 +3744,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     };
 
     const removeTermComparisonExcel = async () => {
+        if (isReadOnlyCompletedView) {
+            alert("Modo consulta ativo: não é possível remover Excel de termo.");
+            return;
+        }
         if (!isMaster) {
             alert("Apenas usuário master pode remover planilha do termo.");
             return;
@@ -4084,6 +4508,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     }, [data, dbSessionId, selectedFilial, nextAuditNumber, applyPartialScopes, calculateProgress, isUpdatingStock, PARTIAL_EXPIRED_ALERT_KEY]);
 
     const finalizeActivePartials = useCallback(async () => {
+        if (isReadOnlyCompletedView) {
+            alert("Modo consulta ativo: este inventário concluído não pode ser editado.");
+            return;
+        }
         if (!data?.partialStarts || data.partialStarts.length === 0) return;
         if (!isMaster) {
             alert("Apenas usuário master pode concluir contagens parciais.");
@@ -4166,15 +4594,23 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             console.error("Error finalizing partials:", err);
             alert("Erro ao concluir contagens parciais no Supabase.");
         }
-    }, [data, dbSessionId, selectedFilial, nextAuditNumber, applyPartialScopes, calculateProgress, isMaster]);
+    }, [data, dbSessionId, selectedFilial, nextAuditNumber, applyPartialScopes, calculateProgress, isMaster, isReadOnlyCompletedView]);
 
     const clearActivePartialsShortcut = useCallback(async () => {
+        if (isReadOnlyCompletedView) {
+            alert("Modo consulta ativo: este inventário concluído não pode ser editado.");
+            return;
+        }
         if (!data?.partialStarts || data.partialStarts.length === 0) return;
         if (!window.confirm("Deseja desfazer todas as contagens parciais ativas?")) return;
         await clearPartialProgress('manual', false);
-    }, [data, clearPartialProgress]);
+    }, [data, clearPartialProgress, isReadOnlyCompletedView]);
 
     const startScopeAudit = async (groupId?: string, deptId?: string, catId?: string) => {
+        if (isReadOnlyCompletedView) {
+            alert("Modo consulta ativo: este inventário concluído não pode ser editado.");
+            return;
+        }
         if (!data) return;
         sessionStorage.removeItem(PARTIAL_EXPIRED_ALERT_KEY);
         const scopeCatsGuard = getScopeCategories(groupId, deptId, catId);
@@ -4262,6 +4698,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     };
 
     const toggleScopeStatus = async (groupId?: string, deptId?: string, catId?: string) => {
+        if (isReadOnlyCompletedView) {
+            alert("Modo consulta ativo: este inventário concluído não pode ser editado.");
+            return;
+        }
         if (!data) return;
         if (!isMaster) {
             alert("Apenas usuário master pode concluir ou desativar contagens parciais.");
@@ -4820,6 +5260,78 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 </div>
                             </div>
                         </div>
+                        {selectedFilial && isMaster && (
+                            <div className="rounded-2xl border border-indigo-100 bg-indigo-50/40 px-4 py-4 space-y-3">
+                                <div className="flex flex-wrap items-center justify-between gap-2">
+                                    <div>
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Inventários da Filial {selectedFilial}</p>
+                                        <p className="text-xs font-semibold text-slate-600">
+                                            Próximo automático: <span className="font-black text-indigo-700">Nº {nextAuditNumber}</span>
+                                        </p>
+                                    </div>
+                                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                                        {isLoadingBranchAudits ? 'carregando...' : `${completedAudits.length} concluído(s)`}
+                                    </span>
+                                </div>
+
+                                <div className={`grid grid-cols-1 ${latestOpenAudit ? 'md:grid-cols-3' : 'md:grid-cols-2'} gap-2`}>
+                                    <button
+                                        type="button"
+                                        onClick={handleStartAudit}
+                                        disabled={isProcessing || !isMaster || !!latestOpenAudit}
+                                        className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${isProcessing || !isMaster || !!latestOpenAudit
+                                            ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                            : 'bg-indigo-600 text-white hover:bg-indigo-500'}`}
+                                        title={
+                                            !isMaster
+                                                ? 'Somente Master cria novo inventário'
+                                                : latestOpenAudit
+                                                    ? `Existe inventário aberto Nº ${latestOpenAudit.audit_number}`
+                                                    : `Criar novo inventário automático Nº ${nextAuditNumber}`
+                                        }
+                                    >
+                                        Novo inventário
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowCompletedAuditsModal(true)}
+                                        disabled={completedAudits.length === 0}
+                                        className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${completedAudits.length === 0
+                                            ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                            : 'bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50'}`}
+                                        title={completedAudits.length === 0 ? 'Sem inventários concluídos' : 'Acessar inventários concluídos desta filial'}
+                                    >
+                                        Acessar concluído
+                                    </button>
+
+                                    {latestOpenAudit && (
+                                        <button
+                                            type="button"
+                                            onClick={resumeLatestOpenAudit}
+                                            disabled={isProcessing}
+                                            className={`px-3 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all ${isProcessing
+                                                ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                                : 'bg-amber-500 text-white hover:bg-amber-400'}`}
+                                            title={`Retomar inventário aberto Nº ${latestOpenAudit.audit_number}`}
+                                        >
+                                            Retomar aberto
+                                        </button>
+                                    )}
+                                </div>
+
+                                {latestOpenAudit && (
+                                    <div className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2">
+                                        <p className="text-[10px] font-black uppercase tracking-widest text-amber-700">
+                                            Existe inventário em aberto: Nº {latestOpenAudit.audit_number}
+                                        </p>
+                                        <p className="text-[11px] font-semibold text-amber-700 mt-1">
+                                            Atualizado em {latestOpenAudit.updated_at ? new Date(latestOpenAudit.updated_at).toLocaleString('pt-BR') : 'data indisponível'}.
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
                         <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
                             {GROUP_UPLOAD_IDS.map((groupId) => {
                                 const selectedFile = groupFiles[groupId];
@@ -4944,6 +5456,69 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 </div>
                             )}
                         </div>
+                        {showCompletedAuditsModal && (
+                            <div className="fixed inset-0 z-[1500] bg-black/40 flex items-center justify-center p-4">
+                                <div className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+                                    <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+                                        <div>
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Filial {selectedFilial}</p>
+                                            <h3 className="text-lg font-black text-slate-800">Inventários Concluídos</h3>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowCompletedAuditsModal(false)}
+                                            className="w-8 h-8 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-100"
+                                        >
+                                            <X className="w-4 h-4 mx-auto" />
+                                        </button>
+                                    </div>
+                                    <div className="max-h-[60vh] overflow-y-auto p-4 space-y-2">
+                                        {completedAudits.length === 0 ? (
+                                            <p className="text-sm font-semibold text-slate-400 text-center py-8">
+                                                Nenhum inventário concluído encontrado.
+                                            </p>
+                                        ) : (
+                                            completedAudits.map(item => (
+                                                <div key={`${item.branch}_${item.audit_number}_${item.id || ''}`} className="rounded-xl border border-slate-200 px-3 py-3 flex items-center justify-between gap-3">
+                                                    <div>
+                                                        <p className="text-sm font-black text-slate-800">Inventário Nº {item.audit_number}</p>
+                                                        <p className="text-[11px] text-slate-500 font-semibold">
+                                                            Concluído em {item.updated_at ? new Date(item.updated_at).toLocaleString('pt-BR') : 'data indisponível'}
+                                                        </p>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => void accessCompletedAuditByNumber(item.audit_number)}
+                                                            disabled={isProcessing}
+                                                            className={`px-3 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isProcessing
+                                                                ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                                                : 'bg-slate-800 text-white hover:bg-slate-700'}`}
+                                                            title={`Acessar inventário Nº ${item.audit_number} em modo consulta`}
+                                                        >
+                                                            Acessar
+                                                        </button>
+                                                        {isMaster && (
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => void reopenAuditByNumber(item.audit_number)}
+                                                                disabled={isProcessing}
+                                                                className={`px-3 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isProcessing
+                                                                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                                                                    : 'bg-blue-600 text-white hover:bg-blue-500'}`}
+                                                                title={`Reabrir inventário Nº ${item.audit_number}`}
+                                                            >
+                                                                Reabrir
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             </div>
@@ -4973,6 +5548,47 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     </div>
                 </div>
                 <div className="flex gap-3">
+                    <div className="hidden xl:flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
+                        <button
+                            onClick={handleFinishAudit}
+                            disabled={isProcessing || !canManageAuditLifecycle || isReadOnlyCompletedView || !dbSessionId}
+                            className={`px-3 py-2 rounded-lg font-black text-[9px] uppercase tracking-widest flex items-center gap-1.5 transition-all ${isProcessing || !canManageAuditLifecycle || isReadOnlyCompletedView || !dbSessionId
+                                ? 'bg-slate-500/50 text-slate-300 cursor-not-allowed'
+                                : 'bg-emerald-500 hover:bg-emerald-400 text-white shadow-lg'}`}
+                            title={
+                                !canManageAuditLifecycle
+                                    ? 'Somente Master/Admin'
+                                    : isReadOnlyCompletedView
+                                        ? 'Inventário concluído em modo consulta. Reabra para editar.'
+                                        : !dbSessionId
+                                            ? 'Nenhum inventário aberto ativo'
+                                        : 'Finaliza e salva no Supabase para liberar o próximo número'
+                            }
+                        >
+                            <CheckSquare className="w-3.5 h-3.5" />
+                            Salvar e Encerrar
+                        </button>
+                        <button
+                            onClick={handleReopenAudit}
+                            disabled={isProcessing || !isMaster}
+                            className={`px-3 py-2 rounded-lg font-black text-[9px] uppercase tracking-widest transition-all ${isProcessing || !isMaster
+                                ? 'bg-slate-500/50 text-slate-300 cursor-not-allowed'
+                                : 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg'}`}
+                            title={!isMaster ? 'Somente Master' : 'Reabre inventário salvo (concluído)'}
+                        >
+                            Reabrir
+                        </button>
+                        <button
+                            onClick={handleDeleteCurrentAudit}
+                            disabled={isProcessing || !isMaster}
+                            className={`px-3 py-2 rounded-lg font-black text-[9px] uppercase tracking-widest transition-all ${isProcessing || !isMaster
+                                ? 'bg-slate-500/50 text-slate-300 cursor-not-allowed'
+                                : 'bg-red-600 hover:bg-red-500 text-white shadow-lg'}`}
+                            title={!isMaster ? 'Somente Master pode excluir permanentemente' : 'Exclusão permanente'}
+                        >
+                            Excluir
+                        </button>
+                    </div>
                     <button
                         onClick={async () => {
                             setIsRefreshing(true);
@@ -4997,11 +5613,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     <button onClick={handleExportPDF} className="bg-white/10 hover:bg-white/20 px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all border border-white/10">
                         <FileBox className="w-4 h-4" /> PDF ANALÍTICO
                     </button>
-                    {Math.round(branchMetrics.progress) === 100 && (
-                        <button onClick={handleFinishAudit} disabled={!isMaster} className={`px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all shadow-lg ${!isMaster ? 'bg-slate-400 opacity-50 cursor-not-allowed' : 'bg-emerald-500 hover:bg-emerald-400 animate-pulse'}`}>
-                            <CheckSquare className="w-4 h-4" /> ENCERRAR INVENTÁRIO Nº {nextAuditNumber}
-                        </button>
-                    )}
                     <button onClick={handleSafeExit} className="w-10 h-10 rounded-xl bg-red-600/20 text-red-500 border border-red-500/30 flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-lg active:scale-90" title="Sair e Salvar">
                         <Power className="w-5 h-5" />
                     </button>

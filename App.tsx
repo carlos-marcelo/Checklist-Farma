@@ -248,6 +248,29 @@ const normalizeBranchLabel = (raw: string | null | undefined): string => {
     return s.replace(/\s+/g, ' ');
 };
 
+const buildBranchQueryVariants = (raw: string | null | undefined): string[] => {
+    const base = String(raw || '').trim();
+    if (!base) return [];
+
+    const normalized = normalizeBranchLabel(base);
+    const variants = new Set<string>([base, normalized]);
+    const digits = base.match(/\d+/g)?.join('') || normalized.match(/\d+/g)?.join('') || '';
+
+    if (digits) {
+        variants.add(digits);
+        variants.add(`Filial ${digits}`);
+    }
+
+    return Array.from(variants).map(v => v.trim()).filter(Boolean);
+};
+
+const normalizeAuditCategoryStatus = (status: unknown): 'done' | 'in_progress' | 'todo' => {
+    const normalized = String(status || '').trim().toLowerCase();
+    if (normalized === 'concluido' || normalized === 'done') return 'done';
+    if (normalized === 'iniciado' || normalized === 'in_progress') return 'in_progress';
+    return 'todo';
+};
+
 const formatBranchFilterLabel = (value: string) => {
     const canonical = canonicalizeFilterLabel(value);
     return canonical.replace(/\d+/g, digits => digits.padStart(2, '0')).toUpperCase();
@@ -1421,6 +1444,10 @@ const App: React.FC = () => {
     const [viewingStockConferenceReport, setViewingStockConferenceReport] = useState<EnhancedStockConferenceReport | null>(null);
     const [stockBranchFilters, setStockBranchFilters] = useState<string[]>([]);
     const [stockAreaFilter, setStockAreaFilter] = useState<string>('all');
+    const [dashboardAuditSessions, setDashboardAuditSessions] = useState<SupabaseService.DbAuditSession[]>([]);
+    const [isLoadingDashboardAudits, setIsLoadingDashboardAudits] = useState(false);
+    const [dashboardAuditsError, setDashboardAuditsError] = useState<string | null>(null);
+    const [dashboardAuditsFetchedAt, setDashboardAuditsFetchedAt] = useState<string | null>(null);
 
     // Logs & Eventos
     const [appEventLogs, setAppEventLogs] = useState<SupabaseService.DbAppEventLog[]>([]);
@@ -4546,6 +4573,72 @@ const App: React.FC = () => {
         return users;
     }, [users, currentUser]);
 
+    const dashboardAuditBranchCandidates = useMemo(() => {
+        const set = new Set<string>();
+        if (currentUser?.filial) {
+            buildBranchQueryVariants(currentUser.filial).forEach(v => set.add(v));
+        }
+        scopedUsers.forEach(u => {
+            buildBranchQueryVariants(u.filial || '').forEach(v => set.add(v));
+        });
+        scopedCompanies.forEach(c => {
+            (c.areas || []).forEach((area: any) => {
+                (area.branches || []).forEach((branch: string) => {
+                    buildBranchQueryVariants(branch).forEach(v => set.add(v));
+                });
+            });
+        });
+        return Array.from(set);
+    }, [currentUser?.filial, scopedUsers, scopedCompanies]);
+
+    const loadDashboardAuditSessions = useCallback(async () => {
+        if (!currentUser) return;
+        setIsLoadingDashboardAudits(true);
+        setDashboardAuditsError(null);
+        try {
+            const queryBranches = Array.from(new Set(dashboardAuditBranchCandidates)).filter(Boolean);
+            let query = supabase
+                .from('audit_sessions')
+                .select('id, branch, audit_number, status, progress, data, user_email, created_at, updated_at')
+                .eq('status', 'open')
+                .order('updated_at', { ascending: false })
+                .limit(300);
+
+            if (queryBranches.length > 0) {
+                query = query.in('branch', queryBranches);
+            }
+
+            const { data, error } = await query;
+            if (error) throw error;
+
+            const rows = (data || []) as SupabaseService.DbAuditSession[];
+            const scopedRows = currentUser.role === 'MASTER'
+                ? rows
+                : rows.filter(session => {
+                    const currentBranch = String(currentUser.filial || '').trim();
+                    if (!currentBranch) return false;
+                    const sessionRaw = String(session.branch || '').trim();
+                    if (sessionRaw === currentBranch) return true;
+                    return normalizeBranchLabel(sessionRaw) === normalizeBranchLabel(currentBranch);
+                });
+
+            setDashboardAuditSessions(scopedRows);
+            setDashboardAuditsFetchedAt(new Date().toISOString());
+        } catch (error) {
+            console.error('Erro ao carregar sessões abertas de auditoria para o dashboard:', error);
+            setDashboardAuditSessions([]);
+            setDashboardAuditsError('Não foi possível carregar auditorias abertas agora.');
+        } finally {
+            setIsLoadingDashboardAudits(false);
+        }
+    }, [currentUser, dashboardAuditBranchCandidates]);
+
+    useEffect(() => {
+        if (currentView !== 'dashboard') return;
+        if (!currentUser) return;
+        void loadDashboardAuditSessions();
+    }, [currentView, currentUser, loadDashboardAuditSessions]);
+
     const logBranchOptions = useMemo(() => {
         // Usa Map normalizado para deduplicar variações: '8' e 'Filial 8' → 'Filial 8'
         const normalized = new Map<string, string>(); // key=UPPERCASE, value=label canônico
@@ -4745,6 +4838,189 @@ const App: React.FC = () => {
             return safeB - safeA;
         });
     };
+
+    const dashboardAuditOverview = useMemo(() => {
+        type BranchMetric = {
+            branch: string;
+            area: string;
+            auditNumber: number;
+            updatedAt: string;
+            progressPct: number;
+            totalSkus: number;
+            countedSkus: number;
+            pendingSkus: number;
+            totalUnits: number;
+            countedUnits: number;
+            pendingUnits: number;
+            diffQty: number;
+            diffCost: number;
+            termsWithExcel: number;
+        };
+
+        const branchToArea = new Map<string, string>();
+        scopedCompanies.forEach(c => {
+            (c.areas || []).forEach((area: any) => {
+                const areaName = String(area?.name || '').trim() || 'Sem Área';
+                (area.branches || []).forEach((branch: string) => {
+                    const normalized = normalizeBranchLabel(branch);
+                    branchToArea.set(normalized, areaName);
+                });
+            });
+        });
+        scopedUsers.forEach(u => {
+            const normalized = normalizeBranchLabel(u.filial || '');
+            if (normalized === 'Sem Filial') return;
+            if (!branchToArea.has(normalized)) {
+                branchToArea.set(normalized, (u.area || 'Sem Área').trim() || 'Sem Área');
+            }
+        });
+
+        const latestByBranch = new Map<string, SupabaseService.DbAuditSession>();
+        dashboardAuditSessions.forEach(session => {
+            const branchLabel = normalizeBranchLabel(session.branch);
+            const prev = latestByBranch.get(branchLabel);
+            if (!prev) {
+                latestByBranch.set(branchLabel, session);
+                return;
+            }
+            const prevTs = Date.parse(String(prev.updated_at || prev.created_at || '')) || 0;
+            const curTs = Date.parse(String(session.updated_at || session.created_at || '')) || 0;
+            if (curTs > prevTs || (curTs === prevTs && Number(session.audit_number || 0) > Number(prev.audit_number || 0))) {
+                latestByBranch.set(branchLabel, session);
+            }
+        });
+
+        const branches: BranchMetric[] = [];
+        latestByBranch.forEach((session, branchLabel) => {
+            const parsedData = parseJsonValue<any>(session.data) || session.data || {};
+            const groups = Array.isArray(parsedData?.groups) ? parsedData.groups : [];
+
+            let totalSkus = 0;
+            let countedSkus = 0;
+            let totalUnits = 0;
+            let countedUnits = 0;
+
+            groups.forEach((group: any) => {
+                (group?.departments || []).forEach((dept: any) => {
+                    (dept?.categories || []).forEach((cat: any) => {
+                        const itemsCount = Number(cat?.itemsCount || 0);
+                        const units = Number(cat?.totalQuantity || 0);
+                        const status = normalizeAuditCategoryStatus(cat?.status);
+                        totalSkus += itemsCount;
+                        totalUnits += units;
+                        if (status === 'done') {
+                            countedSkus += itemsCount;
+                            countedUnits += units;
+                        }
+                    });
+                });
+            });
+
+            let diffQty = 0;
+            let diffCost = 0;
+            let termsWithExcel = 0;
+            const termDrafts = parsedData?.termDrafts && typeof parsedData.termDrafts === 'object'
+                ? Object.values(parsedData.termDrafts)
+                : [];
+            termDrafts.forEach((draft: any) => {
+                if (!draft?.excelMetrics) return;
+                if (draft?.excelMetricsRemovedAt && !draft?.excelMetrics) return;
+                termsWithExcel += 1;
+                diffQty += Number(draft.excelMetrics?.diffQty || 0);
+                diffCost += Number(draft.excelMetrics?.diffCost || 0);
+            });
+
+            const pendingSkus = Math.max(0, totalSkus - countedSkus);
+            const pendingUnits = Math.max(0, totalUnits - countedUnits);
+            const progressPct = totalSkus > 0
+                ? (countedSkus / totalSkus) * 100
+                : Number(session.progress || 0);
+
+            branches.push({
+                branch: branchLabel,
+                area: branchToArea.get(branchLabel) || 'Sem Área',
+                auditNumber: Number(session.audit_number || 0),
+                updatedAt: String(session.updated_at || session.created_at || ''),
+                progressPct,
+                totalSkus,
+                countedSkus,
+                pendingSkus,
+                totalUnits,
+                countedUnits,
+                pendingUnits,
+                diffQty,
+                diffCost,
+                termsWithExcel
+            });
+        });
+
+        branches.sort((a, b) => {
+            if (b.pendingSkus !== a.pendingSkus) return b.pendingSkus - a.pendingSkus;
+            return Math.abs(b.diffCost) - Math.abs(a.diffCost);
+        });
+
+        const areaMap = new Map<string, {
+            area: string;
+            branches: number;
+            totalSkus: number;
+            countedSkus: number;
+            pendingSkus: number;
+            countedUnits: number;
+            pendingUnits: number;
+            diffCost: number;
+        }>();
+
+        branches.forEach(item => {
+            const current = areaMap.get(item.area) || {
+                area: item.area,
+                branches: 0,
+                totalSkus: 0,
+                countedSkus: 0,
+                pendingSkus: 0,
+                countedUnits: 0,
+                pendingUnits: 0,
+                diffCost: 0
+            };
+            current.branches += 1;
+            current.totalSkus += item.totalSkus;
+            current.countedSkus += item.countedSkus;
+            current.pendingSkus += item.pendingSkus;
+            current.countedUnits += item.countedUnits;
+            current.pendingUnits += item.pendingUnits;
+            current.diffCost += item.diffCost;
+            areaMap.set(item.area, current);
+        });
+
+        const areas = Array.from(areaMap.values()).sort((a, b) => b.pendingSkus - a.pendingSkus);
+        const summary = branches.reduce((acc, item) => {
+            acc.openAudits += 1;
+            acc.totalSkus += item.totalSkus;
+            acc.countedSkus += item.countedSkus;
+            acc.pendingSkus += item.pendingSkus;
+            acc.totalUnits += item.totalUnits;
+            acc.countedUnits += item.countedUnits;
+            acc.pendingUnits += item.pendingUnits;
+            acc.diffQty += item.diffQty;
+            acc.diffCost += item.diffCost;
+            return acc;
+        }, {
+            openAudits: 0,
+            totalSkus: 0,
+            countedSkus: 0,
+            pendingSkus: 0,
+            totalUnits: 0,
+            countedUnits: 0,
+            pendingUnits: 0,
+            diffQty: 0,
+            diffCost: 0
+        });
+
+        const accumulatedPct = summary.totalSkus > 0
+            ? (summary.countedSkus / summary.totalSkus) * 100
+            : 0;
+
+        return { summary, accumulatedPct, areas, branches };
+    }, [dashboardAuditSessions, scopedCompanies, scopedUsers]);
 
     // --- RENDER ---
 
@@ -8361,18 +8637,140 @@ const App: React.FC = () => {
                                         </p>
                                     </div>
                                     <div className="bg-blue-50 text-blue-600 px-4 py-2 rounded-full text-[10px] font-black uppercase tracking-widest">
-                                        Em breve
+                                        Radar ativo
                                     </div>
                                 </div>
                             </div>
 
                             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-                                {Array.from({ length: 6 }).map((_, idx) => (
+                                <div className="sm:col-span-2 lg:col-span-3 bg-white border border-gray-100 rounded-[28px] p-6 shadow-sm space-y-5">
+                                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                                        <div>
+                                            <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500">Auditoria de Estoque</p>
+                                            <h3 className="text-xl font-black text-gray-900">Resumo de Auditorias Abertas</h3>
+                                            <p className="text-xs font-semibold text-gray-500 mt-1">
+                                                Visão consolidada por filial e área, com progresso real, saldo pendente e divergência acumulada.
+                                            </p>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                                                {dashboardAuditsFetchedAt ? `Atualizado: ${formatFullDateTime(dashboardAuditsFetchedAt)}` : 'Aguardando carga'}
+                                            </span>
+                                            <button
+                                                type="button"
+                                                onClick={() => void loadDashboardAuditSessions()}
+                                                disabled={isLoadingDashboardAudits}
+                                                className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-gray-200 text-xs font-black uppercase tracking-widest text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                                            >
+                                                <RefreshCw size={14} className={isLoadingDashboardAudits ? 'animate-spin' : ''} />
+                                                {isLoadingDashboardAudits ? 'Atualizando' : 'Atualizar'}
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {dashboardAuditsError && (
+                                        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-bold text-red-700">
+                                            {dashboardAuditsError}
+                                        </div>
+                                    )}
+
+                                    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+                                        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Auditorias abertas</p>
+                                            <p className="text-2xl font-black text-indigo-700">{dashboardAuditOverview.summary.openAudits}</p>
+                                        </div>
+                                        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Contado (SKUs)</p>
+                                            <p className="text-2xl font-black text-emerald-700">{dashboardAuditOverview.summary.countedSkus.toLocaleString('pt-BR')}</p>
+                                        </div>
+                                        <div className="rounded-2xl border border-amber-100 bg-amber-50/50 px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-amber-500">Falta contar</p>
+                                            <p className="text-2xl font-black text-amber-700">{dashboardAuditOverview.summary.pendingSkus.toLocaleString('pt-BR')}</p>
+                                        </div>
+                                        <div className="rounded-2xl border border-blue-100 bg-blue-50/50 px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">% acumulada</p>
+                                            <p className="text-2xl font-black text-blue-700">{dashboardAuditOverview.accumulatedPct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</p>
+                                        </div>
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Qtde divergência</p>
+                                            <p className={`text-2xl font-black ${dashboardAuditOverview.summary.diffQty < 0 ? 'text-red-600' : dashboardAuditOverview.summary.diffQty > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
+                                                {dashboardAuditOverview.summary.diffQty > 0 ? '+' : ''}{dashboardAuditOverview.summary.diffQty.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
+                                            </p>
+                                        </div>
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Divergência R$</p>
+                                            <p className={`text-lg font-black ${dashboardAuditOverview.summary.diffCost < 0 ? 'text-red-600' : dashboardAuditOverview.summary.diffCost > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
+                                                {dashboardAuditOverview.summary.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                                        <div className="rounded-2xl border border-gray-100 bg-white p-4">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">Por Área</p>
+                                            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                                                {dashboardAuditOverview.areas.length === 0 ? (
+                                                    <p className="text-sm font-semibold text-gray-400">Sem auditorias abertas no momento.</p>
+                                                ) : (
+                                                    dashboardAuditOverview.areas.map(area => {
+                                                        const pct = area.totalSkus > 0 ? (area.countedSkus / area.totalSkus) * 100 : 0;
+                                                        return (
+                                                            <div key={area.area} className="rounded-xl border border-gray-100 px-3 py-2">
+                                                                <div className="flex items-center justify-between">
+                                                                    <p className="text-sm font-black text-gray-800">{area.area}</p>
+                                                                    <p className="text-[11px] font-bold text-gray-500">{area.branches} filial(is)</p>
+                                                                </div>
+                                                                <div className="mt-1 flex items-center justify-between text-xs">
+                                                                    <span className="font-bold text-emerald-600">{area.countedSkus.toLocaleString('pt-BR')} contados</span>
+                                                                    <span className="font-bold text-amber-600">{area.pendingSkus.toLocaleString('pt-BR')} pendentes</span>
+                                                                </div>
+                                                                <div className="mt-2 h-2 rounded-full bg-gray-100 overflow-hidden">
+                                                                    <div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="rounded-2xl border border-gray-100 bg-white p-4">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">Por Filial</p>
+                                            <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                                                {dashboardAuditOverview.branches.length === 0 ? (
+                                                    <p className="text-sm font-semibold text-gray-400">Nenhuma filial com auditoria aberta.</p>
+                                                ) : (
+                                                    dashboardAuditOverview.branches.map(branch => (
+                                                        <div key={`${branch.branch}_${branch.auditNumber}`} className="rounded-xl border border-gray-100 px-3 py-2">
+                                                            <div className="flex items-center justify-between gap-3">
+                                                                <p className="text-sm font-black text-gray-800">{branch.branch}</p>
+                                                                <span className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Inv. {branch.auditNumber}</span>
+                                                            </div>
+                                                            <div className="mt-1 grid grid-cols-2 gap-2 text-[11px] font-bold">
+                                                                <span className="text-gray-600">{branch.countedSkus.toLocaleString('pt-BR')} / {branch.totalSkus.toLocaleString('pt-BR')} SKUs</span>
+                                                                <span className="text-right text-amber-600">{branch.pendingSkus.toLocaleString('pt-BR')} faltando</span>
+                                                                <span className="text-gray-500">{branch.area}</span>
+                                                                <span className={`text-right ${branch.diffCost < 0 ? 'text-red-600' : branch.diffCost > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                                                                    {branch.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                </span>
+                                                            </div>
+                                                            <div className="mt-2 h-2 rounded-full bg-gray-100 overflow-hidden">
+                                                                <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.max(0, Math.min(100, branch.progressPct))}%` }} />
+                                                            </div>
+                                                        </div>
+                                                    ))
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {Array.from({ length: 5 }).map((_, idx) => (
                                     <div
                                         key={`bi-placeholder-${idx}`}
                                         className="bg-white/60 border border-dashed border-gray-200 rounded-[28px] h-44 flex flex-col items-center justify-center text-gray-400 font-bold text-sm uppercase tracking-widest"
                                     >
-                                        Widget {idx + 1}
+                                        Widget {idx + 2}
                                         <span className="text-[10px] font-black text-gray-300 mt-2">Arraste aqui</span>
                                     </div>
                                 ))}
