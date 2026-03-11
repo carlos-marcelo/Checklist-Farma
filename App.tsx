@@ -4640,9 +4640,11 @@ const App: React.FC = () => {
         if (!currentUser) return;
         if (currentView !== 'dashboard') return;
         // Atualiza automaticamente apenas ao ENTRAR na tela de dashboard.
-        if (previousView === 'dashboard') return;
+        // Em F5, o currentUser pode chegar depois e previousView já ser "dashboard".
+        // Nesse caso, se ainda não houve carga ("Aguardando carga"), deve carregar.
+        if (previousView === 'dashboard' && dashboardAuditsFetchedAt) return;
         void loadDashboardAuditSessions();
-    }, [currentView, currentUser, loadDashboardAuditSessions]);
+    }, [currentView, currentUser, loadDashboardAuditSessions, dashboardAuditsFetchedAt]);
 
     const logBranchOptions = useMemo(() => {
         // Usa Map normalizado para deduplicar variações: '8' e 'Filial 8' → 'Filial 8'
@@ -8673,12 +8675,9 @@ const App: React.FC = () => {
                                         <div>
                                             <p className="text-[10px] font-black uppercase tracking-[0.2em] text-indigo-500">Auditoria de Estoque</p>
                                             <h3 className="text-xl font-black text-gray-900">Resumo de Auditorias Abertas</h3>
-                                            <p className="text-xs font-semibold text-gray-500 mt-1">
-                                                Visão consolidada por filial e área, com progresso real, saldo pendente e divergência acumulada.
-                                            </p>
                                         </div>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                                        <div className="flex items-center justify-end gap-3">
+                                            <span className="text-[10px] leading-none font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap text-right">
                                                 {dashboardAuditsFetchedAt ? `Atualizado: ${formatFullDateTime(dashboardAuditsFetchedAt)}` : 'Aguardando carga'}
                                             </span>
                                             <button
@@ -8700,45 +8699,53 @@ const App: React.FC = () => {
                                     )}
 
                                     <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-4 gap-3">
-                                        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
+                                        <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Auditorias abertas</p>
                                             <p className="text-[1.65rem] leading-none font-black text-indigo-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.summary.openAudits}</p>
+                                            <p className="text-[9px] font-bold text-indigo-500/80 leading-none">Inventários em andamento no momento</p>
                                         </div>
-                                        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
-                                            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Qtde contada</p>
+                                        <div className="rounded-2xl border border-emerald-100 bg-emerald-50/50 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Qtde conferida</p>
                                             <p className="text-[1.65rem] leading-none font-black text-emerald-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.summary.countedUnits.toLocaleString('pt-BR')}</p>
+                                            <p className="text-[9px] font-bold text-emerald-600/80 leading-none">Unidades já conferidas no físico</p>
                                         </div>
-                                        <div className="rounded-2xl border border-amber-100 bg-amber-50/50 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
-                                            <p className="text-[10px] font-black uppercase tracking-widest text-amber-500">Falta contar</p>
-                                            <p className="text-[1.65rem] leading-none font-black text-amber-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.summary.pendingSkus.toLocaleString('pt-BR')}</p>
-                                        </div>
-                                        <div className="rounded-2xl border border-blue-100 bg-blue-50/50 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
-                                            <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">% acumulada</p>
-                                            <p className="text-[1.65rem] leading-none font-black text-blue-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.accumulatedPct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</p>
-                                        </div>
-                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Qtde divergência</p>
                                             <p className={`text-[1.65rem] leading-none font-black whitespace-nowrap tabular-nums ${dashboardAuditOverview.summary.diffQty < 0 ? 'text-red-600' : dashboardAuditOverview.summary.diffQty > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
                                                 {dashboardAuditOverview.summary.diffQty > 0 ? '+' : ''}{dashboardAuditOverview.summary.diffQty.toLocaleString('pt-BR', { maximumFractionDigits: 0 })}
                                             </p>
+                                            <p className="text-[9px] font-bold text-slate-500/80 leading-none">Diferença líquida entre sistema e físico</p>
                                         </div>
-                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
+                                        <div className="rounded-2xl border border-amber-100 bg-amber-50/50 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-amber-500">Falta conferir</p>
+                                            <p className="text-[1.65rem] leading-none font-black text-amber-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.summary.pendingSkus.toLocaleString('pt-BR')}</p>
+                                            <p className="text-[9px] font-bold text-amber-700/80 leading-none">SKUs ainda pendentes de conferência</p>
+                                        </div>
+                                        <div className="rounded-2xl border border-blue-100 bg-blue-50/50 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">% conferido acumulado</p>
+                                            <p className="text-[1.65rem] leading-none font-black text-blue-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.accumulatedPct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</p>
+                                            <p className="text-[9px] font-bold text-blue-500/80 leading-none">SKUs conferidos / SKUs previstos</p>
+                                        </div>
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Divergência R$</p>
                                             <p className={`text-[1.5rem] leading-none font-black whitespace-nowrap tabular-nums ${dashboardAuditOverview.summary.diffCost < 0 ? 'text-red-600' : dashboardAuditOverview.summary.diffCost > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
                                                 {dashboardAuditOverview.summary.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                             </p>
+                                            <p className="text-[9px] font-bold text-slate-500/80 leading-none">Impacto financeiro total das divergências</p>
                                         </div>
-                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
-                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total contado R$</p>
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Total conferido R$</p>
                                             <p className="text-[1.5rem] leading-none font-black text-slate-700 whitespace-nowrap tabular-nums">
                                                 {dashboardAuditOverview.summary.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                             </p>
+                                            <p className="text-[9px] font-bold text-slate-500/80 leading-none">Valor em custo do que já foi conferido</p>
                                         </div>
-                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-32 min-w-0 flex flex-col items-center justify-center text-center gap-3">
+                                        <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Rep. divergência</p>
                                             <p className={`text-[1.65rem] leading-none font-black whitespace-nowrap tabular-nums ${dashboardAuditOverview.summaryDivergencePct < 0 ? 'text-red-600' : dashboardAuditOverview.summaryDivergencePct > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>
                                                 {dashboardAuditOverview.summaryDivergencePct > 0 ? '+' : ''}{dashboardAuditOverview.summaryDivergencePct.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
                                             </p>
+                                            <p className="text-[9px] font-bold text-slate-500/80 leading-none">Divergência R$ sobre o total conferido</p>
                                         </div>
                                     </div>
 
@@ -8759,7 +8766,7 @@ const App: React.FC = () => {
                                                                     <p className="text-[11px] font-bold text-gray-500">{area.branches} filial(is)</p>
                                                                 </div>
                                                                 <div className="mt-1 grid grid-cols-2 gap-2 text-[11px] font-bold">
-                                                                    <span className="text-emerald-600 whitespace-nowrap tabular-nums">{area.countedUnits.toLocaleString('pt-BR')} un. contadas</span>
+                                                                    <span className="text-emerald-600 whitespace-nowrap tabular-nums">{area.countedUnits.toLocaleString('pt-BR')} un. conferidas</span>
                                                                     <span className={`text-right ${area.diffQty < 0 ? 'text-red-600' : area.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
                                                                         {area.diffQty > 0 ? '+' : ''}{area.diffQty.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} un.
                                                                     </span>
@@ -8795,7 +8802,7 @@ const App: React.FC = () => {
                                                                 <span className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Inv. {branch.auditNumber}</span>
                                                             </div>
                                                             <div className="mt-1 grid grid-cols-2 gap-2 text-[11px] font-bold">
-                                                                <span className="text-gray-600 whitespace-nowrap tabular-nums">{branch.countedUnits.toLocaleString('pt-BR')} un. contadas</span>
+                                                                <span className="text-gray-600 whitespace-nowrap tabular-nums">{branch.countedUnits.toLocaleString('pt-BR')} un. conferidas</span>
                                                                 <span className={`text-right ${branch.diffQty < 0 ? 'text-red-600' : branch.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
                                                                     {branch.diffQty > 0 ? '+' : ''}{branch.diffQty.toLocaleString('pt-BR', { maximumFractionDigits: 0 })} un.
                                                                 </span>
