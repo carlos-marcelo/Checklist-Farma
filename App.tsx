@@ -4859,6 +4859,8 @@ const App: React.FC = () => {
             totalUnits: number;
             countedUnits: number;
             pendingUnits: number;
+            totalCost: number;
+            pendingCost: number;
             diffQty: number;
             diffCost: number;
             countedCost: number;
@@ -4900,6 +4902,8 @@ const App: React.FC = () => {
         });
 
         const branches: BranchMetric[] = [];
+        const uniqueSkuSet = new Set<string>();
+        const uniqueSkuDoneSet = new Set<string>();
         latestByBranch.forEach((session, branchLabel) => {
             const parsedData = parseJsonValue<any>(session.data) || session.data || {};
             const groups = Array.isArray(parsedData?.groups) ? parsedData.groups : [];
@@ -4908,6 +4912,7 @@ const App: React.FC = () => {
             let countedSkus = 0;
             let totalUnits = 0;
             let countedUnits = 0;
+            let totalCost = 0;
             let countedCost = 0;
 
             groups.forEach((group: any) => {
@@ -4917,8 +4922,16 @@ const App: React.FC = () => {
                         const units = Number(cat?.totalQuantity || 0);
                         const cost = Number(cat?.totalCost || 0);
                         const status = normalizeAuditCategoryStatus(cat?.status);
+                        const products = Array.isArray(cat?.products) ? cat.products : [];
+                        products.forEach((p: any) => {
+                            const code = String(p?.reducedCode || p?.code || '').trim();
+                            if (!code) return;
+                            uniqueSkuSet.add(code);
+                            if (status === 'done') uniqueSkuDoneSet.add(code);
+                        });
                         totalSkus += itemsCount;
                         totalUnits += units;
+                        totalCost += cost;
                         if (status === 'done') {
                             countedSkus += itemsCount;
                             countedUnits += units;
@@ -4944,6 +4957,7 @@ const App: React.FC = () => {
 
             const pendingSkus = Math.max(0, totalSkus - countedSkus);
             const pendingUnits = Math.max(0, totalUnits - countedUnits);
+            const pendingCost = Math.max(0, totalCost - countedCost);
             const progressPct = totalSkus > 0
                 ? (countedSkus / totalSkus) * 100
                 : Number(session.progress || 0);
@@ -4961,6 +4975,8 @@ const App: React.FC = () => {
                 totalUnits,
                 countedUnits,
                 pendingUnits,
+                totalCost,
+                pendingCost,
                 diffQty,
                 diffCost,
                 countedCost,
@@ -5022,6 +5038,8 @@ const App: React.FC = () => {
             acc.totalUnits += item.totalUnits;
             acc.countedUnits += item.countedUnits;
             acc.pendingUnits += item.pendingUnits;
+            acc.totalCost += item.totalCost;
+            acc.pendingCost += item.pendingCost;
             acc.countedCost += item.countedCost;
             acc.diffQty += item.diffQty;
             acc.diffCost += item.diffCost;
@@ -5034,6 +5052,8 @@ const App: React.FC = () => {
             totalUnits: 0,
             countedUnits: 0,
             pendingUnits: 0,
+            totalCost: 0,
+            pendingCost: 0,
             countedCost: 0,
             diffQty: 0,
             diffCost: 0
@@ -5042,11 +5062,14 @@ const App: React.FC = () => {
         const accumulatedPct = summary.totalSkus > 0
             ? (summary.countedSkus / summary.totalSkus) * 100
             : 0;
+        const uniqueTotalSkus = uniqueSkuSet.size;
+        const uniqueCountedSkus = uniqueSkuDoneSet.size;
+        const uniquePendingSkus = Math.max(0, uniqueTotalSkus - uniqueCountedSkus);
         const summaryDivergencePct = summary.countedCost > 0
             ? (summary.diffCost / summary.countedCost) * 100
             : 0;
 
-        return { summary, accumulatedPct, summaryDivergencePct, areas, branches };
+        return { summary, accumulatedPct, summaryDivergencePct, uniqueTotalSkus, uniqueCountedSkus, uniquePendingSkus, areas, branches };
     }, [dashboardAuditSessions, scopedCompanies, scopedUsers]);
 
     // --- RENDER ---
@@ -8708,6 +8731,7 @@ const App: React.FC = () => {
                                             <p className="text-[10px] font-black uppercase tracking-widest text-emerald-500">Qtde conferida</p>
                                             <p className="text-[1.65rem] leading-none font-black text-emerald-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.summary.countedUnits.toLocaleString('pt-BR')}</p>
                                             <p className="text-[9px] font-bold text-emerald-600/80 leading-none">Unidades já conferidas no físico</p>
+                                            <p className="text-[9px] font-bold text-emerald-600/80 leading-none">Falta conferir un.: {dashboardAuditOverview.summary.pendingUnits.toLocaleString('pt-BR')}</p>
                                         </div>
                                         <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Qtde divergência</p>
@@ -8719,12 +8743,14 @@ const App: React.FC = () => {
                                         <div className="rounded-2xl border border-amber-100 bg-amber-50/50 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-amber-500">Falta conferir</p>
                                             <p className="text-[1.65rem] leading-none font-black text-amber-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.summary.pendingSkus.toLocaleString('pt-BR')}</p>
-                                            <p className="text-[9px] font-bold text-amber-700/80 leading-none">SKUs ainda pendentes de conferência</p>
+                                            <p className="text-[9px] font-bold text-amber-700/80 leading-none">SKU-filial pendente: {dashboardAuditOverview.summary.pendingSkus.toLocaleString('pt-BR')}</p>
+                                            <p className="text-[9px] font-bold text-amber-700/80 leading-none">SKU único pendente: {dashboardAuditOverview.uniquePendingSkus.toLocaleString('pt-BR')}</p>
+                                            <p className="text-[9px] font-bold text-amber-700/80 leading-none">Falta conferir R$: {dashboardAuditOverview.summary.pendingCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
                                         </div>
                                         <div className="rounded-2xl border border-blue-100 bg-blue-50/50 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-blue-500">% conferido acumulado</p>
                                             <p className="text-[1.65rem] leading-none font-black text-blue-700 whitespace-nowrap tabular-nums">{dashboardAuditOverview.accumulatedPct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%</p>
-                                            <p className="text-[9px] font-bold text-blue-500/80 leading-none">SKUs conferidos / SKUs previstos</p>
+                                            <p className="text-[9px] font-bold text-blue-500/80 leading-none">SKU-filial conferidos / previstos</p>
                                         </div>
                                         <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Divergência R$</p>
@@ -8739,6 +8765,7 @@ const App: React.FC = () => {
                                                 {dashboardAuditOverview.summary.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                             </p>
                                             <p className="text-[9px] font-bold text-slate-500/80 leading-none">Valor em custo do que já foi conferido</p>
+                                            <p className="text-[9px] font-bold text-slate-500/80 leading-none">Falta conferir R$: {dashboardAuditOverview.summary.pendingCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
                                         </div>
                                         <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-4 py-3 h-36 min-w-0 flex flex-col items-center justify-center text-center gap-2">
                                             <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Rep. divergência</p>
@@ -8782,6 +8809,9 @@ const App: React.FC = () => {
                                                                 <div className="mt-2 h-2 rounded-full bg-gray-100 overflow-hidden">
                                                                     <div className="h-full rounded-full bg-indigo-500" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
                                                                 </div>
+                                                                <p className="mt-1 text-[10px] font-black text-indigo-500 uppercase tracking-widest text-right">
+                                                                    {pct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                                                                </p>
                                                             </div>
                                                         );
                                                     })
@@ -8818,6 +8848,9 @@ const App: React.FC = () => {
                                                             <div className="mt-2 h-2 rounded-full bg-gray-100 overflow-hidden">
                                                                 <div className="h-full rounded-full bg-emerald-500" style={{ width: `${Math.max(0, Math.min(100, branch.progressPct))}%` }} />
                                                             </div>
+                                                            <p className="mt-1 text-[10px] font-black text-emerald-600 uppercase tracking-widest text-right">
+                                                                {branch.progressPct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
+                                                            </p>
                                                         </div>
                                                     ))
                                                 )}
