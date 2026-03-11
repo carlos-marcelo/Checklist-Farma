@@ -2220,17 +2220,114 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const hasNewerGlobalStock = Number.isFinite(globalStockTs)
             && (!Number.isFinite(currentStockTs) || globalStockTs > currentStockTs + 1000);
         const shouldReclassifyOpen = hasOpenStructure && hasStructureFiles && (hasLocalStructureFiles || !!fileStock || hasNewerGlobalStock);
-        const mergePreservingDone = (baseData: AuditData, rebuiltData: AuditData): AuditData => {
+        const mergePreservingDone = (
+            baseData: AuditData,
+            rebuiltData: AuditData
+        ): {
+            merged: AuditData;
+            ignored: {
+                closedGroups: number;
+                closedDepartments: number;
+                categories: number;
+                skus: number;
+                units: number;
+            };
+        } => {
+            const cloneCategory = (cat: Category): Category => ({ ...cat, products: [...(cat.products || [])] });
+            const cloneDepartment = (dept: Department): Department => ({
+                ...dept,
+                categories: (dept.categories || []).map(cloneCategory)
+            });
+            const cloneGroup = (group: Group): Group => ({
+                ...group,
+                departments: (group.departments || []).map(cloneDepartment)
+            });
+
+            const findBaseGroup = (group: Group) =>
+                (baseData.groups || []).find(bg => String(bg.id) === String(group.id) || bg.name === group.name);
+            const findBaseDept = (baseGroup: Group | undefined, dept: Department) =>
+                (baseGroup?.departments || []).find(bd => bd.id === dept.id || bd.name === dept.name);
+            const isDeptClosed = (dept?: Department) =>
+                !!dept && (dept.categories || []).length > 0 && (dept.categories || []).every(c => isDoneStatus(c.status));
+            const isGroupClosed = (group?: Group) => {
+                if (!group) return false;
+                const cats = (group.departments || []).flatMap(d => d.categories || []);
+                return cats.length > 0 && cats.every(c => isDoneStatus(c.status));
+            };
+            const summarizeCategories = (categories: Category[] = []) => categories.reduce((acc, cat) => {
+                acc.categories += 1;
+                acc.skus += Number(cat.itemsCount || 0);
+                acc.units += Number(cat.totalQuantity || 0);
+                return acc;
+            }, { categories: 0, skus: 0, units: 0 });
+            const summarizeDepartment = (dept?: Department) =>
+                summarizeCategories((dept?.categories || []) as Category[]);
+            const summarizeGroup = (group?: Group) => (group?.departments || []).reduce((acc, dept) => {
+                const current = summarizeDepartment(dept);
+                acc.categories += current.categories;
+                acc.skus += current.skus;
+                acc.units += current.units;
+                return acc;
+            }, { categories: 0, skus: 0, units: 0 });
+            const ignored = {
+                closedGroups: 0,
+                closedDepartments: 0,
+                categories: 0,
+                skus: 0,
+                units: 0
+            };
+
+            const rebuiltFilteredGroups = rebuiltData.groups.map(group => {
+                const baseGroup = findBaseGroup(group);
+                if (isGroupClosed(baseGroup)) {
+                    // Grupo concluído: congela a estrutura inteira como estava.
+                    const blockedGroup = summarizeGroup(group);
+                    ignored.closedGroups += 1;
+                    ignored.categories += blockedGroup.categories;
+                    ignored.skus += blockedGroup.skus;
+                    ignored.units += blockedGroup.units;
+                    return cloneGroup(baseGroup!);
+                }
+
+                const nextDepartments = group.departments.map(dept => {
+                    const baseDept = findBaseDept(baseGroup, dept);
+                    if (isDeptClosed(baseDept)) {
+                        // Departamento concluído: não aceita categoria nova.
+                        const blockedDept = summarizeDepartment(dept);
+                        ignored.closedDepartments += 1;
+                        ignored.categories += blockedDept.categories;
+                        ignored.skus += blockedDept.skus;
+                        ignored.units += blockedDept.units;
+                        return cloneDepartment(baseDept!);
+                    }
+                    return {
+                        ...dept,
+                        categories: (dept.categories || []).map(cloneCategory)
+                    };
+                });
+
+                // Garante manutenção de departamentos já concluídos que não vieram no rebuild.
+                (baseGroup?.departments || []).forEach(baseDept => {
+                    if (!isDeptClosed(baseDept)) return;
+                    const alreadyIncluded = nextDepartments.some(
+                        d => d.id === baseDept.id || d.name === baseDept.name
+                    );
+                    if (!alreadyIncluded) nextDepartments.push(cloneDepartment(baseDept));
+                });
+
+                return {
+                    ...group,
+                    departments: nextDepartments
+                };
+            });
+
             const merged: AuditData = {
                 ...rebuiltData,
                 termDrafts: baseData.termDrafts,
                 partialStarts: baseData.partialStarts,
                 partialCompleted: baseData.partialCompleted,
                 lastPartialBatchId: baseData.lastPartialBatchId,
-                groups: rebuiltData.groups.map(g => ({
-                    ...g,
-                    departments: g.departments.map(d => ({ ...d, categories: [...d.categories] }))
-                }))
+                groups: rebuiltFilteredGroups
             };
             const ensureGroup = (groupId: string, groupName: string) => {
                 let g = merged.groups.find(x => String(x.id) === String(groupId));
@@ -2263,7 +2360,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     });
                 });
             });
-            return merged;
+            return { merged, ignored };
         };
 
         if (!effectiveStockFile) {
@@ -2633,7 +2730,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 filial: selectedFilial,
                 inventoryNumber: inventoryNumber.trim()
             };
-            const finalData = (shouldReclassifyOpen && data) ? mergePreservingDone(data, nextData) : nextData;
+            const mergeResult = (shouldReclassifyOpen && data) ? mergePreservingDone(data, nextData) : null;
+            const finalData = mergeResult?.merged || nextData;
             const finalTermDrafts = (shouldReclassifyOpen && data)
                 ? (composeTermDraftsForPersist(((data as any).termDrafts || {}) as Record<string, TermForm>, termDrafts) as Record<string, any>)
                 : {};
@@ -2671,6 +2769,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             setFileStock(null);
             setIsUpdatingStock(false);
             setView({ level: 'groups' });
+            if (mergeResult && (mergeResult.ignored.closedGroups > 0 || mergeResult.ignored.closedDepartments > 0)) {
+                alert(
+                    `Reclassificação concluída com bloqueio de escopo finalizado.\n\n` +
+                    `Grupos concluídos bloqueados: ${mergeResult.ignored.closedGroups}\n` +
+                    `Departamentos concluídos bloqueados: ${mergeResult.ignored.closedDepartments}\n` +
+                    `Categorias ignoradas: ${mergeResult.ignored.categories.toLocaleString('pt-BR')}\n` +
+                    `SKUs ignorados: ${mergeResult.ignored.skus.toLocaleString('pt-BR')}\n` +
+                    `Unidades ignoradas: ${Math.round(mergeResult.ignored.units).toLocaleString('pt-BR')}`
+                );
+            }
         } catch (err) {
             const detail = err instanceof Error
                 ? err.message
@@ -6333,6 +6441,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     })}
 
                     {view.level === 'departments' && [...(selectedGroup?.departments || [])].sort((a, b) => {
+                        const aMetrics = getScopedMetrics({ type: 'department', groupId: selectedGroup!.id, deptId: a.id });
+                        const bMetrics = getScopedMetrics({ type: 'department', groupId: selectedGroup!.id, deptId: b.id });
+                        const aHasDivergence = !!aMetrics && (Math.abs(Number(aMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(aMetrics.diffCost || 0)) > 0.01);
+                        const bHasDivergence = !!bMetrics && (Math.abs(Number(bMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(bMetrics.diffCost || 0)) > 0.01);
+                        if (aHasDivergence && !bHasDivergence) return -1;
+                        if (!aHasDivergence && bHasDivergence) return 1;
+
                         const aHasInProgress = a.categories.some(c => isInProgressStatus(c.status));
                         const bHasInProgress = b.categories.some(c => isInProgressStatus(c.status));
                         if (aHasInProgress && !bHasInProgress) return -1;
@@ -6421,6 +6536,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     })}
 
                     {view.level === 'categories' && [...(selectedDept?.categories || [])].sort((a, b) => {
+                        const aMetrics = getScopedMetrics({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: a.id });
+                        const bMetrics = getScopedMetrics({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: b.id });
+                        const aHasDivergence = !!aMetrics && (Math.abs(Number(aMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(aMetrics.diffCost || 0)) > 0.01);
+                        const bHasDivergence = !!bMetrics && (Math.abs(Number(bMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(bMetrics.diffCost || 0)) > 0.01);
+                        if (aHasDivergence && !bHasDivergence) return -1;
+                        if (!aHasDivergence && bHasDivergence) return 1;
+
                         const aStatus = normalizeAuditStatus(a.status);
                         const bStatus = normalizeAuditStatus(b.status);
 
@@ -6439,10 +6561,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         const catStatus = normalizeAuditStatus(cat.status);
                         const canFinalize = isMaster && catStatus !== AuditStatus.TODO;
                         const startLabel = catStatus === AuditStatus.IN_PROGRESS ? 'PAUSAR' : 'INICIAR';
+                        const catProgressValue = catStatus === AuditStatus.DONE ? 100 : catStatus === AuditStatus.IN_PROGRESS ? 50 : 0;
                         return (
-                            <div key={cat.id} className={`p-6 rounded-[2rem] border-2 flex items-center justify-between gap-8 transition-all hover:shadow-lg group ${catStatus === AuditStatus.DONE ? 'border-emerald-500/20 bg-emerald-50/50' : catStatus === AuditStatus.IN_PROGRESS ? 'border-blue-200 bg-blue-50/40' : 'border-slate-50 bg-white'}`}>
+                            <div key={cat.id} className={`p-6 rounded-[2rem] border-2 flex items-center justify-between gap-8 transition-all hover:shadow-lg group ${catStatus === AuditStatus.DONE ? 'border-slate-200 bg-white' : catStatus === AuditStatus.IN_PROGRESS ? 'border-blue-200 bg-blue-50/40' : 'border-slate-50 bg-white'}`}>
                                 <div className="flex-1">
-                                    <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-2xl uppercase italic leading-none cursor-pointer hover:underline transition-all ${catStatus === AuditStatus.DONE ? 'text-emerald-900' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-900' : 'text-slate-900'} tracking-tighter`}>{cat.name}</h3>
+                                    <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-2xl uppercase italic leading-none cursor-pointer hover:underline transition-all ${catStatus === AuditStatus.DONE ? 'text-slate-900' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-900' : 'text-slate-900'} tracking-tighter`}>{cat.name}</h3>
                                     <div className="flex gap-10 mt-3 items-center">
                                         <div className="flex flex-col">
                                             <span className="text-[9px] font-black text-slate-400 uppercase italic">SKUs Importados</span>
@@ -6465,6 +6588,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         if (!metrics) return null;
                                         return <ExcelMetricsDashboard metrics={metrics} auditedBaseCost={cat.totalCost} />;
                                     })()}
+                                    <div className="mt-4">
+                                        <ProgressBar
+                                            percentage={catProgressValue}
+                                            size="md"
+                                            label="Status da Categoria"
+                                            tone={catStatus === AuditStatus.DONE ? 'green' : catStatus === AuditStatus.IN_PROGRESS ? 'blue' : 'auto'}
+                                        />
+                                    </div>
                                 </div>
                                 <div className="flex gap-4">
                                     <button
