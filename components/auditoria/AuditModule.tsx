@@ -847,6 +847,38 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
             if (isStaleRequest()) return;
             if (latest && latest.status !== 'completed') {
+                let canAutoOpenActive = allowActiveAuditAutoOpen;
+                if (!canAutoOpenActive) {
+                    if (silent) return;
+                    canAutoOpenActive = true;
+                    if (isMaster) {
+                        try {
+                            const history = await fetchAuditsHistory(requestedFilial);
+                            const completedCount = history.filter(item => item.status === 'completed').length;
+                            if (completedCount > 0) {
+                                canAutoOpenActive = window.confirm(
+                                    `Existe auditoria em aberto (Nº ${latest.audit_number}) e ${completedCount} inventário(s) concluído(s) nesta filial.\n\n` +
+                                    `OK: prosseguir com a auditoria em aberto.\n` +
+                                    `Cancelar: abrir a lista de inventários concluídos.`
+                                );
+                                if (!canAutoOpenActive) {
+                                    setShowCompletedAuditsModal(true);
+                                }
+                            }
+                        } catch (error) {
+                            console.warn('Falha ao carregar histórico para escolha de abertura:', error);
+                        }
+                    }
+                    if (!canAutoOpenActive) {
+                        setIsUpdatingStock(false);
+                        setDbSessionId(undefined);
+                        setNextAuditNumber(latest.audit_number + 1);
+                        setData(null);
+                        setTermDrafts({});
+                        return;
+                    }
+                    setAllowActiveAuditAutoOpen(true);
+                }
                 setIsReadOnlyCompletedView(false);
                 setConsultingAuditNumber(null);
                 setNextAuditNumber(latest.audit_number);
