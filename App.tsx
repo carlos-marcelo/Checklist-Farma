@@ -1498,6 +1498,7 @@ const App: React.FC = () => {
     const [lastUserActivity, setLastUserActivity] = useState<number>(Date.now());
     const ACTIVITY_TIMEOUT = 5000;
     const viewStartRef = useRef<{ view: string; startedAt: number } | null>(null);
+    const prevViewRef = useRef<string | null>(null);
     const autoLoginLoggedRef = useRef(false);
     const lastChecklistLogRef = useRef<string | null>(null);
 
@@ -4634,8 +4635,12 @@ const App: React.FC = () => {
     }, [currentUser, dashboardAuditBranchCandidates]);
 
     useEffect(() => {
-        if (currentView !== 'dashboard') return;
+        const previousView = prevViewRef.current;
+        prevViewRef.current = currentView;
         if (!currentUser) return;
+        if (currentView !== 'dashboard') return;
+        // Atualiza automaticamente apenas ao ENTRAR na tela de dashboard.
+        if (previousView === 'dashboard') return;
         void loadDashboardAuditSessions();
     }, [currentView, currentUser, loadDashboardAuditSessions]);
 

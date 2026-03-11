@@ -1128,6 +1128,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const inventoryNumber = useMemo(() => {
         return selectedFilial ? `${new Date().getFullYear()}-${selectedFilial.padStart(4, '0')}-${String(nextAuditNumber).padStart(4, '0')}` : '';
     }, [selectedFilial, nextAuditNumber]);
+    const accessedAuditNumber = consultingAuditNumber ?? nextAuditNumber;
 
     // Dummy setter to keep existing logic working without massive refactor
     const setInventoryNumber = (val: string) => { };
@@ -5616,6 +5617,10 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             <div className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_10px_#34d399]"></div>
                             <span className="text-[8px] font-bold text-emerald-400 mt-1 uppercase">LIVE</span>
                         </div>
+                    </div>
+                    <div className="hidden lg:flex flex-col items-start px-4 py-2 rounded-xl bg-white/5 border border-white/10 min-w-[130px]">
+                        <span className="text-[9px] font-black uppercase tracking-[0.18em] text-slate-300 leading-none">Inventário</span>
+                        <span className="text-xl font-black italic tracking-tight text-white leading-tight">Nº {accessedAuditNumber}</span>
                     </div>
                 </div>
                 <div className="flex gap-3">
