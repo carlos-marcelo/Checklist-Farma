@@ -783,7 +783,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             } else {
                 const fallbackCandidates = [cachedCurrent, cachedBackup].filter(Boolean) as DbAuditSession[];
                 if (fallbackCandidates.length > 0) {
-                    latest = fallbackCandidates.sort((a, b) => {
+                    const confirmedSessionId = sessionStorage.getItem(CONFIRMED_SESSION_KEY) || '';
+                    const safeFallbackCandidates = fallbackCandidates.filter(candidate => {
+                        if (candidate.status === 'completed') return true;
+                        return !!confirmedSessionId && candidate.id === confirmedSessionId;
+                    });
+                    const pool = safeFallbackCandidates.length > 0 ? safeFallbackCandidates : fallbackCandidates.filter(c => c.status === 'completed');
+                    if (pool.length === 0) {
+                        latest = null;
+                    } else {
+                        latest = pool.sort((a, b) => {
                         if (a.audit_number !== b.audit_number) return b.audit_number - a.audit_number;
                         const aTs = new Date(a.updated_at || 0).getTime();
                         const bTs = new Date(b.updated_at || 0).getTime();
@@ -791,7 +800,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         const aStrength = getAuditDataStrength((a.data as AuditData) || null);
                         const bStrength = getAuditDataStrength((b.data as AuditData) || null);
                         return bStrength - aStrength;
-                    })[0];
+                        })[0];
+                    }
                 }
             }
 
@@ -1051,7 +1061,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         () => branchAuditsHistory.filter(item => item.status === 'completed'),
         [branchAuditsHistory]
     );
-
     // Polling de sincronização entre usuários
     useEffect(() => {
         if (!selectedFilial) return;
@@ -1434,8 +1443,36 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }
         const progress = calculateProgress(data);
         const auditNumberToPersist = consultingAuditNumber ?? nextAuditNumber;
+        let totalCategories = 0;
+        let doneCategories = 0;
+        const pendingSample: string[] = [];
+        (data.groups || []).forEach(g => {
+            (g.departments || []).forEach(d => {
+                (d.categories || []).forEach(c => {
+                    totalCategories += 1;
+                    if (isDoneStatus(c.status)) {
+                        doneCategories += 1;
+                        return;
+                    }
+                    if (pendingSample.length < 6) {
+                        pendingSample.push(`${g.name} > ${d.name} > ${c.name}`);
+                    }
+                });
+            });
+        });
+        const pendingCategories = Math.max(0, totalCategories - doneCategories);
+        const openPartials = Array.isArray(data.partialStarts) ? data.partialStarts.length : 0;
+        const hasPendingWork = pendingCategories > 0 || openPartials > 0;
 
-        if (window.confirm(`ATENÇÃO: Você está prestes a FINALIZAR a auditoria Nº ${auditNumberToPersist}.\n\nEssa ação salvará a auditoria no Supabase como CONCLUÍDA.\nDepois você poderá iniciar a próxima auditoria da filial.\n\nDeseja continuar?`)) {
+        const finishMessage = hasPendingWork
+            ? `ATENÇÃO: Existem conferências pendentes na auditoria Nº ${auditNumberToPersist}.\n\n` +
+            `Categorias não finalizadas: ${pendingCategories} de ${totalCategories}\n` +
+            `Parciais abertas: ${openPartials}\n` +
+            `${pendingSample.length > 0 ? `\nExemplos pendentes:\n- ${pendingSample.join('\n- ')}\n` : '\n'}` +
+            `Essa ação encerrará a auditoria mesmo assim e salvará como CONCLUÍDA.\n\nDeseja encerrar mesmo assim?`
+            : `ATENÇÃO: Você está prestes a FINALIZAR a auditoria Nº ${auditNumberToPersist}.\n\nEssa ação salvará a auditoria no Supabase como CONCLUÍDA.\nDepois você poderá iniciar a próxima auditoria da filial.\n\nDeseja continuar?`;
+
+        if (window.confirm(finishMessage)) {
             try {
                 setIsProcessing(true);
                 const savedSession = await persistAuditSession({
@@ -3224,6 +3261,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const updateTermForm = (updater: (prev: TermForm) => TermForm) => {
         setTermForm(prev => {
             if (!prev) return prev;
+            if (isReadOnlyCompletedView) return prev;
             const next = updater(prev);
             if (termModal) {
                 const key = buildTermKey(termModal);
@@ -5012,6 +5050,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setAuditLookupOpen(false);
     }, []);
     const termScopeInfo = useMemo(() => (termModal ? buildTermScopeInfo(termModal) : null), [termModal, data]);
+    const canEditTerm = isMaster && !isReadOnlyCompletedView;
     const partialInfoList = useMemo(() => {
         if (!data?.partialStarts || data.partialStarts.length === 0) return [];
         const buildDeptLabel = (d: Department) => `${d.numericId || d.id} - ${d.name}`;
@@ -6288,8 +6327,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         type="text"
                                         value={termForm.inventoryNumber}
                                         onChange={(e) => updateTermForm(prev => ({ ...prev, inventoryNumber: e.target.value }))}
-                                        readOnly={!isMaster}
-                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                        readOnly={!canEditTerm}
+                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                     />
                                 </div>
                                 <div className="md:col-span-2 space-y-1">
@@ -6299,8 +6338,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         value={termForm.date}
                                         onChange={(e) => updateTermForm(prev => ({ ...prev, date: e.target.value }))}
                                         placeholder="DD/MM/AAAA"
-                                        readOnly={!isMaster}
-                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                        readOnly={!canEditTerm}
+                                        className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-sm text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                     />
                                 </div>
                             </div>
@@ -6319,22 +6358,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 value={termForm.managerName2}
                                                 onChange={(e) => updateTermForm(prev => ({ ...prev, managerName2: e.target.value }))}
                                                 placeholder="Nome do Gestor 1"
-                                                readOnly={!isMaster}
-                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                readOnly={!canEditTerm}
+                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
                                             <input
                                                 type="text"
                                                 value={termForm.managerCpf2}
                                                 onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf2: e.target.value }))}
                                                 placeholder="CPF Gestor 1"
-                                                readOnly={!isMaster}
-                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                readOnly={!canEditTerm}
+                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
                                         </div>
                                         {termForm.managerSignature2 ? (
                                             <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
                                                 <img src={termForm.managerSignature2} alt="Assinatura Gestor" className="max-h-full" />
-                                                {isMaster && (
+                                                {canEditTerm && (
                                                     <button
                                                         type="button"
                                                         onClick={() => updateTermForm(prev => ({ ...prev, managerSignature2: '' }))}
@@ -6345,7 +6384,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                     </button>
                                                 )}
                                             </div>
-                                        ) : isMaster ? (
+                                        ) : canEditTerm ? (
                                             <SignaturePad onEnd={async (dataUrl) => {
                                                 const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
                                                 updateTermForm(prev => ({ ...prev, managerSignature2: compressed }));
@@ -6362,22 +6401,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 value={termForm.managerName}
                                                 onChange={(e) => updateTermForm(prev => ({ ...prev, managerName: e.target.value }))}
                                                 placeholder="Nome do Gestor 2"
-                                                readOnly={!isMaster}
-                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                readOnly={!canEditTerm}
+                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
                                             <input
                                                 type="text"
                                                 value={termForm.managerCpf}
                                                 onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf: e.target.value }))}
                                                 placeholder="CPF Gestor 2"
-                                                readOnly={!isMaster}
-                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                readOnly={!canEditTerm}
+                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
                                         </div>
                                         {termForm.managerSignature ? (
                                             <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
                                                 <img src={termForm.managerSignature} alt="Assinatura Gestor" className="max-h-full" />
-                                                {isMaster && (
+                                                {canEditTerm && (
                                                     <button
                                                         type="button"
                                                         onClick={() => updateTermForm(prev => ({ ...prev, managerSignature: '' }))}
@@ -6388,7 +6427,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                     </button>
                                                 )}
                                             </div>
-                                        ) : isMaster ? (
+                                        ) : canEditTerm ? (
                                             <SignaturePad onEnd={async (dataUrl) => {
                                                 const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
                                                 updateTermForm(prev => ({ ...prev, managerSignature: compressed }));
@@ -6403,7 +6442,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             <div className="space-y-3">
                                 <div className="flex items-center justify-between">
                                     <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Colaboradores</h4>
-                                    {isMaster && (
+                                    {canEditTerm && (
                                         <button
                                             onClick={() => updateTermForm(prev => ({ ...prev, collaborators: [...prev.collaborators, { name: '', cpf: '', signature: '' }] }))}
                                             className="text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"
@@ -6430,8 +6469,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                                 collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, name: e.target.value } : c)
                                                             }))}
                                                             placeholder={`Colaborador ${collabNumber}`}
-                                                            readOnly={!isMaster}
-                                                            className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                            readOnly={!canEditTerm}
+                                                            className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                                         />
                                                         <input
                                                             type="text"
@@ -6441,14 +6480,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                                 collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, cpf: e.target.value } : c)
                                                             }))}
                                                             placeholder={`CPF ${collabNumber}`}
-                                                            readOnly={!isMaster}
-                                                            className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700 ${!isMaster ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                            readOnly={!canEditTerm}
+                                                            className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                                         />
                                                     </div>
                                                     {collab.signature ? (
                                                         <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
                                                             <img src={collab.signature} alt="Assinatura Colaborador" className="max-h-full" />
-                                                            {isMaster && (
+                                                            {canEditTerm && (
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => updateTermForm(prev => ({
@@ -6462,7 +6501,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                                 </button>
                                                             )}
                                                         </div>
-                                                    ) : isMaster ? (
+                                                    ) : canEditTerm ? (
                                                         <SignaturePad
                                                             label={`Assinatura ${collabNumber}`}
                                                             onEnd={async (dataUrl) => {
@@ -6494,21 +6533,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     </h4>
                                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Gera resumo financeiro no PDF</span>
                                 </div>
-                                <div className={`bg-white border-2 border-dashed border-slate-200 rounded-xl p-4 text-center relative transition-colors ${!isMaster ? 'opacity-50 cursor-not-allowed' : 'hover:bg-slate-50'}`}>
+                                <div className={`bg-white border-2 border-dashed border-slate-200 rounded-xl p-4 text-center relative transition-colors ${!canEditTerm ? 'opacity-50 cursor-not-allowed' : 'hover:bg-slate-50'}`}>
                                     <input
                                         type="file"
                                         accept=".xlsx, .xls"
                                         onChange={handleProcessTermComparisonExcel}
-                                        className={`absolute inset-0 w-full h-full opacity-0 ${!isMaster ? 'cursor-not-allowed' : 'cursor-pointer'}`}
-                                        title={!isMaster ? "Apenas Usuário Master pode carregar planilha" : "Carregar Excel de Divergências"}
-                                        disabled={!isMaster}
+                                        className={`absolute inset-0 w-full h-full opacity-0 ${!canEditTerm ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                                        title={!canEditTerm ? "Modo consulta: reabra o inventário para carregar planilha" : "Carregar Excel de Divergências"}
+                                        disabled={!canEditTerm}
                                     />
                                     <div className="flex flex-col items-center gap-2">
-                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${!isMaster ? 'bg-slate-100 text-slate-400' : 'bg-indigo-50 text-indigo-500'}`}>
+                                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${!canEditTerm ? 'bg-slate-100 text-slate-400' : 'bg-indigo-50 text-indigo-500'}`}>
                                             <Upload className="w-5 h-5" />
                                         </div>
                                         <p className="text-sm font-bold text-slate-700">Carregar Excel de Divergências</p>
-                                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">{!isMaster ? 'Restrito ao Master' : 'Clique ou arraste o arquivo aqui'}</p>
+                                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-widest">{!canEditTerm ? 'Modo consulta: reabra para editar' : 'Clique ou arraste o arquivo aqui'}</p>
                                     </div>
                                 </div>
 
@@ -6528,9 +6567,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 <>
                                                     <button
                                                         onClick={removeTermComparisonExcel}
-                                                        className={`absolute top-3 right-3 transition-colors ${isMaster ? 'text-indigo-400 hover:text-red-500' : 'text-slate-300 cursor-not-allowed'}`}
-                                                        title={!isMaster ? "Apenas Master pode remover planilha" : "Remover planilha"}
-                                                        disabled={!isMaster}
+                                                        className={`absolute top-3 right-3 transition-colors ${canEditTerm ? 'text-indigo-400 hover:text-red-500' : 'text-slate-300 cursor-not-allowed'}`}
+                                                        title={!canEditTerm ? "Modo consulta: reabra o inventário para remover planilha" : "Remover planilha"}
+                                                        disabled={!canEditTerm}
                                                     >
                                                         <X className="w-4 h-4" />
                                                     </button>
