@@ -908,8 +908,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     useEffect(() => {
         const normalized = String(initialFilial || '').trim();
         if (!normalized) return;
-        if (normalized !== selectedFilial) setSelectedFilial(normalized);
-    }, [initialFilial, selectedFilial]);
+        setSelectedFilial(prev => (prev ? prev : normalized));
+    }, [initialFilial]);
 
     const loadAuditNum = useCallback(async (silent: boolean = false) => {
         if (!selectedFilial) return;
