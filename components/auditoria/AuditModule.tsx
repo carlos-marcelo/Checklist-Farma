@@ -285,6 +285,107 @@ const findBarcodeInRow = (row: any[]): string => {
 const isDoneStatus = (status?: AuditStatus | string) => normalizeAuditStatus(status) === AuditStatus.DONE;
 const isInProgressStatus = (status?: AuditStatus | string) => normalizeAuditStatus(status) === AuditStatus.IN_PROGRESS;
 const normalizeScopeId = (val?: string | number | null) => (val === undefined || val === null ? '' : String(val));
+const normalizeAuditDataStructure = (input?: AuditData | null): { data: AuditData | null; changed: boolean } => {
+    if (!input || !Array.isArray(input.groups)) return { data: input || null, changed: false };
+
+    const raw = (v: unknown) => String(v ?? '').trim();
+    const digits = (v: unknown) => raw(v).replace(/\D/g, '').replace(/^0+/, '');
+    const label = (v: unknown) => normalizeLookupText(String(v ?? ''));
+    const normalizeProductCode = (v: unknown) => {
+        const s = String(v ?? '').trim();
+        if (!s) return '';
+        if (/^[0-9]+$/.test(s)) return s.replace(/^0+/, '');
+        const n = Number(s);
+        if (Number.isFinite(n) && /[Ee+]/.test(s)) {
+            return n.toLocaleString('fullwide', { useGrouping: false }).replace(/\D/g, '').replace(/^0+/, '');
+        }
+        return s.replace(/\D/g, '').replace(/^0+/, '');
+    };
+    const groupIdKey = (g: Group) => digits(g.id) || raw(g.id);
+    const groupKey = (g: Group) => groupIdKey(g) || label(g.name);
+    const deptKey = (d: Department) => digits((d as any).numericId || d.id) || raw(d.id) || label(d.name);
+    const catKey = (c: Category) => raw(c.id) || digits((c as any).numericId) || label(c.name);
+    const productKey = (p: Product) => normalizeProductCode((p as any).reducedCode || p.code) || raw(p.name);
+    const statusRank = (s: AuditStatus | string) => {
+        const n = normalizeAuditStatus(s);
+        if (n === AuditStatus.DONE) return 3;
+        if (n === AuditStatus.IN_PROGRESS) return 2;
+        return 1;
+    };
+
+    let changed = false;
+    const nextGroups: Group[] = [];
+
+    input.groups.forEach(group => {
+        const gKey = groupKey(group);
+        let targetGroup = nextGroups.find(g => {
+            const leftId = groupIdKey(g);
+            const rightId = groupIdKey(group);
+            if (leftId && rightId) return leftId === rightId;
+            return groupKey(g) === gKey;
+        });
+        if (!targetGroup) {
+            targetGroup = { ...group, departments: [] };
+            nextGroups.push(targetGroup);
+        } else {
+            changed = true;
+        }
+
+        (group.departments || []).forEach(dept => {
+            const dKey = deptKey(dept);
+            let targetDept = targetGroup!.departments.find(d => deptKey(d) === dKey || label(d.name) === label(dept.name));
+            if (!targetDept) {
+                targetDept = { ...dept, categories: [] };
+                targetGroup!.departments.push(targetDept);
+            } else {
+                changed = true;
+                if (!(targetDept as any).numericId && (dept as any).numericId) (targetDept as any).numericId = (dept as any).numericId;
+            }
+
+            (dept.categories || []).forEach(cat => {
+                const cKey = catKey(cat);
+                const existingIdx = (targetDept!.categories || []).findIndex(c => catKey(c) === cKey || label(c.name) === label(cat.name));
+                const normalizedCat: Category = {
+                    ...cat,
+                    status: normalizeAuditStatus(cat.status),
+                    products: (() => {
+                        const seen = new Set<string>();
+                        const deduped: Product[] = [];
+                        (cat.products || []).forEach(p => {
+                            const pKey = productKey(p);
+                            if (!pKey || seen.has(pKey)) {
+                                if (pKey) changed = true;
+                                return;
+                            }
+                            seen.add(pKey);
+                            deduped.push({ ...p });
+                        });
+                        return deduped;
+                    })()
+                };
+
+                if (existingIdx < 0) {
+                    targetDept!.categories.push(normalizedCat);
+                } else {
+                    changed = true;
+                    const existing = targetDept!.categories[existingIdx];
+                    const incomingRank = statusRank(normalizedCat.status);
+                    const existingRank = statusRank(existing.status);
+                    const keepIncoming =
+                        incomingRank > existingRank ||
+                        (incomingRank === existingRank &&
+                            (normalizedCat.products?.length || 0) > (existing.products?.length || 0));
+                    if (keepIncoming) {
+                        targetDept!.categories[existingIdx] = normalizedCat;
+                    }
+                }
+            });
+        });
+    });
+
+    if (!changed) return { data: input, changed: false };
+    return { data: { ...input, groups: nextGroups }, changed: true };
+};
 const createBatchId = () => {
     const cryptoObj = (window as any)?.crypto;
     if (cryptoObj?.randomUUID) return cryptoObj.randomUUID();
@@ -798,6 +899,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const lastAuditUpdateRef = useRef<string | null>(null);
     const activeFilialRef = useRef<string>('');
+    const skipNextStockPromptRef = useRef(false);
 
     useEffect(() => {
         activeFilialRef.current = selectedFilial || '';
@@ -896,10 +998,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     });
                 }
                 const reconciled = reconcileAuditStateFromCompletedScopes(latest.data as AuditData);
-                setData(reconciled);
-                setTermDrafts(((reconciled as any).termDrafts || {}) as Record<string, TermForm>);
-                if (getAuditDataStrength(reconciled) > 0) {
-                    await CacheService.set(backupKey, { ...latest, data: reconciled } as any);
+                const normalized = normalizeAuditDataStructure(reconciled);
+                const normalizedData = (normalized.data || reconciled) as AuditData;
+                setData(normalizedData);
+                setTermDrafts(((normalizedData as any).termDrafts || {}) as Record<string, TermForm>);
+                if (getAuditDataStrength(normalizedData) > 0) {
+                    await CacheService.set(backupKey, { ...latest, data: normalizedData } as any);
                 }
                 return;
             }
@@ -914,7 +1018,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         try {
                             const history = await fetchAuditsHistory(requestedFilial);
                             const completedCount = history.filter(item => item.status === 'completed').length;
-                            if (completedCount > 0) {
+                            const sourceFiles = ((latest.data as any)?.sourceFiles || {}) as any;
+                            const currentStockSyncedAt = sourceFiles?.globalStockProcessedAt || sourceFiles?.stock?.syncedAt || sourceFiles?.lastStockUpdateAt || null;
+                            const currentStockTs = currentStockSyncedAt ? new Date(currentStockSyncedAt).getTime() : NaN;
+                            const globalStockTsRaw = globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || null;
+                            const globalStockTs = globalStockTsRaw ? new Date(globalStockTsRaw).getTime() : NaN;
+                            const hasNewerGlobalStockAtOpenChoice = Number.isFinite(globalStockTs)
+                                && (!Number.isFinite(currentStockTs) || globalStockTs > currentStockTs + 1000);
+                            if (completedCount > 0 && !hasNewerGlobalStockAtOpenChoice) {
                                 canAutoOpenActive = window.confirm(
                                     `Existe auditoria em aberto (Nº ${latest.audit_number}) e ${completedCount} inventário(s) concluído(s) nesta filial.\n\n` +
                                     `OK: prosseguir com a auditoria em aberto.\n` +
@@ -979,32 +1090,23 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         });
                     }
                     const reconciled = reconcileAuditStateFromCompletedScopes(latest.data as AuditData);
-                    setData(reconciled);
-                    const draftsFromData = ((reconciled as any).termDrafts || {}) as Record<string, TermForm>;
+                    const normalized = normalizeAuditDataStructure(reconciled);
+                    const normalizedData = (normalized.data || reconciled) as AuditData;
+                    setData(normalizedData);
+                    const draftsFromData = ((normalizedData as any).termDrafts || {}) as Record<string, TermForm>;
                     setTermDrafts(draftsFromData);
                     setDbSessionId(latest.id);
-                    if (getAuditDataStrength(reconciled) > 0) {
-                        await CacheService.set(backupKey, { ...latest, data: reconciled } as any);
+                    if (getAuditDataStrength(normalizedData) > 0) {
+                        await CacheService.set(backupKey, { ...latest, data: normalizedData } as any);
                     }
 
                     if (!silent) {
                         const isNewSession = dbSessionId !== latest.id;
                         const alreadyConfirmed = sessionStorage.getItem(CONFIRMED_SESSION_KEY) === latest.id;
-                        const resolveLatestStockTimestampForPrompt = async (sessionTsRaw?: string | null) => {
+                        const resolveLatestStockTimestampForPrompt = (sessionTsRaw?: string | null) => {
                             let bestRaw = sessionTsRaw || latest.created_at || null;
-                            let officialUploadRaw: string | null = null;
-                            try {
-                                const companyId = selectedCompany?.id || companies?.[0]?.id;
-                                if (companyId && requestedFilial) {
-                                    const moduleKey = buildSharedStockModuleKey(requestedFilial);
-                                    const remoteMeta = await fetchGlobalBaseFileMeta(companyId, moduleKey);
-                                    const raw = String(remoteMeta?.uploaded_at || '').trim();
-                                    officialUploadRaw = raw || null;
-                                    if (officialUploadRaw && !bestRaw) bestRaw = officialUploadRaw;
-                                }
-                            } catch (error) {
-                                console.warn('Falha ao buscar timestamp remoto do estoque para o popup:', error);
-                            }
+                            const officialUploadRaw = String(globalStockMeta?.uploaded_at || globalStockMeta?.updated_at || '').trim() || null;
+                            if (officialUploadRaw && !bestRaw) bestRaw = officialUploadRaw;
 
                             const processedRaw = latest.data?.sourceFiles?.globalStockProcessedAt || bestRaw;
                             const sessionTs = processedRaw ? new Date(processedRaw).getTime() : NaN;
@@ -1015,7 +1117,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                         if (isMaster) {
                             if ((isNewSession || !data) && !alreadyConfirmed) {
-                                const { latestStockTs, hasNewerGlobalStock } = await resolveLatestStockTimestampForPrompt(
+                                const { latestStockTs, hasNewerGlobalStock } = resolveLatestStockTimestampForPrompt(
                                     latest.data?.sourceFiles?.stock?.syncedAt || latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at
                                 );
                                 const lastLoadStr = latestStockTs
@@ -1036,7 +1138,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         setIsUpdatingStock(false);
                                     }
                                 } else {
-                                    setIsUpdatingStock(false);
+                                    skipNextStockPromptRef.current = true;
+                                    setIsUpdatingStock(true);
+                                    setGroupFiles(createInitialGroupFiles());
+                                    setFileDeptIds(null);
+                                    setFileCatIds(null);
+                                    setFileStock(null);
+                                    setView({ level: 'groups' });
                                 }
                             }
                             if (latest.id) sessionStorage.setItem(CONFIRMED_SESSION_KEY, latest.id);
@@ -1045,7 +1153,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             setIsUpdatingStock(false);
                             setView({ level: 'groups' });
                             if ((isNewSession || !data) && !alreadyConfirmed) {
-                                const { latestStockTs } = await resolveLatestStockTimestampForPrompt(
+                                const { latestStockTs } = resolveLatestStockTimestampForPrompt(
                                     latest.data?.sourceFiles?.stock?.syncedAt || latest.data?.sourceFiles?.lastStockUpdateAt || latest.created_at
                                 );
                                 const lastLoadStr = latestStockTs
@@ -1385,13 +1493,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             (incomingStrength <= 0 || incomingGroupsCount === 0 || incomingProgress <= 0.1)
         ) {
             const recovered = reconcileAuditStateFromCompletedScopes(freshLatest.data as AuditData);
-            setData(recovered);
-            setTermDrafts(((recovered as any).termDrafts || {}) as Record<string, TermForm>);
+            const normalizedRecovered = (normalizeAuditDataStructure(recovered).data || recovered) as AuditData;
+            setData(normalizedRecovered);
+            setTermDrafts(((normalizedRecovered as any).termDrafts || {}) as Record<string, TermForm>);
             setDbSessionId(freshLatest.id);
             setNextAuditNumber(freshLatest.audit_number);
             lastAuditUpdateRef.current = freshLatest.updated_at || latestMeta?.updated_at || null;
-            await CacheService.set(`audit_session_${branch}`, { ...freshLatest, data: recovered } as any);
-            await CacheService.set(`audit_session_lastgood_${branch}`, { ...freshLatest, data: recovered } as any);
+            await CacheService.set(`audit_session_${branch}`, { ...freshLatest, data: normalizedRecovered } as any);
+            await CacheService.set(`audit_session_lastgood_${branch}`, { ...freshLatest, data: normalizedRecovered } as any);
             alert("Bloqueamos uma sobrescrita de dados parciais para proteger os dados já gravados.");
             return null;
         }
@@ -1405,12 +1514,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         ) {
             if (freshLatest?.data) {
                 const recovered = reconcileAuditStateFromCompletedScopes(freshLatest.data as AuditData);
-                setData(recovered);
-                setTermDrafts(((recovered as any).termDrafts || {}) as Record<string, TermForm>);
+                const normalizedRecovered = (normalizeAuditDataStructure(recovered).data || recovered) as AuditData;
+                setData(normalizedRecovered);
+                setTermDrafts(((normalizedRecovered as any).termDrafts || {}) as Record<string, TermForm>);
                 setDbSessionId(freshLatest.id);
                 setNextAuditNumber(freshLatest.audit_number);
                 lastAuditUpdateRef.current = freshLatest.updated_at || latestMeta?.updated_at || null;
-                await CacheService.set(`audit_session_${branch}`, { ...freshLatest, data: recovered } as any);
+                await CacheService.set(`audit_session_${branch}`, { ...freshLatest, data: normalizedRecovered } as any);
             }
             alert("Bloqueamos uma sobrescrita de progresso antigo para proteger contagens finalizadas.");
             return null;
@@ -1423,21 +1533,24 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 const fresh = freshLatest || await fetchLatestAudit(branch);
                 if (fresh?.data) {
                     const recovered = reconcileAuditStateFromCompletedScopes(fresh.data as AuditData);
-                    setData(recovered);
-                    setTermDrafts(((recovered as any).termDrafts || {}) as Record<string, TermForm>);
+                    const normalizedRecovered = (normalizeAuditDataStructure(recovered).data || recovered) as AuditData;
+                    setData(normalizedRecovered);
+                    setTermDrafts(((normalizedRecovered as any).termDrafts || {}) as Record<string, TermForm>);
                     setDbSessionId(fresh.id);
                     setNextAuditNumber(fresh.audit_number);
                     lastAuditUpdateRef.current = fresh.updated_at || latestMeta.updated_at || null;
-                    await CacheService.set(`audit_session_${branch}`, { ...fresh, data: recovered } as any);
-                    await CacheService.set(`audit_session_lastgood_${branch}`, { ...fresh, data: recovered } as any);
+                    await CacheService.set(`audit_session_${branch}`, { ...fresh, data: normalizedRecovered } as any);
+                    await CacheService.set(`audit_session_lastgood_${branch}`, { ...fresh, data: normalizedRecovered } as any);
                 }
                 alert("A auditoria foi atualizada por outro usuário/aba. Recarregamos os dados mais novos para evitar sobrescrita.");
                 return null;
             }
         }
 
+        const normalizedIncoming = normalizeAuditDataStructure((session.data as AuditData) || null);
         const saved = await upsertAuditSession({
             ...session,
+            data: (normalizedIncoming.data || session.data) as any,
             updated_at: baseUpdatedAt || undefined
         });
         if (saved?.updated_at) {
@@ -2171,6 +2284,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         const syncKey = `${dbSessionId || 'no_session'}|${selectedFilial}|${globalStockMeta.module_key}|${globalTs}`;
         if (lastAutoStockSyncKeyRef.current === syncKey) return;
+        if (skipNextStockPromptRef.current) {
+            skipNextStockPromptRef.current = false;
+            lastAutoStockSyncKeyRef.current = syncKey;
+            return;
+        }
         lastAutoStockSyncKeyRef.current = syncKey;
 
         const stockTsLabel = new Date(globalTs).toLocaleString('pt-BR');
@@ -2247,10 +2365,42 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 departments: (group.departments || []).map(cloneDepartment)
             });
 
+            const normalizeRawKey = (value: unknown) => String(value ?? '').trim();
+            const normalizeDigitsKey = (value: unknown) =>
+                normalizeRawKey(value).replace(/\D/g, '').replace(/^0+/, '');
+            const normalizeLabelKey = (value: unknown) => normalizeLookupText(String(value ?? ''));
+
+            const isSameGroup = (a: Group, b: Group) => {
+                const aIdRaw = normalizeRawKey(a.id);
+                const bIdRaw = normalizeRawKey(b.id);
+                const aIdDigits = normalizeDigitsKey(a.id);
+                const bIdDigits = normalizeDigitsKey(b.id);
+                const byRawId = !!aIdRaw && !!bIdRaw && aIdRaw === bIdRaw;
+                const byDigits = !!aIdDigits && !!bIdDigits && aIdDigits === bIdDigits;
+                if ((aIdRaw || aIdDigits) && (bIdRaw || bIdDigits)) {
+                    return byRawId || byDigits;
+                }
+                const byName = normalizeLabelKey(a.name) && normalizeLabelKey(a.name) === normalizeLabelKey(b.name);
+                return byRawId || byDigits || byName;
+            };
+
+            const isSameDept = (a: Department, b: Department) => {
+                const aIdRaw = normalizeRawKey(a.id);
+                const bIdRaw = normalizeRawKey(b.id);
+                const aNumRaw = normalizeRawKey((a as any).numericId);
+                const bNumRaw = normalizeRawKey((b as any).numericId);
+                const aNumDigits = normalizeDigitsKey(aNumRaw || aIdRaw);
+                const bNumDigits = normalizeDigitsKey(bNumRaw || bIdRaw);
+                const byRawId = !!aIdRaw && !!bIdRaw && aIdRaw === bIdRaw;
+                const byNumeric = !!aNumDigits && !!bNumDigits && aNumDigits === bNumDigits;
+                const byName = normalizeLabelKey(a.name) && normalizeLabelKey(a.name) === normalizeLabelKey(b.name);
+                return byRawId || byNumeric || byName;
+            };
+
             const findBaseGroup = (group: Group) =>
-                (baseData.groups || []).find(bg => String(bg.id) === String(group.id) || bg.name === group.name);
+                (baseData.groups || []).find(bg => isSameGroup(bg, group));
             const findBaseDept = (baseGroup: Group | undefined, dept: Department) =>
-                (baseGroup?.departments || []).find(bd => bd.id === dept.id || bd.name === dept.name);
+                (baseGroup?.departments || []).find(bd => isSameDept(bd, dept));
             const isDeptClosed = (dept?: Department) =>
                 !!dept && (dept.categories || []).length > 0 && (dept.categories || []).every(c => isDoneStatus(c.status));
             const isGroupClosed = (group?: Group) => {
@@ -2334,7 +2484,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 groups: rebuiltFilteredGroups
             };
             const ensureGroup = (groupId: string, groupName: string) => {
-                let g = merged.groups.find(x => String(x.id) === String(groupId));
+                const probe: Group = { id: groupId, name: groupName, departments: [] };
+                let g = merged.groups.find(x => isSameGroup(x, probe));
                 if (!g) {
                     g = { id: groupId, name: groupName, departments: [] };
                     merged.groups.push(g);
@@ -2342,8 +2493,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 return g;
             };
             const ensureDept = (group: Group, dept: Department) => {
-                const deptIdentity = dept.id || dept.name;
-                let d = group.departments.find(x => x.id === deptIdentity || x.name === dept.name);
+                let d = group.departments.find(x => isSameDept(x, dept));
                 if (!d) {
                     d = { ...dept, categories: [] };
                     group.departments.push(d);
@@ -2364,6 +2514,45 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     });
                 });
             });
+            const dedupedGroups: Group[] = [];
+            merged.groups.forEach(group => {
+                let targetGroup = dedupedGroups.find(existing => isSameGroup(existing, group));
+                if (!targetGroup) {
+                    dedupedGroups.push(cloneGroup(group));
+                    return;
+                }
+
+                group.departments.forEach(dept => {
+                    let targetDept = targetGroup!.departments.find(existing => isSameDept(existing, dept));
+                    if (!targetDept) {
+                        targetGroup!.departments.push(cloneDepartment(dept));
+                        return;
+                    }
+
+                    (dept.categories || []).forEach(cat => {
+                        const catIdx = (targetDept!.categories || []).findIndex(existing =>
+                            existing.id === cat.id || existing.name === cat.name
+                        );
+                        if (catIdx >= 0) {
+                            const existingCat = targetDept!.categories[catIdx];
+                            const incomingStatus = normalizeAuditStatus(cat.status);
+                            const existingStatus = normalizeAuditStatus(existingCat.status);
+                            const statusRank = (s: AuditStatus) =>
+                                s === AuditStatus.DONE ? 3 : s === AuditStatus.IN_PROGRESS ? 2 : 1;
+                            const keepIncoming =
+                                statusRank(incomingStatus) > statusRank(existingStatus) ||
+                                (statusRank(incomingStatus) === statusRank(existingStatus) &&
+                                    (cat.products?.length || 0) > (existingCat.products?.length || 0));
+                            if (keepIncoming) {
+                                targetDept!.categories[catIdx] = cloneCategory(cat);
+                            }
+                        } else {
+                            targetDept!.categories.push(cloneCategory(cat));
+                        }
+                    });
+                });
+            });
+            merged.groups = dedupedGroups;
             return { merged, ignored };
         };
 
@@ -2607,6 +2796,35 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const UNCLASSIFIED_GROUP_NAME = 'NAO CLASSIFICADO (SEM GRUPO)';
             const UNCLASSIFIED_DEPT_NAME = 'NAO CLASSIFICADO (SEM DEPARTAMENTO)';
             const UNCLASSIFIED_CAT_NAME = 'NAO CLASSIFICADO (SEM CATEGORIA)';
+            const normalizeKeyRaw = (value: unknown) => String(value ?? '').trim();
+            const normalizeKeyDigits = (value: unknown) =>
+                normalizeKeyRaw(value).replace(/\D/g, '').replace(/^0+/, '');
+            const normalizeKeyLabel = (value: unknown) => normalizeLookupText(String(value ?? ''));
+            const resolveGroupKey = (groupId: unknown, groupName: unknown) =>
+                normalizeKeyDigits(groupId) || normalizeKeyLabel(groupName) || normalizeKeyRaw(groupId);
+            const resolveDeptKey = (deptId: unknown, deptName: unknown) =>
+                normalizeKeyDigits(deptId) || normalizeKeyLabel(deptName) || normalizeKeyRaw(deptId);
+            const closedGroupKeys = new Set<string>();
+            const closedDeptKeys = new Set<string>();
+
+            if (shouldReclassifyOpen && data) {
+                (data.groups || []).forEach(oldGroup => {
+                    const oldGroupKey = resolveGroupKey(oldGroup.id, oldGroup.name);
+                    const oldGroupCats = (oldGroup.departments || []).flatMap(d => d.categories || []);
+                    const isOldGroupClosed = oldGroupCats.length > 0 && oldGroupCats.every(c => isDoneStatus(c.status));
+                    if (isOldGroupClosed) {
+                        closedGroupKeys.add(oldGroupKey);
+                    }
+
+                    (oldGroup.departments || []).forEach(oldDept => {
+                        const oldDeptCats = oldDept.categories || [];
+                        const isOldDeptClosed = oldDeptCats.length > 0 && oldDeptCats.every(c => isDoneStatus(c.status));
+                        if (!isOldDeptClosed) return;
+                        const oldDeptKey = resolveDeptKey((oldDept as any).numericId || oldDept.id, oldDept.name);
+                        closedDeptKeys.add(`${oldGroupKey}|${oldDeptKey}`);
+                    });
+                });
+            }
 
             Object.entries(stockAcc).forEach(([reduced, acc]) => {
                 const avgCost = acc.q > 0 ? (acc.costAmount / acc.q) : 0;
@@ -2681,6 +2899,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                 const finalGroupId = resolvedScope.groupId;
                 const finalGroupName = resolvedScope.groupName;
+                const finalGroupKey = resolveGroupKey(finalGroupId, finalGroupName);
+                const finalDeptKey = resolveDeptKey(resolvedScope.deptId || resolvedScope.deptName, resolvedScope.deptName);
+                if (closedGroupKeys.has(finalGroupKey) || closedDeptKeys.has(`${finalGroupKey}|${finalDeptKey}`)) {
+                    return;
+                }
                 if (!groupsMap[finalGroupId]) groupsMap[finalGroupId] = { id: finalGroupId, name: finalGroupName, departments: [] };
 
                 const deptIdentity = resolvedScope.deptId || resolvedScope.deptName;
@@ -3073,26 +3296,89 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const group = data?.groups?.find(g => normalizeScopeId(g.id) === normalizeScopeId(scope.groupId));
         if (!group) return null;
         const gName = normalizeText(group.name);
+        const normalizeDigitsKey = (v: unknown) => String(v ?? '').replace(/\D/g, '').replace(/^0+/, '');
+        const makeAliasSet = (values: unknown[]) => {
+            const set = new Set<string>();
+            values.forEach(v => {
+                const raw = normalizeScopeId(v);
+                if (raw) set.add(raw);
+                const digits = normalizeDigitsKey(v);
+                if (digits) set.add(digits);
+            });
+            return set;
+        };
+        const scopeGroupAliases = makeAliasSet([scope.groupId, group.id]);
+        const groupNameToIds = new Map<string, Set<string>>();
+        (data?.groups || []).forEach(g => {
+            const key = normalizeText(g.name);
+            if (!key) return;
+            const ids = groupNameToIds.get(key) || new Set<string>();
+            makeAliasSet([g.id]).forEach(id => ids.add(id));
+            groupNameToIds.set(key, ids);
+        });
+
         let dName = '';
         let cName = '';
+        let selectedDept: Department | undefined;
+        let selectedCat: Category | undefined;
+        const deptNameToIds = new Map<string, Set<string>>();
+        const catNameToIds = new Map<string, Set<string>>();
+        let scopeDeptAliases = new Set<string>();
+        let scopeCatAliases = new Set<string>();
         if (scope.deptId) {
-            const dept = group.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(scope.deptId!));
-            if (dept) dName = normalizeText(dept.name);
+            selectedDept = group.departments.find(d =>
+                makeAliasSet([d.id, (d as any).numericId]).has(normalizeScopeId(scope.deptId!)) ||
+                makeAliasSet([d.id, (d as any).numericId]).has(normalizeDigitsKey(scope.deptId!))
+            );
+            if (selectedDept) dName = normalizeText(selectedDept.name);
+            group.departments.forEach(d => {
+                const key = normalizeText(d.name);
+                if (!key) return;
+                const ids = deptNameToIds.get(key) || new Set<string>();
+                makeAliasSet([d.id, (d as any).numericId]).forEach(id => ids.add(id));
+                deptNameToIds.set(key, ids);
+            });
+            scopeDeptAliases = makeAliasSet([scope.deptId, selectedDept?.id, (selectedDept as any)?.numericId]);
         }
         if (scope.catId && scope.deptId) {
-            const dept = group.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(scope.deptId!));
-            const cat = dept?.categories.find(c => normalizeScopeId(c.id) === normalizeScopeId(scope.catId!));
-            if (cat) cName = normalizeText(cat.name);
+            const dept = selectedDept || group.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(scope.deptId!));
+            selectedCat = dept?.categories.find(c =>
+                makeAliasSet([c.id, (c as any).numericId]).has(normalizeScopeId(scope.catId!)) ||
+                makeAliasSet([c.id, (c as any).numericId]).has(normalizeDigitsKey(scope.catId!))
+            );
+            if (selectedCat) cName = normalizeText(selectedCat.name);
+            (dept?.categories || []).forEach(c => {
+                const key = normalizeText(c.name);
+                if (!key) return;
+                const ids = catNameToIds.get(key) || new Set<string>();
+                makeAliasSet([c.id, (c as any).numericId]).forEach(id => ids.add(id));
+                catNameToIds.set(key, ids);
+            });
+            scopeCatAliases = makeAliasSet([scope.catId, selectedCat?.id, (selectedCat as any)?.numericId]);
         }
+        const matchByUniqueName = (nameMap: Map<string, Set<string>>, rowName: unknown, targetAliases: Set<string>) => {
+            const key = normalizeText(rowName);
+            if (!key) return false;
+            const ids = nameMap.get(key);
+            if (!ids || ids.size !== 1) return false;
+            const only = Array.from(ids)[0];
+            return targetAliases.has(only);
+        };
         const matchScopeRecord = (row: any) => {
             const rowG = normalizeScopeId(row?.groupId);
             const rowD = normalizeScopeId(row?.deptId);
             const rowC = normalizeScopeId(row?.catId);
-            const matchG = rowG ? rowG === normalizeScopeId(scope.groupId) : normalizeText(row?.groupName) === gName;
+            const matchG = rowG
+                ? (scopeGroupAliases.has(rowG) || scopeGroupAliases.has(normalizeDigitsKey(rowG)))
+                : (normalizeText(row?.groupName) === gName && matchByUniqueName(groupNameToIds, row?.groupName, scopeGroupAliases));
             if (scope.type === 'group') return matchG;
-            const matchD = rowD ? rowD === normalizeScopeId(scope.deptId) : normalizeText(row?.deptName) === dName;
+            const matchD = rowD
+                ? (scopeDeptAliases.has(rowD) || scopeDeptAliases.has(normalizeDigitsKey(rowD)))
+                : (normalizeText(row?.deptName) === dName && matchByUniqueName(deptNameToIds, row?.deptName, scopeDeptAliases));
             if (scope.type === 'department') return matchG && matchD;
-            const matchC = rowC ? rowC === normalizeScopeId(scope.catId) : normalizeText(row?.catName) === cName;
+            const matchC = rowC
+                ? (scopeCatAliases.has(rowC) || scopeCatAliases.has(normalizeDigitsKey(rowC)))
+                : (normalizeText(row?.catName) === cName && matchByUniqueName(catNameToIds, row?.catName, scopeCatAliases));
             return matchG && matchD && matchC;
         };
         // Se houver draft direto, filtra pelo escopo para evitar contaminação entre grupos.
@@ -3113,14 +3399,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     diffCost: (acc.diffCost || 0) + Number(curr?.diffCost || 0)
                 }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0 });
             }
-            return {
-                sysQty: Number(draftMetrics.sysQty || 0),
-                sysCost: Number(draftMetrics.sysCost || 0),
-                countedQty: Number(draftMetrics.countedQty || 0),
-                countedCost: Number(draftMetrics.countedCost || 0),
-                diffQty: Number(draftMetrics.diffQty || 0),
-                diffCost: Number(draftMetrics.diffCost || 0)
-            };
+            return null;
         }
         const makeScopeCatKeys = (s: { groupId?: string; deptId?: string; catId?: string }) =>
             new Set(
@@ -3301,26 +3580,46 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             return hasLegacyGrouped || hasLegacyItems;
         };
         const shouldNormalizeLegacyIds = metricsMissingScopeIds(rawPool);
+        const normalizeDigitsKey = (v: unknown) => String(v ?? '').replace(/\D/g, '').replace(/^0+/, '');
+        const makeAliasSet = (values: unknown[]) => {
+            const set = new Set<string>();
+            values.forEach(v => {
+                const raw = normalizeScopeId(v);
+                if (raw) set.add(raw);
+                const digits = normalizeDigitsKey(v);
+                if (digits) set.add(digits);
+            });
+            return set;
+        };
 
         if (( !hasDirectExcelMetrics || shouldNormalizeLegacyIds ) && rawPool?.groupedDifferences && scope.type === 'custom') {
             if (scopeGroupIds.length > 0 && data?.groups) {
-                const acceptedNames = new Set<string>();
                 const acceptedIds = new Set<string>();
+                const groupNameToIds = new Map<string, Set<string>>();
+                (data.groups || []).forEach(g => {
+                    const key = normalizeText(g.name);
+                    if (!key) return;
+                    const ids = groupNameToIds.get(key) || new Set<string>();
+                    makeAliasSet([g.id]).forEach(id => ids.add(id));
+                    groupNameToIds.set(key, ids);
+                });
                 scopeGroupIds.forEach(id => {
                     const group = data.groups.find(g => normalizeScopeId(g.id) === normalizeScopeId(id));
-                    acceptedIds.add(normalizeScopeId(id));
-                    if (group) acceptedNames.add(normalizeText(group.name));
-                    acceptedNames.add(normalizeText(GROUP_CONFIG_DEFAULTS[id as keyof typeof GROUP_CONFIG_DEFAULTS] || `Grupo ${id}`));
+                    makeAliasSet([id, group?.id]).forEach(alias => acceptedIds.add(alias));
                 });
+                const matchCustomGroup = (row: any) => {
+                    const rowId = normalizeScopeId(row?.groupId);
+                    if (rowId) return acceptedIds.has(rowId) || acceptedIds.has(normalizeDigitsKey(rowId));
+                    const rowName = normalizeText(row?.groupName);
+                    if (!rowName) return false;
+                    const ids = groupNameToIds.get(rowName);
+                    if (!ids || ids.size !== 1) return false;
+                    const only = Array.from(ids)[0];
+                    return acceptedIds.has(only);
+                };
 
-                const filteredGrouped = (rawPool.groupedDifferences || []).filter((d: any) =>
-                    acceptedIds.has(normalizeScopeId(d.groupId)) ||
-                    acceptedNames.has(normalizeText(d.groupName))
-                );
-                const filteredItems = (rawPool.items || []).filter((it: any) =>
-                    acceptedIds.has(normalizeScopeId(it.groupId)) ||
-                    acceptedNames.has(normalizeText(it.groupName))
-                );
+                const filteredGrouped = (rawPool.groupedDifferences || []).filter((d: any) => matchCustomGroup(d));
+                const filteredItems = (rawPool.items || []).filter((it: any) => matchCustomGroup(it));
 
                 if (filteredGrouped.length > 0 || filteredItems.length > 0) {
                     const groupedSource = filteredGrouped.length > 0
@@ -3366,37 +3665,80 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const group = data?.groups?.find(g => normalizeScopeId(g.id) === normalizeScopeId(scope.groupId));
             if (group) {
                 const gName = normalizeText(group.name);
-                const gId = normalizeScopeId(scope.groupId);
+                const gAliases = makeAliasSet([scope.groupId, group.id]);
+                const groupNameToIds = new Map<string, Set<string>>();
+                (data?.groups || []).forEach(g => {
+                    const key = normalizeText(g.name);
+                    if (!key) return;
+                    const ids = groupNameToIds.get(key) || new Set<string>();
+                    makeAliasSet([g.id]).forEach(id => ids.add(id));
+                    groupNameToIds.set(key, ids);
+                });
                 let dName = '';
                 let cName = '';
-                let dId = '';
-                let cId = '';
+                let dAliases = new Set<string>();
+                let cAliases = new Set<string>();
+                const deptNameToIds = new Map<string, Set<string>>();
+                const catNameToIds = new Map<string, Set<string>>();
+                let selectedDept: Department | undefined;
 
                 if (scope.deptId) {
-                    const dept = group.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(scope.deptId!));
-                    if (dept) {
-                        dName = normalizeText(dept.name);
-                        dId = normalizeScopeId(dept.id);
-                    }
+                    selectedDept = group.departments.find(d =>
+                        makeAliasSet([d.id, (d as any).numericId]).has(normalizeScopeId(scope.deptId!)) ||
+                        makeAliasSet([d.id, (d as any).numericId]).has(normalizeDigitsKey(scope.deptId!))
+                    );
+                    if (selectedDept) dName = normalizeText(selectedDept.name);
+                    group.departments.forEach(d => {
+                        const key = normalizeText(d.name);
+                        if (!key) return;
+                        const ids = deptNameToIds.get(key) || new Set<string>();
+                        makeAliasSet([d.id, (d as any).numericId]).forEach(id => ids.add(id));
+                        deptNameToIds.set(key, ids);
+                    });
+                    dAliases = makeAliasSet([scope.deptId, selectedDept?.id, (selectedDept as any)?.numericId]);
                 }
                 if (scope.catId && scope.deptId) {
-                    const dept = group.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(scope.deptId!));
-                    const cat = dept?.categories.find(c => normalizeScopeId(c.id) === normalizeScopeId(scope.catId!));
+                    const dept = selectedDept || group.departments.find(d => normalizeScopeId(d.id) === normalizeScopeId(scope.deptId!));
+                    const cat = dept?.categories.find(c =>
+                        makeAliasSet([c.id, (c as any).numericId]).has(normalizeScopeId(scope.catId!)) ||
+                        makeAliasSet([c.id, (c as any).numericId]).has(normalizeDigitsKey(scope.catId!))
+                    );
                     if (cat) {
                         cName = normalizeText(cat.name);
-                        cId = normalizeScopeId(cat.id);
+                        cAliases = makeAliasSet([scope.catId, cat.id, (cat as any).numericId]);
                     }
+                    (dept?.categories || []).forEach(c => {
+                        const key = normalizeText(c.name);
+                        if (!key) return;
+                        const ids = catNameToIds.get(key) || new Set<string>();
+                        makeAliasSet([c.id, (c as any).numericId]).forEach(id => ids.add(id));
+                        catNameToIds.set(key, ids);
+                    });
                 }
+                const matchByUniqueName = (nameMap: Map<string, Set<string>>, rowName: unknown, targetAliases: Set<string>) => {
+                    const key = normalizeText(rowName);
+                    if (!key) return false;
+                    const ids = nameMap.get(key);
+                    if (!ids || ids.size !== 1) return false;
+                    const only = Array.from(ids)[0];
+                    return targetAliases.has(only);
+                };
 
                 const filteredGrouped = rawPool.groupedDifferences.filter((d: any) => {
                     const hasGroupId = !!normalizeScopeId(d.groupId);
                     const hasDeptId = !!normalizeScopeId(d.deptId);
                     const hasCatId = !!normalizeScopeId(d.catId);
-                    const matchG = hasGroupId ? normalizeScopeId(d.groupId) === gId : normalizeText(d.groupName) === gName;
+                    const matchG = hasGroupId
+                        ? (gAliases.has(normalizeScopeId(d.groupId)) || gAliases.has(normalizeDigitsKey(d.groupId)))
+                        : (normalizeText(d.groupName) === gName && matchByUniqueName(groupNameToIds, d.groupName, gAliases));
                     if (scope.type === 'group') return matchG;
-                    const matchD = hasDeptId ? normalizeScopeId(d.deptId) === dId : normalizeText(d.deptName) === dName;
+                    const matchD = hasDeptId
+                        ? (dAliases.has(normalizeScopeId(d.deptId)) || dAliases.has(normalizeDigitsKey(d.deptId)))
+                        : (normalizeText(d.deptName) === dName && matchByUniqueName(deptNameToIds, d.deptName, dAliases));
                     if (scope.type === 'department') return matchG && matchD;
-                    const matchC = hasCatId ? normalizeScopeId(d.catId) === cId : normalizeText(d.catName) === cName;
+                    const matchC = hasCatId
+                        ? (cAliases.has(normalizeScopeId(d.catId)) || cAliases.has(normalizeDigitsKey(d.catId)))
+                        : (normalizeText(d.catName) === cName && matchByUniqueName(catNameToIds, d.catName, cAliases));
                     return matchG && matchD && matchC;
                 });
 
@@ -3404,11 +3746,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     const hasGroupId = !!normalizeScopeId(it.groupId);
                     const hasDeptId = !!normalizeScopeId(it.deptId);
                     const hasCatId = !!normalizeScopeId(it.catId);
-                    const matchG = hasGroupId ? normalizeScopeId(it.groupId) === gId : normalizeText(it.groupName) === gName;
+                    const matchG = hasGroupId
+                        ? (gAliases.has(normalizeScopeId(it.groupId)) || gAliases.has(normalizeDigitsKey(it.groupId)))
+                        : (normalizeText(it.groupName) === gName && matchByUniqueName(groupNameToIds, it.groupName, gAliases));
                     if (scope.type === 'group') return matchG;
-                    const matchD = hasDeptId ? normalizeScopeId(it.deptId) === dId : normalizeText(it.deptName) === dName;
+                    const matchD = hasDeptId
+                        ? (dAliases.has(normalizeScopeId(it.deptId)) || dAliases.has(normalizeDigitsKey(it.deptId)))
+                        : (normalizeText(it.deptName) === dName && matchByUniqueName(deptNameToIds, it.deptName, dAliases));
                     if (scope.type === 'department') return matchG && matchD;
-                    const matchC = hasCatId ? normalizeScopeId(it.catId) === cId : normalizeText(it.catName) === cName;
+                    const matchC = hasCatId
+                        ? (cAliases.has(normalizeScopeId(it.catId)) || cAliases.has(normalizeDigitsKey(it.catId)))
+                        : (normalizeText(it.catName) === cName && matchByUniqueName(catNameToIds, it.catName, cAliases));
                     return matchG && matchD && matchC;
                 });
 
@@ -6353,7 +6701,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 </div>
 
                 <div className={`grid gap-6 ${view.level === 'groups' ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}>
-                    {view.level === 'groups' && data.groups.map(group => {
+                    {view.level === 'groups' && [...data.groups].sort((a, b) => {
+                        const getGroupOrder = (idRaw: unknown) => {
+                            const raw = String(idRaw || '').trim();
+                            const numeric = Number((raw.match(/\d+/)?.[0] || '999999'));
+                            return Number.isFinite(numeric) ? numeric : 999999;
+                        };
+                        return getGroupOrder(a.id) - getGroupOrder(b.id);
+                    }).map(group => {
                         const m = calcScopeMetrics(group);
                         const totalSkus = Number(m.skus);
                         const doneSkus = Number(m.doneSkus);
@@ -6445,13 +6800,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     })}
 
                     {view.level === 'departments' && [...(selectedGroup?.departments || [])].sort((a, b) => {
-                        const aMetrics = getScopedMetrics({ type: 'department', groupId: selectedGroup!.id, deptId: a.id });
-                        const bMetrics = getScopedMetrics({ type: 'department', groupId: selectedGroup!.id, deptId: b.id });
-                        const aHasDivergence = !!aMetrics && (Math.abs(Number(aMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(aMetrics.diffCost || 0)) > 0.01);
-                        const bHasDivergence = !!bMetrics && (Math.abs(Number(bMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(bMetrics.diffCost || 0)) > 0.01);
-                        if (aHasDivergence && !bHasDivergence) return -1;
-                        if (!aHasDivergence && bHasDivergence) return 1;
-
                         const aHasInProgress = a.categories.some(c => isInProgressStatus(c.status));
                         const bHasInProgress = b.categories.some(c => isInProgressStatus(c.status));
                         if (aHasInProgress && !bHasInProgress) return -1;
@@ -6464,6 +6812,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                         if (aAllDone && !bAllDone) return 1;
                         if (!aAllDone && bAllDone) return -1;
+
+                        const aMetrics = getScopedMetrics({ type: 'department', groupId: selectedGroup!.id, deptId: a.id });
+                        const bMetrics = getScopedMetrics({ type: 'department', groupId: selectedGroup!.id, deptId: b.id });
+                        const aHasDivergence = !!aMetrics && (Math.abs(Number(aMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(aMetrics.diffCost || 0)) > 0.01);
+                        const bHasDivergence = !!bMetrics && (Math.abs(Number(bMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(bMetrics.diffCost || 0)) > 0.01);
+                        if (aHasDivergence && !bHasDivergence) return -1;
+                        if (!aHasDivergence && bHasDivergence) return 1;
 
                         return 0;
                     }).map(dept => {
@@ -6540,13 +6895,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     })}
 
                     {view.level === 'categories' && [...(selectedDept?.categories || [])].sort((a, b) => {
-                        const aMetrics = getScopedMetrics({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: a.id });
-                        const bMetrics = getScopedMetrics({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: b.id });
-                        const aHasDivergence = !!aMetrics && (Math.abs(Number(aMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(aMetrics.diffCost || 0)) > 0.01);
-                        const bHasDivergence = !!bMetrics && (Math.abs(Number(bMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(bMetrics.diffCost || 0)) > 0.01);
-                        if (aHasDivergence && !bHasDivergence) return -1;
-                        if (!aHasDivergence && bHasDivergence) return 1;
-
                         const aStatus = normalizeAuditStatus(a.status);
                         const bStatus = normalizeAuditStatus(b.status);
 
@@ -6560,7 +6908,17 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             return 3;
                         };
 
-                        return getWeight(aStatus) - getWeight(bStatus);
+                        const byStatus = getWeight(aStatus) - getWeight(bStatus);
+                        if (byStatus !== 0) return byStatus;
+
+                        const aMetrics = getScopedMetrics({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: a.id });
+                        const bMetrics = getScopedMetrics({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: b.id });
+                        const aHasDivergence = !!aMetrics && (Math.abs(Number(aMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(aMetrics.diffCost || 0)) > 0.01);
+                        const bHasDivergence = !!bMetrics && (Math.abs(Number(bMetrics.diffQty || 0)) > 0.01 || Math.abs(Number(bMetrics.diffCost || 0)) > 0.01);
+                        if (aHasDivergence && !bHasDivergence) return -1;
+                        if (!aHasDivergence && bHasDivergence) return 1;
+
+                        return 0;
                     }).map(cat => {
                         const catStatus = normalizeAuditStatus(cat.status);
                         const canFinalize = isMaster && catStatus !== AuditStatus.TODO;

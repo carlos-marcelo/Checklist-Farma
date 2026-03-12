@@ -4904,16 +4904,23 @@ const App: React.FC = () => {
         const branches: BranchMetric[] = [];
         const uniqueSkuSet = new Set<string>();
         const uniqueSkuDoneSet = new Set<string>();
+        const normalizeProductCode = (value: unknown) =>
+            String(value ?? '')
+                .trim()
+                .replace(/\D/g, '')
+                .replace(/^0+/, '');
         latestByBranch.forEach((session, branchLabel) => {
             const parsedData = parseJsonValue<any>(session.data) || session.data || {};
             const groups = Array.isArray(parsedData?.groups) ? parsedData.groups : [];
 
-            let totalSkus = 0;
-            let countedSkus = 0;
-            let totalUnits = 0;
-            let countedUnits = 0;
-            let totalCost = 0;
-            let countedCost = 0;
+            const skuMap = new Map<string, { units: number; cost: number; done: boolean }>();
+            const fallbackCategoryKeys = new Set<string>();
+            let fallbackTotalSkus = 0;
+            let fallbackCountedSkus = 0;
+            let fallbackTotalUnits = 0;
+            let fallbackCountedUnits = 0;
+            let fallbackTotalCost = 0;
+            let fallbackCountedCost = 0;
 
             groups.forEach((group: any) => {
                 (group?.departments || []).forEach((dept: any) => {
@@ -4923,37 +4930,140 @@ const App: React.FC = () => {
                         const cost = Number(cat?.totalCost || 0);
                         const status = normalizeAuditCategoryStatus(cat?.status);
                         const products = Array.isArray(cat?.products) ? cat.products : [];
-                        products.forEach((p: any) => {
-                            const code = String(p?.reducedCode || p?.code || '').trim();
-                            if (!code) return;
-                            uniqueSkuSet.add(code);
-                            if (status === 'done') uniqueSkuDoneSet.add(code);
-                        });
-                        totalSkus += itemsCount;
-                        totalUnits += units;
-                        totalCost += cost;
-                        if (status === 'done') {
-                            countedSkus += itemsCount;
-                            countedUnits += units;
-                            countedCost += cost;
+                        const groupKey = String(group?.id || group?.name || '').trim();
+                        const deptKey = String(dept?.numericId || dept?.id || dept?.name || '').trim();
+                        const catKey = String(cat?.id || cat?.numericId || cat?.name || '').trim();
+                        const fallbackKey = `${groupKey}|${deptKey}|${catKey}`;
+
+                        if (products.length > 0) {
+                            products.forEach((p: any) => {
+                                const code = normalizeProductCode(p?.reducedCode || p?.code || '');
+                                if (!code) return;
+                                const productUnits = Number(p?.quantity || 0);
+                                const unitCost = Number(p?.cost || 0);
+                                const productCost = productUnits * unitCost;
+                                const prev = skuMap.get(code) || { units: 0, cost: 0, done: false };
+                                // Dedup defensivo: se o mesmo SKU vier duplicado na estrutura, mantém o maior valor.
+                                skuMap.set(code, {
+                                    units: Math.max(prev.units, productUnits),
+                                    cost: Math.max(prev.cost, productCost),
+                                    done: prev.done || status === 'done'
+                                });
+                            });
+                        } else if (!fallbackCategoryKeys.has(fallbackKey)) {
+                            fallbackCategoryKeys.add(fallbackKey);
+                            fallbackTotalSkus += itemsCount;
+                            fallbackTotalUnits += units;
+                            fallbackTotalCost += cost;
+                            if (status === 'done') {
+                                fallbackCountedSkus += itemsCount;
+                                fallbackCountedUnits += units;
+                                fallbackCountedCost += cost;
+                            }
                         }
                     });
                 });
             });
 
+            let totalSkus = fallbackTotalSkus;
+            let countedSkus = fallbackCountedSkus;
+            let totalUnits = fallbackTotalUnits;
+            let countedUnits = fallbackCountedUnits;
+            let totalCost = fallbackTotalCost;
+            let countedCost = fallbackCountedCost;
+            skuMap.forEach((sku, code) => {
+                totalSkus += 1;
+                totalUnits += sku.units;
+                totalCost += sku.cost;
+                if (sku.done) {
+                    countedSkus += 1;
+                    countedUnits += sku.units;
+                    countedCost += sku.cost;
+                }
+                uniqueSkuSet.add(code);
+                if (sku.done) uniqueSkuDoneSet.add(code);
+            });
+
             let diffQty = 0;
             let diffCost = 0;
             let termsWithExcel = 0;
-            const termDrafts = parsedData?.termDrafts && typeof parsedData.termDrafts === 'object'
-                ? Object.values(parsedData.termDrafts)
+            const termDraftEntries: Array<[string, any]> = parsedData?.termDrafts && typeof parsedData.termDrafts === 'object'
+                ? Object.entries(parsedData.termDrafts)
                 : [];
-            termDrafts.forEach((draft: any) => {
+            const diffItemMap = new Map<string, { diffQty: number; diffCost: number; rank: number }>();
+            const diffScopeMap = new Map<string, { diffQty: number; diffCost: number; rank: number }>();
+            const scopeTypeRank = (row: any) => {
+                const hasCat = !!String(row?.catId || row?.catName || '').trim();
+                const hasDept = !!String(row?.deptId || row?.deptName || '').trim();
+                if (hasCat) return 3;
+                if (hasDept) return 2;
+                return 1;
+            };
+            const normalizeCode = (value: unknown) =>
+                String(value ?? '').trim().replace(/\D/g, '').replace(/^0+/, '');
+            const normalizeToken = (value: unknown) =>
+                String(value ?? '').trim().toLowerCase();
+            termDraftEntries.forEach(([, draft]) => {
                 if (!draft?.excelMetrics) return;
                 if (draft?.excelMetricsRemovedAt && !draft?.excelMetrics) return;
                 termsWithExcel += 1;
-                diffQty += Number(draft.excelMetrics?.diffQty || 0);
-                diffCost += Number(draft.excelMetrics?.diffCost || 0);
+                const metrics = draft.excelMetrics;
+                const items = Array.isArray(metrics?.items) ? metrics.items : [];
+                const grouped = Array.isArray(metrics?.groupedDifferences) ? metrics.groupedDifferences : [];
+                items.forEach((row: any) => {
+                    const codeKey = normalizeCode(row?.reducedCode || row?.code || row?.barcode || row?.ean || '');
+                    const groupKey = normalizeToken(row?.groupId || row?.groupName || '');
+                    const deptKey = normalizeToken(row?.deptId || row?.deptName || '');
+                    const catKey = normalizeToken(row?.catId || row?.catName || '');
+                    const itemKey = [codeKey, groupKey, deptKey, catKey].join('|');
+                    if (!codeKey && !groupKey && !deptKey && !catKey) return;
+                    const rank = scopeTypeRank(row);
+                    const candidate = {
+                        diffQty: Number(row?.diffQty || 0),
+                        diffCost: Number(row?.diffCost || 0),
+                        rank
+                    };
+                    const prev = diffItemMap.get(itemKey);
+                    if (!prev || candidate.rank > prev.rank || (candidate.rank === prev.rank && Math.abs(candidate.diffCost) > Math.abs(prev.diffCost))) {
+                        diffItemMap.set(itemKey, candidate);
+                    }
+                });
+                grouped.forEach((row: any) => {
+                    const groupKey = normalizeToken(row?.groupId || row?.groupName || '');
+                    const deptKey = normalizeToken(row?.deptId || row?.deptName || '');
+                    const catKey = normalizeToken(row?.catId || row?.catName || '');
+                    const scopeKey = [groupKey, deptKey, catKey].join('|');
+                    if (!groupKey && !deptKey && !catKey) return;
+                    const rank = scopeTypeRank(row);
+                    const candidate = {
+                        diffQty: Number(row?.diffQty || 0),
+                        diffCost: Number(row?.diffCost || 0),
+                        rank
+                    };
+                    const prev = diffScopeMap.get(scopeKey);
+                    if (!prev || candidate.rank > prev.rank || (candidate.rank === prev.rank && Math.abs(candidate.diffCost) > Math.abs(prev.diffCost))) {
+                        diffScopeMap.set(scopeKey, candidate);
+                    }
+                });
             });
+            if (diffItemMap.size > 0) {
+                diffItemMap.forEach(v => {
+                    diffQty += v.diffQty;
+                    diffCost += v.diffCost;
+                });
+            } else if (diffScopeMap.size > 0) {
+                diffScopeMap.forEach(v => {
+                    diffQty += v.diffQty;
+                    diffCost += v.diffCost;
+                });
+            } else {
+                termDraftEntries.forEach(([, draft]) => {
+                    if (!draft?.excelMetrics) return;
+                    if (draft?.excelMetricsRemovedAt && !draft?.excelMetrics) return;
+                    diffQty += Number(draft.excelMetrics?.diffQty || 0);
+                    diffCost += Number(draft.excelMetrics?.diffCost || 0);
+                });
+            }
 
             const pendingSkus = Math.max(0, totalSkus - countedSkus);
             const pendingUnits = Math.max(0, totalUnits - countedUnits);
