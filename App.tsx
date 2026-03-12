@@ -1466,6 +1466,7 @@ const App: React.FC = () => {
     const [isLoadingDashboardAudits, setIsLoadingDashboardAudits] = useState(false);
     const [dashboardAuditsError, setDashboardAuditsError] = useState<string | null>(null);
     const [dashboardAuditsFetchedAt, setDashboardAuditsFetchedAt] = useState<string | null>(null);
+    const [auditJumpFilial, setAuditJumpFilial] = useState<string>('');
 
     // Logs & Eventos
     const [appEventLogs, setAppEventLogs] = useState<SupabaseService.DbAppEventLog[]>([]);
@@ -5465,6 +5466,17 @@ const App: React.FC = () => {
         return { summary, accumulatedPct, summaryDivergencePct, uniqueTotalSkus, uniqueCountedSkus, uniquePendingSkus, areas, branches };
     }, [dashboardAuditSessions, scopedCompanies, scopedUsers]);
 
+    const handleOpenAuditFromDashboardBranch = useCallback((branchLabel: string) => {
+        const raw = String(branchLabel || '').trim();
+        if (!raw) return;
+        const numeric = raw.match(/\d+/)?.[0] || '';
+        const filial = numeric || raw;
+        setAuditJumpFilial(filial);
+        setCurrentView('audit');
+        window.scrollTo(0, 0);
+        setIsSidebarOpen(false);
+    }, []);
+
     // --- RENDER ---
 
     // Loading Screen
@@ -5714,6 +5726,7 @@ const App: React.FC = () => {
                                 userName={currentUser?.name || ''}
                                 userRole={currentUser?.role || 'USER'}
                                 companies={companies}
+                                initialFilial={auditJumpFilial}
                             />
                         </div>
                     )}
@@ -9220,7 +9233,13 @@ const App: React.FC = () => {
                                                     <p className="text-sm font-semibold text-gray-400">Nenhuma filial com auditoria aberta.</p>
                                                 ) : (
                                                     dashboardAuditOverview.branches.map(branch => (
-                                                        <div key={`${branch.branch}_${branch.auditNumber}`} className="rounded-xl border border-gray-100 px-3 py-2">
+                                                        <button
+                                                            key={`${branch.branch}_${branch.auditNumber}`}
+                                                            type="button"
+                                                            onClick={() => handleOpenAuditFromDashboardBranch(branch.branch)}
+                                                            className="w-full text-left rounded-xl border border-gray-100 px-3 py-2 hover:border-indigo-200 hover:bg-indigo-50/30 transition-colors"
+                                                            title={`Abrir Auditoria da ${branch.branch}`}
+                                                        >
                                                             <div className="flex items-center justify-between gap-3">
                                                                 <p className="text-sm font-black text-gray-800">{branch.branch}</p>
                                                                 <span className="text-[10px] font-black uppercase tracking-widest text-indigo-500">Inv. {branch.auditNumber}</span>
@@ -9245,7 +9264,7 @@ const App: React.FC = () => {
                                                             <p className="mt-1 text-[10px] font-black text-emerald-600 uppercase tracking-widest text-right">
                                                                 {branch.progressPct.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })}%
                                                             </p>
-                                                        </div>
+                                                        </button>
                                                     ))
                                                 )}
                                             </div>

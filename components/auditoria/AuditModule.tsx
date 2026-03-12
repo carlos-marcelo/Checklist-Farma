@@ -800,9 +800,10 @@ interface AuditModuleProps {
     userName: string;
     userRole: string;
     companies: any[];
+    initialFilial?: string;
 }
 
-const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole, companies }) => {
+const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole, companies, initialFilial }) => {
     const isMaster = userRole === 'MASTER';
     const isAdmin = userRole === 'ADMINISTRATIVO';
     const canManageAuditLifecycle = isMaster || isAdmin;
@@ -876,7 +877,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const removedExcelDraftKeysRef = useRef<Set<string>>(new Set());
 
     const [selectedEmpresa, setSelectedEmpresa] = useState("Drogaria Cidade");
-    const [selectedFilial, setSelectedFilial] = useState("");
+    const [selectedFilial, setSelectedFilial] = useState(String(initialFilial || '').trim());
     const selectedCompany = useMemo(() => companies.find(c => c.name === selectedEmpresa), [companies, selectedEmpresa]);
     const [branchAuditsHistory, setBranchAuditsHistory] = useState<DbAuditSession[]>([]);
     const [isLoadingBranchAudits, setIsLoadingBranchAudits] = useState(false);
@@ -904,6 +905,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     useEffect(() => {
         activeFilialRef.current = selectedFilial || '';
     }, [selectedFilial]);
+    useEffect(() => {
+        const normalized = String(initialFilial || '').trim();
+        if (!normalized) return;
+        if (normalized !== selectedFilial) setSelectedFilial(normalized);
+    }, [initialFilial, selectedFilial]);
 
     const loadAuditNum = useCallback(async (silent: boolean = false) => {
         if (!selectedFilial) return;
