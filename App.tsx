@@ -1,9 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package, ArrowRight, ArrowLeft, ShieldCheck, HelpCircle, Info, LayoutGrid, UserCircle, FileSearch, ChevronDown, Calendar, RefreshCw, UserCircle2, Plus, SearchX, WifiOff } from 'lucide-react';
 import { CHECKLISTS as BASE_CHECKLISTS, THEMES, ACCESS_MODULES, ACCESS_LEVELS, INPUT_TYPE_LABELS, generateId } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem, ThemeColor, AppConfig, User, ReportHistoryItem, StockConferenceHistoryItem, CompanyArea, AccessLevelId, AccessModule, AccessLevelMeta, UserRole, StockConferenceSummary } from './types';
-import PreVencidosManager from './components/preVencidos/PreVencidosManager';
 import AuditModule from './components/auditoria/AuditModule';
 import SignaturePad from './components/SignaturePad';
 import { StockConference } from './components/StockConference';
@@ -17,6 +16,7 @@ import { AppStorage } from './src/appStorage';
 import { CacheService } from './src/cacheService';
 import { ImageUtils } from './src/utils/imageUtils';
 import { CadastrosBaseService } from './src/cadastrosBase/cadastrosBaseService';
+import { PRE_VENCIDOS_MODULE_ENABLED } from './src/featureFlags';
 
 
 const mergeAccessMatrixWithDefaults = (incoming: Partial<Record<AccessLevelId, Record<string, boolean>>>) => {
@@ -212,7 +212,6 @@ const buildSharedStockModuleKey = (branchRaw: string) => {
 
 const GLOBAL_BASE_MODULE_SLOTS: GlobalBaseModuleSlot[] = [
     { key: 'shared_cadastro_produtos', label: 'Cadastro Produtos (Global)', description: 'Base principal para Pré‑Vencidos e Conferência.' },
-    { key: 'pre_dcb_base', label: 'Relatório DCB (Pré‑Vencidos)', description: 'Base DCB compartilhada para análise de similares.' },
     { key: 'audit_cadastro_2000', label: 'Auditoria Cadastro 2000', description: 'Arquivo fixo de cadastro grupo 2000.' },
     { key: 'audit_cadastro_3000', label: 'Auditoria Cadastro 3000', description: 'Arquivo fixo de cadastro grupo 3000.' },
     { key: 'audit_cadastro_4000', label: 'Auditoria Cadastro 4000', description: 'Arquivo fixo de cadastro grupo 4000.' },
@@ -223,6 +222,10 @@ const GLOBAL_BASE_MODULE_SLOTS: GlobalBaseModuleSlot[] = [
     { key: 'audit_ids_departamento', label: 'Auditoria IDs Departamento', description: 'Relacionamento de departamentos para auditoria.' },
     { key: 'audit_ids_categoria', label: 'Auditoria IDs Categoria', description: 'Relacionamento de categorias para auditoria.' }
 ];
+
+const PreVencidosManager = PRE_VENCIDOS_MODULE_ENABLED
+    ? React.lazy(() => import('./components/preVencidos/PreVencidosManager'))
+    : null;
 
 const canonicalizeFilterLabel = (value: string) => {
     const normalized = value.normalize('NFKC').replace(/\s+/g, ' ').trim();
@@ -1404,7 +1407,22 @@ const App: React.FC = () => {
     const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit' | 'logs' | 'cadastros_globais'>(() => {
         if (typeof window === 'undefined') return 'dashboard';
         const savedView = localStorage.getItem('APP_CURRENT_VIEW');
-        const allowedViews = new Set(['checklist', 'summary', 'dashboard', 'report', 'settings', 'history', 'view_history', 'support', 'stock', 'access', 'pre', 'audit', 'logs', 'cadastros_globais']);
+        const allowedViews = new Set([
+            'checklist',
+            'summary',
+            'dashboard',
+            'report',
+            'settings',
+            'history',
+            'view_history',
+            'support',
+            'stock',
+            'access',
+            'audit',
+            'logs',
+            'cadastros_globais',
+            ...(PRE_VENCIDOS_MODULE_ENABLED ? ['pre'] : [])
+        ]);
         if (savedView && allowedViews.has(savedView)) {
             return savedView as 'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit' | 'logs' | 'cadastros_globais';
         }
@@ -2029,7 +2047,22 @@ const App: React.FC = () => {
             const u = users.find(u => u.email === savedEmail);
             if (u) {
                 const savedView = localStorage.getItem('APP_CURRENT_VIEW');
-                const allowedViews = new Set(['checklist', 'summary', 'dashboard', 'report', 'settings', 'history', 'view_history', 'support', 'stock', 'access', 'pre', 'audit', 'logs', 'cadastros_globais']);
+                const allowedViews = new Set([
+                    'checklist',
+                    'summary',
+                    'dashboard',
+                    'report',
+                    'settings',
+                    'history',
+                    'view_history',
+                    'support',
+                    'stock',
+                    'access',
+                    'audit',
+                    'logs',
+                    'cadastros_globais',
+                    ...(PRE_VENCIDOS_MODULE_ENABLED ? ['pre'] : [])
+                ]);
                 const restoredView = (savedView && allowedViews.has(savedView))
                     ? savedView as 'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit' | 'logs' | 'cadastros_globais'
                     : 'dashboard';
@@ -4010,6 +4043,10 @@ const App: React.FC = () => {
     };
 
     const handleViewChange = (view: typeof currentView) => {
+        if (view === 'pre' && !PRE_VENCIDOS_MODULE_ENABLED) {
+            alert('Módulo Pré-Vencidos está desativado por tempo indeterminado.');
+            return;
+        }
         if ((view === 'logs' || view === 'cadastros_globais') && currentUser?.role !== 'MASTER') {
             alert('Apenas usuários master podem acessar este módulo.');
             return;
@@ -4055,6 +4092,13 @@ const App: React.FC = () => {
     const handleResetStockBranchFilters = () => setStockBranchFilters([]);
 
     // --- LOGS & EVENTOS ---
+
+    useEffect(() => {
+        if (!PRE_VENCIDOS_MODULE_ENABLED && currentView === 'pre') {
+            setCurrentView('dashboard');
+            return;
+        }
+    }, [currentView]);
 
     useEffect(() => {
         if (!currentUser) return;
@@ -5293,7 +5337,7 @@ const App: React.FC = () => {
     // If 'gerencial' is ignored, we still have the data because syncing happens on input.
     // Actually, for display in report, we should just use the first checklist in the definitions, as they are synced.
 
-    const isImmersivePreView = currentView === 'pre';
+    const isImmersivePreView = PRE_VENCIDOS_MODULE_ENABLED && currentView === 'pre';
 
     const ConnectivityIndicator = () => {
         if (isOnline) return null;
@@ -5413,15 +5457,17 @@ const App: React.FC = () => {
                         </div>
                     )}
 
-                    {currentView === 'pre' && (
+                    {PRE_VENCIDOS_MODULE_ENABLED && currentView === 'pre' && PreVencidosManager && (
                         <div className="h-full animate-fade-in relative pb-24">
-                            <PreVencidosManager
-                                userEmail={currentUser?.email || ''}
-                                userName={currentUser?.name || ''}
-                                userRole={currentUser?.role || 'USER'}
-                                companies={companies}
-                                onLogout={handleLogout}
-                            />
+                            <Suspense fallback={<div className="p-6 text-sm font-semibold text-slate-500">Carregando módulo...</div>}>
+                                <PreVencidosManager
+                                    userEmail={currentUser?.email || ''}
+                                    userName={currentUser?.name || ''}
+                                    userRole={currentUser?.role || 'USER'}
+                                    companies={companies}
+                                    onLogout={handleLogout}
+                                />
+                            </Suspense>
                         </div>
                     )}
 

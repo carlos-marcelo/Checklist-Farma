@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { User, ChecklistDefinition, AppConfig } from '../../types';
 import { Logo } from './Logo';
+import { PRE_VENCIDOS_MODULE_ENABLED } from '../../src/featureFlags';
 
 interface TopbarProps {
     isSidebarOpen: boolean;
@@ -55,12 +56,12 @@ export const Topbar: React.FC<TopbarProps> = ({
         { label: 'Dashboard', view: 'dashboard', color: 'blue', icon: <LayoutDashboard size={18} />, shortcut: 'Ctrl + D' },
         { label: 'Checklists', view: 'checklist', color: 'emerald', icon: <ClipboardList size={18} />, shortcut: 'Ctrl + L' },
         { label: 'Visão Geral', view: 'summary', color: 'indigo', icon: <LayoutGrid size={18} /> },
-        { label: 'Pré-Vencidos', view: 'pre', color: 'amber', icon: <Package size={18} />, shortcut: 'Ctrl + V' },
         { label: 'Conferência', view: 'stock', color: 'cyan', icon: <Search size={18} />, shortcut: 'Ctrl + C' },
         { label: 'Auditoria', view: 'audit', color: 'indigo', icon: <ClipboardList size={18} />, shortcut: 'Ctrl + A' },
         { label: 'Histórico', view: 'history', color: 'purple', icon: <History size={18} />, shortcut: 'Ctrl + H' },
         { label: 'Suporte', view: 'support', color: 'rose', icon: <MessageSquareQuote size={18} /> }
-    ].filter(item => (item.view !== 'logs' || isMaster));
+    ].concat(PRE_VENCIDOS_MODULE_ENABLED ? [{ label: 'Pré-Vencidos', view: 'pre', color: 'amber', icon: <Package size={18} />, shortcut: 'Ctrl + V' }] : [])
+    .filter(item => (item.view !== 'logs' || isMaster));
 
     if (isMaster) {
         navItems.splice(navItems.findIndex(item => item.view === 'support'), 0, { label: 'Métricas Gerenciais', view: 'logs', color: 'slate', icon: <FileSearch size={18} />, shortcut: 'Ctrl + M' });
@@ -79,11 +80,13 @@ export const Topbar: React.FC<TopbarProps> = ({
         const map: Record<string, string> = {
             d: 'dashboard',
             l: 'checklist',
-            v: 'pre',
             c: 'stock',
             a: 'audit',
             h: 'history'
         };
+        if (PRE_VENCIDOS_MODULE_ENABLED) {
+            map.v = 'pre';
+        }
         if (isMaster) {
             map.m = 'logs';
             map.b = 'cadastros_globais';

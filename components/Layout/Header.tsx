@@ -2,6 +2,7 @@ import React from 'react';
 import { RotateCcw, FileCheck } from 'lucide-react';
 import { User, AppConfig, ChecklistDefinition } from '../../types';
 import { Logo } from './Logo';
+import { PRE_VENCIDOS_MODULE_ENABLED } from '../../src/featureFlags';
 
 interface HeaderProps {
     currentUser: User;
@@ -39,7 +40,7 @@ export const Header: React.FC<HeaderProps> = ({
         if (currentView === 'settings') return 'Configurações do Sistema';
         if (currentView === 'access') return 'Níveis de Acesso';
         if (currentView === 'history') return 'Histórico de Relatórios';
-        if (currentView === 'pre') return 'Pré-Vencidos';
+        if (currentView === 'pre' && PRE_VENCIDOS_MODULE_ENABLED) return 'Pré-Vencidos';
         if (currentView === 'stock') return 'Conferência de Estoque';
         if (currentView === 'audit') return 'Auditoria';
         if (currentView === 'logs') return 'Métricas Gerenciais';

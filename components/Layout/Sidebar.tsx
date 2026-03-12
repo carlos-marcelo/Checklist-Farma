@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { User, ChecklistDefinition, AppConfig, AccessLevelId } from '../../types';
 import { Logo } from './Logo';
+import { PRE_VENCIDOS_MODULE_ENABLED } from '../../src/featureFlags';
 
 interface SidebarProps {
     isSidebarOpen: boolean;
@@ -152,13 +153,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     color="emerald"
                 />
 
-                <SidebarButton
-                    icon={<Package size={20} />}
-                    label="Pré-Vencidos"
-                    active={currentView === 'pre'}
-                    onClick={() => handleViewChange('pre')}
-                    color="amber"
-                />
+                {PRE_VENCIDOS_MODULE_ENABLED && (
+                    <SidebarButton
+                        icon={<Package size={20} />}
+                        label="Pré-Vencidos"
+                        active={currentView === 'pre'}
+                        onClick={() => handleViewChange('pre')}
+                        color="amber"
+                    />
+                )}
 
                 <SidebarButton
                     icon={<Search size={20} />}
