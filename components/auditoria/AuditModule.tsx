@@ -101,7 +101,11 @@ const TERM_MANUAL_CLASSIFICATION_BY_CODE: Record<string, { groupId: string; dept
     '16184': { groupId: '3000', deptId: '121', catId: '103' },
     '40719': { groupId: '3000', deptId: '121', catId: '124' },
     '81982': { groupId: '4000', deptId: '120', catId: '114' },
-    '82039': { groupId: '2000', deptId: '120', catId: '129' }
+    '82039': { groupId: '2000', deptId: '120', catId: '129' },
+    '59209': { groupId: '4000', deptId: '121', catId: '109' },
+    '49578': { groupId: '4000', deptId: '121', catId: '129' },
+    '84591': { groupId: '4000', deptId: '121', catId: '124' },
+    '84489': { groupId: '4000', deptId: '121', catId: '106' }
 };
 
 const isDiversosLabel = (value?: string) => {
