@@ -5477,6 +5477,12 @@ const App: React.FC = () => {
         setIsSidebarOpen(false);
     }, []);
 
+    useEffect(() => {
+        if (currentView !== 'audit' && auditJumpFilial) {
+            setAuditJumpFilial('');
+        }
+    }, [currentView, auditJumpFilial]);
+
     // --- RENDER ---
 
     // Loading Screen
