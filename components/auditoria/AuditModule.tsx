@@ -3484,6 +3484,95 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0 });
     }, [data, termDrafts, buildTermKey, getScopeCategories]);
 
+    const sumExcelMetrics = useCallback((items: Array<any | null | undefined>) => {
+        return items.reduce((acc: any, curr: any) => {
+            if (!curr) return acc;
+            return {
+                sysQty: (acc.sysQty || 0) + Number(curr.sysQty || 0),
+                sysCost: (acc.sysCost || 0) + Number(curr.sysCost || 0),
+                countedQty: (acc.countedQty || 0) + Number(curr.countedQty || 0),
+                countedCost: (acc.countedCost || 0) + Number(curr.countedCost || 0),
+                diffQty: (acc.diffQty || 0) + Number(curr.diffQty || 0),
+                diffCost: (acc.diffCost || 0) + Number(curr.diffCost || 0)
+            };
+        }, { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0 });
+    }, []);
+
+    const getGroupVerifiedMetrics = useCallback((group: any) => {
+        const groupId = String(group?.id || '');
+        const direct = getScopedMetrics({ type: 'group', groupId });
+        const deptMetrics = (group?.departments || [])
+            .map((dept: any) => getScopedMetrics({ type: 'department', groupId, deptId: String(dept.id) }))
+            .filter(Boolean);
+
+        if (deptMetrics.length === 0) return direct;
+
+        const byDepartments = sumExcelMetrics(deptMetrics);
+        if (!direct) return byDepartments;
+
+        const hasRelevantMismatch =
+            Math.abs(Number(direct.diffQty || 0) - Number(byDepartments.diffQty || 0)) > 0.01 ||
+            Math.abs(Number(direct.diffCost || 0) - Number(byDepartments.diffCost || 0)) > 0.01;
+
+        // Se houver divergência entre "fora do grupo" e a soma interna dos departamentos,
+        // prioriza a soma interna para manter consistência visual e financeira.
+        return hasRelevantMismatch ? byDepartments : direct;
+    }, [getScopedMetrics, sumExcelMetrics]);
+
+    const filialTotalsMetrics = useMemo(() => {
+        if (!data) {
+            return {
+                diffQty: 0,
+                diffCost: 0,
+                repDivergencePct: 0,
+                pendingUnits: 0,
+                pendingSkus: 0,
+                pendingCost: 0,
+                groupsWithDivergence: 0,
+                doneUnits: 0,
+                totalUnits: 0,
+                doneCost: 0,
+                totalCost: 0
+            };
+        }
+
+        let diffQty = 0;
+        let diffCost = 0;
+        let groupsWithDivergence = 0;
+        data.groups.forEach(group => {
+            const metrics = getGroupVerifiedMetrics(group);
+            if (!metrics) return;
+            const currentDiffQty = Number(metrics.diffQty || 0);
+            const currentDiffCost = Number(metrics.diffCost || 0);
+            diffQty += currentDiffQty;
+            diffCost += currentDiffCost;
+            if (Math.abs(currentDiffQty) > 0.01 || Math.abs(currentDiffCost) > 0.01) {
+                groupsWithDivergence += 1;
+            }
+        });
+
+        const pendingUnits = Math.max(0, Number(branchMetrics.units || 0) - Number(branchMetrics.doneUnits || 0));
+        const pendingSkus = Math.max(0, Number(branchMetrics.skus || 0) - Number(branchMetrics.doneSkus || 0));
+        const pendingCost = Math.max(0, Number(branchMetrics.cost || 0) - Number(branchMetrics.doneCost || 0));
+        const repDivergencePct = Number(branchMetrics.doneCost || 0) > 0
+            ? (diffCost / Number(branchMetrics.doneCost || 0)) * 100
+            : 0;
+
+        return {
+            diffQty,
+            diffCost,
+            repDivergencePct,
+            pendingUnits,
+            pendingSkus,
+            pendingCost,
+            groupsWithDivergence,
+            doneUnits: Number(branchMetrics.doneUnits || 0),
+            totalUnits: Number(branchMetrics.units || 0),
+            doneCost: Number(branchMetrics.doneCost || 0),
+            totalCost: Number(branchMetrics.cost || 0)
+        };
+    }, [data, getGroupVerifiedMetrics, branchMetrics.units, branchMetrics.doneUnits, branchMetrics.skus, branchMetrics.doneSkus, branchMetrics.cost, branchMetrics.doneCost]);
+
     const createDefaultTermForm = (): TermForm => ({
         inventoryNumber: inventoryNumber || data?.inventoryNumber || '',
         date: new Date().toLocaleDateString('pt-BR'),
@@ -6632,10 +6721,45 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         <span className="text-[8px] font-bold text-emerald-500 uppercase mt-1 tracking-tighter">CONFERIDOS / PENDENTES</span>
                     </div>
 
-                    <div className="flex flex-col items-center border-l border-indigo-100 bg-indigo-50/50 rounded-2xl py-2 px-4 shadow-sm">
+                    <div className="flex flex-col items-center border-l border-indigo-100 bg-indigo-50/50 rounded-2xl py-2 px-4 shadow-sm md:col-span-1">
                         <span className="text-[9px] font-black text-indigo-400 uppercase tracking-widest italic text-center">Dias Restantes</span>
                         <span className="text-2xl font-black text-indigo-600 tabular-nums leading-none mt-1">{Math.ceil(productivity.etaDays)} <span className="text-[10px] uppercase font-bold text-indigo-400">Dias</span></span>
                         <span className="text-[8px] font-bold text-indigo-300 uppercase mt-1 tracking-tighter">PREVISÃO FINAL</span>
+                    </div>
+
+                    <div className="md:col-span-5 rounded-2xl border border-slate-200 bg-white/90 px-4 py-3 shadow-sm">
+                        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                                <div className="text-[9px] font-black uppercase tracking-widest text-slate-500">Qtde Divergência</div>
+                                <div className={`text-xl font-black tabular-nums mt-1 ${filialTotalsMetrics.diffQty < 0 ? 'text-red-600' : filialTotalsMetrics.diffQty > 0 ? 'text-emerald-600' : 'text-slate-600'}`}>
+                                    {filialTotalsMetrics.diffQty > 0 ? '+' : ''}{Math.round(filialTotalsMetrics.diffQty).toLocaleString('pt-BR')} un.
+                                </div>
+                            </div>
+                            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                                <div className="text-[9px] font-black uppercase tracking-widest text-slate-500">Divergência R$</div>
+                                <div className={`text-xl font-black tabular-nums mt-1 ${filialTotalsMetrics.diffCost < 0 ? 'text-red-600' : filialTotalsMetrics.diffCost > 0 ? 'text-emerald-600' : 'text-slate-600'}`}>
+                                    {filialTotalsMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                </div>
+                            </div>
+                            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                                <div className="text-[9px] font-black uppercase tracking-widest text-slate-500">Total Conferido R$</div>
+                                <div className="text-xl font-black text-slate-800 tabular-nums mt-1">
+                                    {filialTotalsMetrics.doneCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                </div>
+                                <div className="text-[10px] font-bold text-slate-400 mt-1">
+                                    Falta conferir: {filialTotalsMetrics.pendingCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                </div>
+                            </div>
+                            <div className="rounded-xl border border-slate-100 bg-slate-50 px-3 py-2">
+                                <div className="text-[9px] font-black uppercase tracking-widest text-slate-500">Rep. Divergência</div>
+                                <div className={`text-xl font-black tabular-nums mt-1 ${filialTotalsMetrics.repDivergencePct < 0 ? 'text-red-600' : filialTotalsMetrics.repDivergencePct > 0 ? 'text-emerald-600' : 'text-slate-600'}`}>
+                                    {filialTotalsMetrics.repDivergencePct.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
+                                </div>
+                                <div className="text-[10px] font-bold text-slate-400 mt-1">
+                                    Unidades: {Math.round(filialTotalsMetrics.doneUnits).toLocaleString('pt-BR')} / {Math.round(filialTotalsMetrics.totalUnits).toLocaleString('pt-BR')}
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -6786,7 +6910,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                                     {/* Injeção do Dashboard de Excel (Geral) — usa os TOTAIS das excelMetrics */}
                                     {(() => {
-                                        const metrics = getScopedMetrics({ type: 'group', groupId: group.id });
+                                        const metrics = getGroupVerifiedMetrics(group);
                                         if (!metrics) return null;
                                         return <ExcelMetricsDashboard metrics={metrics} auditedBaseCost={m.doneCost} />;
                                     })()}

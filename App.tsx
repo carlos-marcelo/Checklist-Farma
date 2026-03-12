@@ -4938,6 +4938,13 @@ const App: React.FC = () => {
                 latestByBranch.set(branchLabel, session);
                 return;
             }
+            const prevAudit = Number(prev.audit_number || 0);
+            const curAudit = Number(session.audit_number || 0);
+            if (curAudit > prevAudit) {
+                latestByBranch.set(branchLabel, session);
+                return;
+            }
+            if (curAudit < prevAudit) return;
             const prevTs = Date.parse(String(prev.updated_at || prev.created_at || '')) || 0;
             const curTs = Date.parse(String(session.updated_at || session.created_at || '')) || 0;
             if (curTs > prevTs || (curTs === prevTs && Number(session.audit_number || 0) > Number(prev.audit_number || 0))) {
@@ -5034,80 +5041,309 @@ const App: React.FC = () => {
             const termDraftEntries: Array<[string, any]> = parsedData?.termDrafts && typeof parsedData.termDrafts === 'object'
                 ? Object.entries(parsedData.termDrafts)
                 : [];
-            const diffItemMap = new Map<string, { diffQty: number; diffCost: number; rank: number }>();
-            const diffScopeMap = new Map<string, { diffQty: number; diffCost: number; rank: number }>();
-            const scopeTypeRank = (row: any) => {
-                const hasCat = !!String(row?.catId || row?.catName || '').trim();
-                const hasDept = !!String(row?.deptId || row?.deptName || '').trim();
-                if (hasCat) return 3;
-                if (hasDept) return 2;
-                return 1;
+            const backupMetricsByKey: Record<string, any> = parsedData?.termExcelMetricsByKey && typeof parsedData.termExcelMetricsByKey === 'object'
+                ? parsedData.termExcelMetricsByKey
+                : {};
+            const normalizeScopeId = (value: unknown) => String(value ?? '').trim().toLowerCase();
+            const normalizeDigits = (value: unknown) => String(value ?? '').replace(/\D/g, '').replace(/^0+/, '');
+            const normalizeText = (value: unknown) =>
+                String(value ?? '')
+                    .normalize('NFD')
+                    .replace(/[\u0300-\u036f]/g, '')
+                    .toLowerCase()
+                    .replace(/\s+/g, ' ')
+                    .trim();
+            const makeAliasSet = (values: unknown[]) => {
+                const set = new Set<string>();
+                values.forEach(v => {
+                    const raw = normalizeScopeId(v);
+                    if (raw) set.add(raw);
+                    const digits = normalizeDigits(v);
+                    if (digits) set.add(digits);
+                });
+                return set;
             };
-            const normalizeCode = (value: unknown) =>
-                String(value ?? '').trim().replace(/\D/g, '').replace(/^0+/, '');
-            const normalizeToken = (value: unknown) =>
-                String(value ?? '').trim().toLowerCase();
-            termDraftEntries.forEach(([, draft]) => {
-                if (!draft?.excelMetrics) return;
-                if (draft?.excelMetricsRemovedAt && !draft?.excelMetrics) return;
-                termsWithExcel += 1;
-                const metrics = draft.excelMetrics;
-                const items = Array.isArray(metrics?.items) ? metrics.items : [];
-                const grouped = Array.isArray(metrics?.groupedDifferences) ? metrics.groupedDifferences : [];
-                items.forEach((row: any) => {
-                    const codeKey = normalizeCode(row?.reducedCode || row?.code || row?.barcode || row?.ean || '');
-                    const groupKey = normalizeToken(row?.groupId || row?.groupName || '');
-                    const deptKey = normalizeToken(row?.deptId || row?.deptName || '');
-                    const catKey = normalizeToken(row?.catId || row?.catName || '');
-                    const itemKey = [codeKey, groupKey, deptKey, catKey].join('|');
-                    if (!codeKey && !groupKey && !deptKey && !catKey) return;
-                    const rank = scopeTypeRank(row);
-                    const candidate = {
-                        diffQty: Number(row?.diffQty || 0),
-                        diffCost: Number(row?.diffCost || 0),
-                        rank
-                    };
-                    const prev = diffItemMap.get(itemKey);
-                    if (!prev || candidate.rank > prev.rank || (candidate.rank === prev.rank && Math.abs(candidate.diffCost) > Math.abs(prev.diffCost))) {
-                        diffItemMap.set(itemKey, candidate);
-                    }
+            const sumRows = (rows: any[]) => rows.reduce((acc, curr) => ({
+                diffQty: acc.diffQty + Number(curr?.diffQty || 0),
+                diffCost: acc.diffCost + Number(curr?.diffCost || 0)
+            }), { diffQty: 0, diffCost: 0 });
+            const mergeExcelMetricsPools = (pools: any[]) => {
+                const validPools = (pools || []).filter(Boolean);
+                if (validPools.length === 0) return null;
+                if (validPools.length === 1) return validPools[0];
+
+                const uniqueItems = new Map<string, any>();
+                validPools.forEach((pool: any) => {
+                    (Array.isArray(pool?.items) ? pool.items : []).forEach((it: any) => {
+                        const keyObj = {
+                            code: normalizeDigits(it?.code || it?.reducedCode),
+                            groupId: normalizeScopeId(it?.groupId),
+                            deptId: normalizeScopeId(it?.deptId),
+                            catId: normalizeScopeId(it?.catId),
+                            groupName: normalizeText(it?.groupName),
+                            deptName: normalizeText(it?.deptName),
+                            catName: normalizeText(it?.catName),
+                            sysQty: Number(it?.sysQty || 0),
+                            countedQty: Number(it?.countedQty || 0),
+                            diffQty: Number(it?.diffQty || 0),
+                            sysCost: Number(it?.sysCost || 0),
+                            countedCost: Number(it?.countedCost || 0),
+                            diffCost: Number(it?.diffCost || 0)
+                        };
+                        const key = JSON.stringify(keyObj);
+                        if (!uniqueItems.has(key)) uniqueItems.set(key, it);
+                    });
                 });
-                grouped.forEach((row: any) => {
-                    const groupKey = normalizeToken(row?.groupId || row?.groupName || '');
-                    const deptKey = normalizeToken(row?.deptId || row?.deptName || '');
-                    const catKey = normalizeToken(row?.catId || row?.catName || '');
-                    const scopeKey = [groupKey, deptKey, catKey].join('|');
-                    if (!groupKey && !deptKey && !catKey) return;
-                    const rank = scopeTypeRank(row);
-                    const candidate = {
-                        diffQty: Number(row?.diffQty || 0),
-                        diffCost: Number(row?.diffCost || 0),
-                        rank
-                    };
-                    const prev = diffScopeMap.get(scopeKey);
-                    if (!prev || candidate.rank > prev.rank || (candidate.rank === prev.rank && Math.abs(candidate.diffCost) > Math.abs(prev.diffCost))) {
-                        diffScopeMap.set(scopeKey, candidate);
-                    }
-                });
+
+                if (uniqueItems.size > 0) {
+                    const items = Array.from(uniqueItems.values());
+                    const groupedMap: Record<string, any> = {};
+                    items.forEach((it: any) => {
+                        const gId = normalizeScopeId(it?.groupId);
+                        const dId = normalizeScopeId(it?.deptId);
+                        const cId = normalizeScopeId(it?.catId);
+                        const g = it?.groupName || '';
+                        const d = it?.deptName || '';
+                        const c = it?.catName || '';
+                        const key = `${gId || g}|${dId || d}|${cId || c}`;
+                        if (!groupedMap[key]) {
+                            groupedMap[key] = {
+                                groupId: gId || undefined,
+                                deptId: dId || undefined,
+                                catId: cId || undefined,
+                                groupName: g,
+                                deptName: d,
+                                catName: c,
+                                diffQty: 0,
+                                diffCost: 0
+                            };
+                        }
+                        groupedMap[key].diffQty += Number(it?.diffQty || 0);
+                        groupedMap[key].diffCost += Number(it?.diffCost || 0);
+                    });
+                    return { items, groupedDifferences: Object.values(groupedMap) };
+                }
+
+                return {
+                    items: [],
+                    groupedDifferences: validPools.flatMap((pool: any) => Array.isArray(pool?.groupedDifferences) ? pool.groupedDifferences : [])
+                };
+            };
+
+            const termKeys = new Set<string>([
+                ...termDraftEntries.map(([k]) => String(k || '')),
+                ...Object.keys(backupMetricsByKey || {})
+            ]);
+            // Alinhamento com o módulo:
+            // - pool geral considera apenas termDrafts ativos (excelMetrics presentes e não removidos)
+            // - backup por key só é usado no acesso direto do escopo (getScopedMetricsLocal)
+            const pools = termDraftEntries
+                .map(([, draft]) => {
+                    if (!draft?.excelMetrics) return null;
+                    if (draft?.excelMetricsRemovedAt && !draft?.excelMetrics) return null;
+                    return draft.excelMetrics;
+                })
+                .filter(Boolean);
+            termsWithExcel = pools.length;
+            const mergedMetrics = mergeExcelMetricsPools(pools as any[]);
+            const scopedRows = Array.isArray(mergedMetrics?.items) && mergedMetrics.items.length > 0
+                ? mergedMetrics.items
+                : (Array.isArray(mergedMetrics?.groupedDifferences) ? mergedMetrics.groupedDifferences : []);
+
+            const groupNameToIds = new Map<string, Set<string>>();
+            groups.forEach((group: any) => {
+                const key = normalizeText(group?.name);
+                if (!key) return;
+                const ids = groupNameToIds.get(key) || new Set<string>();
+                makeAliasSet([group?.id]).forEach(id => ids.add(id));
+                groupNameToIds.set(key, ids);
             });
-            if (diffItemMap.size > 0) {
-                diffItemMap.forEach(v => {
-                    diffQty += v.diffQty;
-                    diffCost += v.diffCost;
+            const matchByUniqueName = (nameMap: Map<string, Set<string>>, rowName: unknown, targetAliases: Set<string>) => {
+                const key = normalizeText(rowName);
+                if (!key) return false;
+                const ids = nameMap.get(key);
+                if (!ids || ids.size !== 1) return false;
+                const only = Array.from(ids)[0];
+                return targetAliases.has(only);
+            };
+            const partialScopeKey = (s: { groupId?: string; deptId?: string; catId?: string }) => [s.groupId || '', s.deptId || '', s.catId || ''].join('|');
+            const getScopeCategories = (groupId?: string, deptId?: string, catId?: string) => {
+                const out: Array<{ group: any; dept: any; cat: any }> = [];
+                (groups || []).forEach((group: any) => {
+                    if (groupId && normalizeScopeId(group.id) !== normalizeScopeId(groupId)) return;
+                    (group.departments || []).forEach((dept: any) => {
+                        if (deptId && normalizeScopeId(dept.id) !== normalizeScopeId(deptId)) return;
+                        (dept.categories || []).forEach((cat: any) => {
+                            if (catId && normalizeScopeId(cat.id) !== normalizeScopeId(catId)) return;
+                            out.push({ group, dept, cat });
+                        });
+                    });
                 });
-            } else if (diffScopeMap.size > 0) {
-                diffScopeMap.forEach(v => {
-                    diffQty += v.diffQty;
-                    diffCost += v.diffCost;
+                return out;
+            };
+            const buildTermKey = (scope: { type: 'group' | 'department' | 'category'; groupId: string; deptId?: string; catId?: string }) =>
+                [scope.type, scope.groupId || '', scope.deptId || '', scope.catId || ''].join('|');
+            const parseCustomDraftKey = (draftKey: string) => {
+                const match = draftKey.match(/^custom\|([^|]*)(?:\|(.*))?$/);
+                if (!match) return null as null | { batchId?: string; scopesPart: string };
+                const hasNewFormat = typeof match[2] === 'string';
+                if (hasNewFormat) return { batchId: (match[1] || '').trim() || undefined, scopesPart: match[2] || '' };
+                return { batchId: undefined, scopesPart: match[1] || '' };
+            };
+            const getScopedMetricsLocal = (scope: { type: 'group' | 'department' | 'category'; group: any; dept?: any; cat?: any }) => {
+                const scopeGroupId = String(scope.group?.id || '');
+                const scopeDeptId = scope.dept ? String(scope.dept?.id || '') : undefined;
+                const scopeCatId = scope.cat ? String(scope.cat?.id || '') : undefined;
+                const key = buildTermKey({
+                    type: scope.type,
+                    groupId: scopeGroupId,
+                    deptId: scopeDeptId,
+                    catId: scopeCatId
                 });
-            } else {
-                termDraftEntries.forEach(([, draft]) => {
-                    if (!draft?.excelMetrics) return;
-                    if (draft?.excelMetricsRemovedAt && !draft?.excelMetrics) return;
-                    diffQty += Number(draft.excelMetrics?.diffQty || 0);
-                    diffCost += Number(draft.excelMetrics?.diffCost || 0);
+                const draft = (parsedData?.termDrafts || {})[key];
+                const backup = backupMetricsByKey[key];
+                if (draft?.excelMetricsRemovedAt && !draft?.excelMetrics) return null;
+                const draftMetrics = draft?.excelMetrics || backup || null;
+
+                const groupNameToIds = new Map<string, Set<string>>();
+                (groups || []).forEach((g: any) => {
+                    const keyName = normalizeText(g.name);
+                    if (!keyName) return;
+                    const ids = groupNameToIds.get(keyName) || new Set<string>();
+                    makeAliasSet([g.id]).forEach(id => ids.add(id));
+                    groupNameToIds.set(keyName, ids);
                 });
-            }
+                const deptNameToIds = new Map<string, Set<string>>();
+                (scope.group?.departments || []).forEach((d: any) => {
+                    const keyName = normalizeText(d.name);
+                    if (!keyName) return;
+                    const ids = deptNameToIds.get(keyName) || new Set<string>();
+                    makeAliasSet([d.id, d.numericId]).forEach(id => ids.add(id));
+                    deptNameToIds.set(keyName, ids);
+                });
+                const catNameToIds = new Map<string, Set<string>>();
+                (scope.dept?.categories || []).forEach((c: any) => {
+                    const keyName = normalizeText(c.name);
+                    if (!keyName) return;
+                    const ids = catNameToIds.get(keyName) || new Set<string>();
+                    makeAliasSet([c.id, c.numericId]).forEach(id => ids.add(id));
+                    catNameToIds.set(keyName, ids);
+                });
+                const groupAliases = makeAliasSet([scopeGroupId, scope.group?.id]);
+                const deptAliases = makeAliasSet([scopeDeptId, scope.dept?.id, scope.dept?.numericId]);
+                const catAliases = makeAliasSet([scopeCatId, scope.cat?.id, scope.cat?.numericId]);
+                const groupName = normalizeText(scope.group?.name);
+                const deptName = normalizeText(scope.dept?.name);
+                const catName = normalizeText(scope.cat?.name);
+                const matchScopeRecord = (row: any) => {
+                    const rowG = normalizeScopeId(row?.groupId);
+                    const rowD = normalizeScopeId(row?.deptId);
+                    const rowC = normalizeScopeId(row?.catId);
+                    const matchG = rowG
+                        ? (groupAliases.has(rowG) || groupAliases.has(normalizeDigits(rowG)))
+                        : (normalizeText(row?.groupName) === groupName && matchByUniqueName(groupNameToIds, row?.groupName, groupAliases));
+                    if (!matchG) return false;
+                    if (scope.type === 'group') return true;
+                    const matchD = rowD
+                        ? (deptAliases.has(rowD) || deptAliases.has(normalizeDigits(rowD)))
+                        : (normalizeText(row?.deptName) === deptName && matchByUniqueName(deptNameToIds, row?.deptName, deptAliases));
+                    if (!matchD) return false;
+                    if (scope.type === 'department') return true;
+                    const matchC = rowC
+                        ? (catAliases.has(rowC) || catAliases.has(normalizeDigits(rowC)))
+                        : (normalizeText(row?.catName) === catName && matchByUniqueName(catNameToIds, row?.catName, catAliases));
+                    return matchC;
+                };
+
+                if (draftMetrics) {
+                    const directItems = (Array.isArray(draftMetrics?.items) ? draftMetrics.items : []).filter((it: any) => matchScopeRecord(it));
+                    const directGrouped = (Array.isArray(draftMetrics?.groupedDifferences) ? draftMetrics.groupedDifferences : []).filter((it: any) => matchScopeRecord(it));
+                    const source = directItems.length > 0 ? directItems : (directGrouped.length > 0 ? directGrouped : null);
+                    return source ? sumRows(source) : null;
+                }
+
+                const targetCatKeys = new Set(
+                    getScopeCategories(scopeGroupId, scopeDeptId, scopeCatId)
+                        .map(({ group, dept, cat }) => partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }))
+                );
+                const draftTouchesScope = (draftKey: string) => {
+                    if (targetCatKeys.size === 0) return false;
+                    if (draftKey.startsWith('custom|')) {
+                        const meta = parseCustomDraftKey(draftKey);
+                        const scopedKeys = (meta?.scopesPart || '').split(',').filter(Boolean);
+                        for (const scopeKey of scopedKeys) {
+                            const [g, d, c] = scopeKey.split('|');
+                            const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+                            for (const { group, dept, cat } of expanded) {
+                                if (targetCatKeys.has(partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }))) return true;
+                            }
+                        }
+                        return false;
+                    }
+                    const [type, g, d, c] = draftKey.split('|');
+                    if (!type || type === 'custom') return false;
+                    const expanded = getScopeCategories(g || undefined, d || undefined, c || undefined);
+                    for (const { group, dept, cat } of expanded) {
+                        if (targetCatKeys.has(partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id }))) return true;
+                    }
+                    return false;
+                };
+                const scopedPools = termDraftEntries
+                    .filter(([draftKey, draftValue]) => {
+                        if (!draftValue?.excelMetrics || draftValue?.excelMetricsRemovedAt) return false;
+                        return draftTouchesScope(String(draftKey || ''));
+                    })
+                    .map(([, draftValue]) => draftValue.excelMetrics)
+                    .filter(Boolean);
+                const base = mergeExcelMetricsPools(scopedPools as any[]);
+                // Alinhamento exato com o módulo: no fallback sem termo direto,
+                // a filtragem é feita somente em groupedDifferences.
+                if (!base || !Array.isArray(base.groupedDifferences)) return null;
+                const scopeGroupIdNorm = normalizeScopeId(scopeGroupId);
+                const scopeDeptIdNorm = normalizeScopeId(scopeDeptId);
+                const scopeCatIdNorm = normalizeScopeId(scopeCatId);
+                const filtered = (base.groupedDifferences || []).filter((row: any) => {
+                    const hasGroupId = !!normalizeScopeId(row?.groupId);
+                    const hasDeptId = !!normalizeScopeId(row?.deptId);
+                    const hasCatId = !!normalizeScopeId(row?.catId);
+                    const matchG = hasGroupId
+                        ? normalizeScopeId(row?.groupId) === scopeGroupIdNorm
+                        : normalizeText(row?.groupName) === groupName;
+                    if (scope.type === 'group') return matchG;
+                    const matchD = hasDeptId
+                        ? normalizeScopeId(row?.deptId) === scopeDeptIdNorm
+                        : normalizeText(row?.deptName) === deptName;
+                    if (scope.type === 'department') return matchG && matchD;
+                    const matchC = hasCatId
+                        ? normalizeScopeId(row?.catId) === scopeCatIdNorm
+                        : normalizeText(row?.catName) === catName;
+                    return matchG && matchD && matchC;
+                });
+                return filtered.length > 0 ? sumRows(filtered) : null;
+            };
+
+            groups.forEach((group: any) => {
+                const groupDirect = getScopedMetricsLocal({ type: 'group', group });
+                const deptMetrics = (group?.departments || [])
+                    .map((dept: any) => getScopedMetricsLocal({ type: 'department', group, dept }))
+                    .filter(Boolean) as Array<{ diffQty: number; diffCost: number }>;
+
+                let groupMetric = groupDirect || { diffQty: 0, diffCost: 0 };
+                if (deptMetrics.length > 0) {
+                    const byDepartments = sumRows(deptMetrics as any[]);
+                    if (!groupDirect) {
+                        groupMetric = byDepartments;
+                    } else {
+                        const hasRelevantMismatch =
+                            Math.abs(Number(groupDirect.diffQty || 0) - Number(byDepartments.diffQty || 0)) > 0.01 ||
+                            Math.abs(Number(groupDirect.diffCost || 0) - Number(byDepartments.diffCost || 0)) > 0.01;
+                        groupMetric = hasRelevantMismatch ? byDepartments : groupDirect;
+                    }
+                }
+
+                diffQty += Number(groupMetric.diffQty || 0);
+                diffCost += Number(groupMetric.diffCost || 0);
+            });
 
             const pendingSkus = Math.max(0, totalSkus - countedSkus);
             const pendingUnits = Math.max(0, totalUnits - countedUnits);
