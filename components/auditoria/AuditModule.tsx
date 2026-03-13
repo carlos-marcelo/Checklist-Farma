@@ -7336,8 +7336,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             {termModal && termForm && termScopeInfo && typeof document !== 'undefined' && createPortal(
                 <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-[2147483000] flex items-center justify-center p-4">
                     <div className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
-                        <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                            <h3 className="font-bold text-slate-800 uppercase text-xs tracking-widest flex items-center gap-2">
+                        <div className="p-3 sm:p-6 border-b border-slate-100 flex justify-between items-center gap-2 bg-slate-50">
+                            <h3 className="font-bold text-slate-800 uppercase text-[10px] sm:text-xs tracking-wide sm:tracking-widest flex items-center gap-2 break-words">
                                 <FileSignature className="w-4 h-4 text-indigo-500" />
                                 Termo de Auditoria - {termModal.type === 'custom' ? 'Personalizado' : termModal.type === 'group' ? 'Grupo' : termModal.type === 'department' ? 'Departamento' : 'Categoria'}
                                 {(termModal.type === 'group') && termScopeInfo.group.id && ` (ID: ${termScopeInfo.group.id})`}
@@ -7348,7 +7348,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 <X className="w-5 h-5" />
                             </button>
                         </div>
-                        <div className="p-6 max-h-[70vh] overflow-y-auto custom-scrollbar space-y-6">
+                        <div className="p-3 sm:p-6 max-h-[70vh] overflow-y-auto custom-scrollbar space-y-4 sm:space-y-6">
                             <div className="bg-slate-50 border border-slate-100 rounded-2xl p-4 text-xs text-slate-600">
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                                     <div>
@@ -7475,9 +7475,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 )}
                                             </div>
                                         ) : canFillTermSignatures ? (
-                                            <SignaturePad onEnd={async (dataUrl) => {
-                                                const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
-                                                updateTermForm(prev => ({ ...prev, managerSignature2: compressed }));
+                                            <SignaturePad onEnd={(dataUrl) => {
+                                                // Salva imediatamente para não perder ao fechar modal rapidamente.
+                                                updateTermForm(prev => ({ ...prev, managerSignature2: dataUrl }));
+                                                void (async () => {
+                                                    try {
+                                                        const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
+                                                        updateTermForm(prev => (
+                                                            prev.managerSignature2 === dataUrl
+                                                                ? { ...prev, managerSignature2: compressed }
+                                                                : prev
+                                                        ));
+                                                    } catch {
+                                                        // Mantém dataUrl original se compress falhar.
+                                                    }
+                                                })();
                                             }} />
                                         ) : (
                                             <div className="border border-slate-100 rounded-xl bg-slate-50 h-40 flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase tracking-widest italic">Assinatura Pendente</div>
@@ -7547,9 +7559,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 )}
                                             </div>
                                         ) : canFillTermSignatures ? (
-                                            <SignaturePad onEnd={async (dataUrl) => {
-                                                const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
-                                                updateTermForm(prev => ({ ...prev, managerSignature: compressed }));
+                                            <SignaturePad onEnd={(dataUrl) => {
+                                                // Salva imediatamente para não perder ao fechar modal rapidamente.
+                                                updateTermForm(prev => ({ ...prev, managerSignature: dataUrl }));
+                                                void (async () => {
+                                                    try {
+                                                        const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
+                                                        updateTermForm(prev => (
+                                                            prev.managerSignature === dataUrl
+                                                                ? { ...prev, managerSignature: compressed }
+                                                                : prev
+                                                        ));
+                                                    } catch {
+                                                        // Mantém dataUrl original se compress falhar.
+                                                    }
+                                                })();
                                             }} />
                                         ) : (
                                             <div className="border border-slate-100 rounded-xl bg-slate-50 h-40 flex items-center justify-center text-slate-400 text-[10px] font-bold uppercase tracking-widest italic">Assinatura Pendente</div>
@@ -7648,12 +7672,26 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                     ) : canFillTermSignatures ? (
                                                         <SignaturePad
                                                             label={`Assinatura ${collabNumber}`}
-                                                            onEnd={async (dataUrl) => {
-                                                                const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
+                                                            onEnd={(dataUrl) => {
+                                                                // Salva imediatamente para não perder ao fechar modal rapidamente.
                                                                 updateTermForm(prev => ({
                                                                     ...prev,
-                                                                    collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: compressed } : c)
+                                                                    collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, signature: dataUrl } : c)
                                                                 }));
+                                                                void (async () => {
+                                                                    try {
+                                                                        const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
+                                                                        updateTermForm(prev => ({
+                                                                            ...prev,
+                                                                            collaborators: prev.collaborators.map((c, i) => {
+                                                                                if (i !== idx) return c;
+                                                                                return c.signature === dataUrl ? { ...c, signature: compressed } : c;
+                                                                            })
+                                                                        }));
+                                                                    } catch {
+                                                                        // Mantém dataUrl original se compress falhar.
+                                                                    }
+                                                                })();
                                                             }}
                                                         />
                                                     ) : (
@@ -7708,7 +7746,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 </div>
 
                                 {termComparisonMetrics && (
-                                    <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 relative animate-in fade-in slide-in-from-top-2">
+                                    <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-3 sm:p-4 relative animate-in fade-in slide-in-from-top-2">
                                         {(() => {
                                             const scopeAuditedCost = (termScopeInfo?.products || []).reduce(
                                                 (sum: number, p: any) => sum + ((p.quantity || 0) * (p.cost || 0)),
@@ -7729,23 +7767,23 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                     >
                                                         <X className="w-4 h-4" />
                                                     </button>
-                                                    <h5 className="text-[10px] font-black text-indigo-800 uppercase tracking-widest mb-3">Resumo Identificado</h5>
+                                                    <h5 className="text-[10px] font-black text-indigo-800 uppercase tracking-wide sm:tracking-widest mb-3">Resumo Identificado</h5>
                                                     <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                                                         <div className="bg-white p-3 rounded border border-slate-100">
-                                                            <div className="grid grid-cols-3 gap-2">
-                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
-                                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Sist</p>
-                                                                    <p className="mt-1 text-xl font-black text-slate-700 tabular-nums leading-none">{Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')}</p>
+                                                            <div className="grid grid-cols-3 gap-1.5 sm:gap-2">
+                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-1.5 sm:px-2 py-2 text-center min-w-0">
+                                                                    <p className="text-[8px] sm:text-[9px] font-black text-indigo-400 uppercase tracking-normal sm:tracking-widest leading-tight">Est. Sist</p>
+                                                                    <p className="mt-1 text-lg sm:text-xl font-black text-slate-700 tabular-nums leading-none">{Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')}</p>
                                                                     <p className="text-[10px] font-bold text-slate-500">un.</p>
                                                                 </div>
-                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
-                                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Físico</p>
-                                                                    <p className="mt-1 text-xl font-black text-slate-700 tabular-nums leading-none">{Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')}</p>
+                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-1.5 sm:px-2 py-2 text-center min-w-0">
+                                                                    <p className="text-[8px] sm:text-[9px] font-black text-indigo-400 uppercase tracking-normal sm:tracking-widest leading-tight">Est. Físico</p>
+                                                                    <p className="mt-1 text-lg sm:text-xl font-black text-slate-700 tabular-nums leading-none">{Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')}</p>
                                                                     <p className="text-[10px] font-bold text-slate-500">un.</p>
                                                                 </div>
-                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
-                                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Diferença</p>
-                                                                    <p className={`mt-1 text-xl font-black tabular-nums leading-none ${termComparisonMetrics.diffQty < 0 ? 'text-red-500' : termComparisonMetrics.diffQty > 0 ? 'text-green-500' : 'text-slate-600'}`}>
+                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-1.5 sm:px-2 py-2 text-center min-w-0">
+                                                                    <p className="text-[8px] sm:text-[9px] font-black text-indigo-400 uppercase tracking-normal sm:tracking-widest leading-tight">Diferença</p>
+                                                                    <p className={`mt-1 text-lg sm:text-xl font-black tabular-nums leading-none ${termComparisonMetrics.diffQty < 0 ? 'text-red-500' : termComparisonMetrics.diffQty > 0 ? 'text-green-500' : 'text-slate-600'}`}>
                                                                         {termComparisonMetrics.diffQty > 0 ? '+' : ''}{Math.round(termComparisonMetrics.diffQty).toLocaleString('pt-BR')}
                                                                     </p>
                                                                     <p className="text-[10px] font-bold text-slate-500">un.</p>
@@ -7755,14 +7793,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
                                                         <div className="bg-white p-3 rounded border border-slate-100">
                                                             <div className="grid grid-cols-2 gap-2">
-                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
-                                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Sist</p>
+                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center min-w-0">
+                                                                    <p className="text-[8px] sm:text-[9px] font-black text-indigo-400 uppercase tracking-normal sm:tracking-widest">Custo Sist</p>
                                                                     <p className="mt-1 text-base md:text-lg font-black text-slate-700 tabular-nums leading-tight break-words">
                                                                         {termComparisonMetrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                                                     </p>
                                                                 </div>
-                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
-                                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Físico</p>
+                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center min-w-0">
+                                                                    <p className="text-[8px] sm:text-[9px] font-black text-indigo-400 uppercase tracking-normal sm:tracking-widest">Custo Físico</p>
                                                                     <p className="mt-1 text-base md:text-lg font-black text-slate-700 tabular-nums leading-tight break-words">
                                                                         {termComparisonMetrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                                                     </p>
@@ -7770,7 +7808,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                             </div>
                                                             <div className="mt-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
                                                                 <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Resultado Financeiro</p>
-                                                                <p className={`mt-1 text-2xl font-black tabular-nums leading-none ${termComparisonMetrics.diffCost < 0 ? 'text-red-600' : termComparisonMetrics.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>
+                                                                <p className={`mt-1 text-xl sm:text-2xl font-black tabular-nums leading-none break-words ${termComparisonMetrics.diffCost < 0 ? 'text-red-600' : termComparisonMetrics.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>
                                                                     {termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                                                 </p>
                                                                 <span className={`mt-1 inline-block text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${termComparisonMetrics.diffCost < 0 ? 'bg-red-100 text-red-600' : termComparisonMetrics.diffCost > 0 ? 'bg-green-100 text-green-600' : 'bg-slate-200 text-slate-600'}`}>
@@ -7842,27 +7880,27 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                                     <Boxes className="w-3.5 h-3.5" />
                                                                     Resumo de Prejuízo por Categoria
                                                                 </h6>
-                                                                <div className="space-y-4 max-h-[400px] overflow-y-auto custom-scrollbar pr-2">
+                                                                <div className="space-y-3 sm:space-y-4 max-h-[50vh] sm:max-h-[400px] overflow-y-auto custom-scrollbar pr-1 sm:pr-2">
                                                                     {nested.map((group: any, gIdx: number) => (
                                                                         <div key={gIdx} className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2">
                                                                             {/* GROUP HEADER */}
-                                                                            <div className="p-3 bg-indigo-50/50 border-b border-indigo-100 flex items-center justify-between">
-                                                                                <div className="flex items-center gap-3">
+                                                                            <div className="p-2.5 sm:p-3 bg-indigo-50/50 border-b border-indigo-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                                                                                <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 min-w-0">
                                                                                     <div className="w-8 h-8 rounded-xl bg-white border border-indigo-100 flex items-center justify-center shadow-sm">
                                                                                         <Boxes className="w-4 h-4 text-indigo-600" />
                                                                                     </div>
-                                                                                    <div>
-                                                                                        <h3 className="text-[11px] font-black text-indigo-900 uppercase italic tracking-wider">{group.name}</h3>
-                                                                                        <p className="text-[8px] font-bold text-indigo-400 uppercase tracking-widest mt-0.5">Grupo</p>
+                                                                                    <div className="min-w-0">
+                                                                                        <h3 className="text-[10px] sm:text-[11px] font-black text-indigo-900 uppercase italic tracking-normal sm:tracking-wider break-words">{group.name}</h3>
+                                                                                        <p className="text-[8px] font-bold text-indigo-400 uppercase tracking-wide sm:tracking-widest mt-0.5">Grupo</p>
                                                                                     </div>
                                                                                 </div>
-                                                                                <div className="text-right flex items-center gap-3">
-                                                                                    <div>
-                                                                                        <p className="text-[7px] font-black text-indigo-400 uppercase tracking-widest">Dif. Qtd</p>
+                                                                                <div className="self-stretch sm:self-auto w-full sm:w-auto grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-3 text-right">
+                                                                                    <div className="min-w-0">
+                                                                                        <p className="text-[7px] font-black text-indigo-400 uppercase tracking-wide sm:tracking-widest">Dif. Qtd</p>
                                                                                         <p className={`font-bold text-[10px] ${group.diffQty < 0 ? 'text-red-500' : group.diffQty > 0 ? 'text-green-500' : 'text-slate-500'}`}>{group.diffQty > 0 ? '+' : ''}{Math.round(group.diffQty).toLocaleString('pt-BR')} un.</p>
                                                                                     </div>
-                                                                                    <div className="border-l border-indigo-100 pl-3">
-                                                                                        <p className="text-[7px] font-black text-indigo-400 uppercase tracking-widest">Finanças</p>
+                                                                                    <div className="border-l border-indigo-100 pl-2 sm:pl-3 min-w-0">
+                                                                                        <p className="text-[7px] font-black text-indigo-400 uppercase tracking-wide sm:tracking-widest">Finanças</p>
                                                                                         <p className={`font-black text-xs ${group.diffCost < 0 ? 'text-red-600' : group.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>{group.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
                                                                                     </div>
                                                                                 </div>
@@ -7872,23 +7910,23 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                                             <div className="p-3 space-y-3 bg-slate-50/50">
                                                                                 {group.departments.map((dept: any, dIdx: number) => (
                                                                                     <div key={dIdx} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
-                                                                                        <div className="p-2.5 border-b border-slate-100 flex items-center justify-between">
-                                                                                            <div className="flex items-center gap-2.5">
+                                                                                        <div className="p-2.5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                                                                                            <div className="flex items-start sm:items-center gap-2.5 min-w-0">
                                                                                                 <div className="w-6 h-6 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center">
                                                                                                     <FileBox className="w-3 h-3 text-slate-500" />
                                                                                                 </div>
-                                                                                                <div>
-                                                                                                    <h4 className="text-[10px] font-black text-indigo-700 uppercase italic tracking-widest">{dept.name}</h4>
-                                                                                                    <p className="text-[7px] font-bold text-slate-400 uppercase tracking-widest">Departamento</p>
+                                                                                                <div className="min-w-0">
+                                                                                                    <h4 className="text-[10px] font-black text-indigo-700 uppercase italic tracking-wide sm:tracking-widest break-words">{dept.name}</h4>
+                                                                                                    <p className="text-[7px] font-bold text-slate-400 uppercase tracking-wide sm:tracking-widest">Departamento</p>
                                                                                                 </div>
                                                                                             </div>
-                                                                                            <div className="text-right flex items-center gap-3">
-                                                                                                <div>
-                                                                                                    <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Dif. Qtd</p>
+                                                                                            <div className="self-stretch sm:self-auto w-full sm:w-auto grid grid-cols-2 gap-2 sm:flex sm:items-center sm:gap-3 text-right">
+                                                                                                <div className="min-w-0">
+                                                                                                    <p className="text-[7px] font-black text-slate-400 uppercase tracking-wide sm:tracking-widest">Dif. Qtd</p>
                                                                                                     <p className={`font-bold text-[9px] ${dept.diffQty < 0 ? 'text-red-500' : dept.diffQty > 0 ? 'text-green-500' : 'text-slate-500'}`}>{dept.diffQty > 0 ? '+' : ''}{Math.round(dept.diffQty).toLocaleString('pt-BR')} un.</p>
                                                                                                 </div>
-                                                                                                <div className="border-l border-slate-100 pl-3 w-20">
-                                                                                                    <p className="text-[7px] font-black text-slate-400 uppercase tracking-widest">Finanças</p>
+                                                                                                <div className="border-l border-slate-100 pl-2 sm:pl-3 min-w-0 sm:w-20">
+                                                                                                    <p className="text-[7px] font-black text-slate-400 uppercase tracking-wide sm:tracking-widest">Finanças</p>
                                                                                                     <p className={`font-black text-[11px] ${dept.diffCost < 0 ? 'text-red-600' : dept.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>{dept.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
                                                                                                 </div>
                                                                                             </div>
@@ -8023,13 +8061,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                 )}
                             </div>
                         </div>
-                        <div className="p-6 bg-slate-50 border-t border-slate-100 flex justify-between items-center">
+                        <div className="p-3 sm:p-6 bg-slate-50 border-t border-slate-100 flex flex-col sm:flex-row gap-3 sm:justify-between sm:items-center">
                             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
                                 Produtos no termo: {termScopeInfo.products.length}
                             </span>
                             <button
                                 onClick={handlePrintTerm}
-                                className="px-6 py-3 rounded-xl bg-slate-900 text-white font-black text-[11px] uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-md"
+                                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-slate-900 text-white font-black text-[11px] uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-md"
                             >
                                 Imprimir Termo
                             </button>
