@@ -1151,7 +1151,13 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       setIsTorchOn(enabled);
       return true;
     } catch {
-      return false;
+      try {
+        await videoTrack.applyConstraints({ advanced: [{ fillLightMode: enabled ? 'flash' : 'off' } as any] });
+        setIsTorchOn(enabled);
+        return true;
+      } catch {
+        return false;
+      }
     }
   }, []);
 
@@ -1161,6 +1167,8 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     const ok = await applyTorch(next);
     if (!ok) {
       setCameraStatusMsg('Não foi possível alterar a lanterna neste dispositivo.');
+      setIsTorchSupported(false);
+      setIsTorchOn(false);
       return;
     }
     setCameraStatusMsg(next ? 'Lanterna ligada para facilitar a leitura.' : 'Lanterna desligada.');
@@ -1175,19 +1183,36 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     }
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1280 },
-          height: { ideal: 720 }
-        },
-        audio: false
-      });
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { exact: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        });
+      } catch {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: { ideal: 'environment' },
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
+          audio: false
+        });
+      }
 
       cameraStreamRef.current = stream;
       const videoTrack = stream.getVideoTracks?.()[0];
       const caps = (videoTrack?.getCapabilities?.() || {}) as any;
-      const torchAvailable = Boolean(caps?.torch);
+      const fillLightModes = Array.isArray(caps?.fillLightMode) ? caps.fillLightMode : [];
+      const torchAvailable =
+        Boolean(caps?.torch) ||
+        fillLightModes.includes('flash') ||
+        fillLightModes.includes('torch') ||
+        typeof videoTrack?.applyConstraints === 'function';
       setIsTorchSupported(torchAvailable);
       setIsTorchOn(false);
       setIsCameraOpen(true);
