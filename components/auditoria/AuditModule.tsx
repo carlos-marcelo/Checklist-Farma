@@ -5172,36 +5172,58 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         } catch (err) {
             console.error("Error saving term draft:", err);
         }
-        const doc = new jsPDF('p', 'mm', 'a4');
-        let y = 18;
+        const isGlobalUnifiedTermPdf =
+            termModal.type === 'custom' &&
+            normalizeScopeId((termModal as any).batchId) === GLOBAL_UNIFIED_TERM_BATCH_ID;
+        const doc = new jsPDF({
+            orientation: 'portrait',
+            unit: 'mm',
+            format: 'a4'
+        });
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+        const contentX = 14;
+        const contentWidth = pageWidth - contentX * 2;
+        const topMargin = 18;
+        const bottomMargin = 14;
+        let y = topMargin;
+        const nextPageIfNeeded = (lineHeight: number) => {
+            if (y + lineHeight > pageHeight - bottomMargin) {
+                doc.addPage();
+                y = topMargin;
+            }
+        };
+        const drawWrapped = (text: string, lineHeight: number, gap: number = 1.2) => {
+            const lines = doc.splitTextToSize(String(text || ''), contentWidth);
+            lines.forEach((line: string) => {
+                nextPageIfNeeded(lineHeight);
+                doc.text(line, contentX, y);
+                y += lineHeight;
+            });
+            y += gap;
+        };
 
-        doc.setFontSize(16);
+        doc.setFontSize(isGlobalUnifiedTermPdf ? 14 : 16);
         doc.setTextColor(15, 23, 42);
-        doc.text('TERMO DE AUDITORIA', 14, y);
-        y += 8;
+        drawWrapped('TERMO DE AUDITORIA', isGlobalUnifiedTermPdf ? 5.5 : 6, 2);
 
-        doc.setFontSize(10);
+        doc.setFontSize(isGlobalUnifiedTermPdf ? 9 : 10);
         doc.setTextColor(60);
         const inventoryLine = `Nº INVENTÁRIO: ${termForm.inventoryNumber || '__________'} - ${formatTermDate(termForm.date)}`;
-        doc.text(inventoryLine, 14, y);
-        y += 6;
-        doc.text(`Filial Auditada: Filial ${data.filial}`, 14, y);
-        y += 6;
+        drawWrapped(inventoryLine, isGlobalUnifiedTermPdf ? 4 : 4.5, 1);
+        const filialLine = `Filial Auditada: Filial ${data.filial}`;
+        drawWrapped(filialLine, isGlobalUnifiedTermPdf ? 4 : 4.5, 1);
         const groupLabelForPdf = termModal.type === 'custom'
             ? `${(scopeInfo as any).groupLabelText || scopeInfo.group.name} (personalizado)`
             : scopeInfo.group.name;
-        doc.text(`Grupo: ${groupLabelForPdf}`, 14, y);
-        y += 6;
+        drawWrapped(`Grupo: ${groupLabelForPdf}`, isGlobalUnifiedTermPdf ? 4 : 4.5, 1);
 
-        const deptList = scopeInfo.departments.map(d => d.name).join(', ') || '-';
-        const catList = scopeInfo.categories.map(c => c.name).join(', ') || '-';
-
-        const deptLines = doc.splitTextToSize(`Departamentos: ${deptList}`, 180);
-        doc.text(deptLines, 14, y);
-        y += deptLines.length * 5;
-        const catLines = doc.splitTextToSize(`Categorias: ${catList}`, 180);
-        doc.text(catLines, 14, y);
-        y += catLines.length * 5 + 2;
+        const deptNames = scopeInfo.departments.map(d => d.name);
+        const catNames = scopeInfo.categories.map(c => c.name);
+        const deptList = deptNames.join(', ') || '-';
+        const catList = catNames.join(', ') || '-';
+        drawWrapped(`Departamentos (${deptNames.length}): ${deptList}`, isGlobalUnifiedTermPdf ? 4 : 4.4, 0.8);
+        drawWrapped(`Categorias (${catNames.length}): ${catList}`, isGlobalUnifiedTermPdf ? 4 : 4.4, 1.5);
 
         const bodyText = [
             'Declaro que fui orientado e treinado sobre as melhores práticas de auditoria e procedimentos internos com relação ao estoque físico da empresa.',
@@ -5211,10 +5233,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             'Os horários e datas constantes nos relatórios em anexo, são informações de uso exclusivo do setor de auditoria.'
         ].join(' ');
 
-        const bodyLines = doc.splitTextToSize(bodyText, 180);
         doc.setTextColor(30);
-        doc.text(bodyLines, 14, y);
-        y += bodyLines.length * 5 + 2;
+        drawWrapped(bodyText, isGlobalUnifiedTermPdf ? 3.8 : 4.1, 2);
+
+        if (y > pageHeight - 42) {
+            doc.addPage();
+            y = 20;
+        }
 
         const signatureRows = [
             [
@@ -5263,52 +5288,146 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
         // @ts-ignore
         const afterSignY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 6 : y + 20;
+        let contentStartY = afterSignY;
 
-        // 1. Tabela Base: Produtos Conferidos no Sistema
-        const productHead = [['Grupo', 'Departamento', 'Categoria', 'Código', 'Produto', 'Qtd', 'Custo Unit', 'Custo Total']];
-        const productBody = scopeInfo.products.map(p => [
-            p.groupName,
-            p.deptName,
-            p.catName,
-            p.code,
-            p.name,
-            Math.round(p.quantity).toLocaleString(),
-            `R$ ${(p.cost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            `R$ ${((p.cost || 0) * p.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        ]);
-        const productFoot = [[
-            { content: 'TOTAIS DOS ITENS CONFERIDOS', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } },
-            Math.round(scopeInfo.products.reduce((acc, p) => acc + p.quantity, 0)).toLocaleString(),
-            '',
-            `R$ ${scopeInfo.products.reduce((acc, p) => acc + (p.quantity * (p.cost || 0)), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        ]];
-
-        autoTable(doc, {
-            startY: afterSignY,
-            head: productHead,
-            body: productBody,
-            foot: productFoot,
-            theme: 'striped',
-            styles: { fontSize: 7, cellPadding: 1.5 },
-            headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] },
-            footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' }
-        });
-
-        // @ts-ignore
-        let afterProductTableY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : afterSignY + 50;
-
-        // 2. Tabela Opcional: Divergências Financeiras (Planilha Upload)
-        if (termComparisonMetrics && termComparisonMetrics.items && termComparisonMetrics.items.length > 0) {
-
-            // Quebra de página se tabelão de produtos ocupou muito espaço e não cabe nem o cabeçalho novo
-            if (afterProductTableY > 240) {
+        // 1. Resumo financeiro logo após assinaturas
+        if (termComparisonMetrics) {
+            if (contentStartY > 250) {
                 doc.addPage();
-                afterProductTableY = 20;
+                contentStartY = 20;
             }
 
             doc.setFontSize(11);
             doc.setTextColor(15, 23, 42);
-            doc.text('DIVERGÊNCIAS (PLANILHA DE CONFRONTO)', 14, afterProductTableY);
+            doc.text('RESUMO FINANCEIRO DA CONFERÊNCIA', 14, contentStartY);
+            contentStartY += 6;
+
+            const diffType = termComparisonMetrics.diffCost < 0 ? 'Prejuízo (Falta)' : termComparisonMetrics.diffCost > 0 ? 'Sobra (Excesso)' : 'Zero';
+            const scopeAuditedCost = (scopeInfo.products || []).reduce((sum: number, p: any) => sum + ((p.quantity || 0) * (p.cost || 0)), 0);
+            const representativity = getFinancialRepresentativity(scopeAuditedCost, termComparisonMetrics.diffCost);
+            const representativityLabel = representativity === null
+                ? 'N/A'
+                : `${representativity.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+
+            const summaryRows = [
+                ['Estoque Sistema (Qtde)', Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')],
+                ['Custo Total Sistema', termComparisonMetrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })],
+                ['Estoque Físico (Qtde)', Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')],
+                ['Custo Total Físico', termComparisonMetrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })],
+                ['Diferença de Estoque (Qtde)', termComparisonMetrics.diffQty.toLocaleString('pt-BR')],
+                ['Resultado Financeiro', termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) + ` (${diffType})`],
+                ['Representatividade no Auditado', representativityLabel]
+            ];
+
+            autoTable(doc, {
+                startY: contentStartY,
+                body: summaryRows,
+                theme: 'grid',
+                styles: { fontSize: 9, cellPadding: 2, halign: 'center', valign: 'middle' },
+                columnStyles: {
+                    0: { cellWidth: 90, fontStyle: 'bold', fillColor: [248, 250, 252], halign: 'center' },
+                    1: { cellWidth: 70, halign: 'center' }
+                },
+                didParseCell: (hookData: any) => {
+                    if (hookData.row.index === 5 && hookData.column.index === 1) {
+                        hookData.cell.styles.fontStyle = 'bold';
+                        if (termComparisonMetrics.diffCost < 0) {
+                            hookData.cell.styles.textColor = [220, 38, 38];
+                        } else if (termComparisonMetrics.diffCost > 0) {
+                            hookData.cell.styles.textColor = [22, 163, 74];
+                        }
+                    }
+                }
+            });
+
+            // @ts-ignore
+            contentStartY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : contentStartY + 50;
+        }
+
+        let cursorY = contentStartY;
+
+        if (termComparisonMetrics && termComparisonMetrics.groupedDifferences && termComparisonMetrics.groupedDifferences.length > 0) {
+            if (cursorY > 240) {
+                doc.addPage();
+                cursorY = 20;
+            }
+            doc.setFontSize(11);
+            doc.setTextColor(15, 23, 42);
+            doc.text('RESUMO DE DIVERGÊNCIAS POR CATEGORIA', 14, cursorY);
+
+            const groupHead = [['Item / Hierarquia', 'Dif Qtd', 'Sist.', 'Fís.', 'Dif R$']];
+            const groupBody: any[] = [];
+            termComparisonMetrics.groupedDifferences.forEach((g: any) => {
+                groupBody.push([
+                    { content: `${g.groupName} > ${g.deptName} > ${g.catName}`, colSpan: 1, styles: { fontStyle: 'bold', fillColor: [243, 244, 246] } },
+                    { content: `${g.diffQty > 0 ? '+' : ''}${Math.round(g.diffQty).toLocaleString('pt-BR')} un.`, styles: { fontStyle: 'bold', fillColor: [243, 244, 246] } },
+                    { content: '', styles: { fillColor: [243, 244, 246] } },
+                    { content: '', styles: { fillColor: [243, 244, 246] } },
+                    { content: `R$ ${g.diffCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, styles: { fontStyle: 'bold', fillColor: [243, 244, 246] } }
+                ]);
+
+                const catItems = termComparisonMetrics.items.filter(
+                    (item: any) =>
+                        item.catName?.toLowerCase() === g.catName?.toLowerCase() &&
+                        item.deptName?.toLowerCase() === g.deptName?.toLowerCase() &&
+                        item.groupName?.toLowerCase() === g.groupName?.toLowerCase()
+                ).sort((a: any, b: any) => a.diffCost - b.diffCost);
+
+                catItems.forEach((item: any) => {
+                    groupBody.push([
+                        `  ${item.code} - ${item.description}`,
+                        `${item.diffQty > 0 ? '+' : ''}${Math.round(item.diffQty).toLocaleString('pt-BR')}`,
+                        Math.round(item.sysQty).toLocaleString('pt-BR'),
+                        Math.round(item.countedQty).toLocaleString('pt-BR'),
+                        `R$ ${item.diffCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+                    ]);
+                });
+            });
+
+            autoTable(doc, {
+                startY: cursorY + 6,
+                head: groupHead,
+                body: groupBody,
+                theme: 'striped',
+                tableWidth: 'wrap',
+                styles: { fontSize: 6.5, cellPadding: 1.2, overflow: 'linebreak', halign: 'center', valign: 'middle' },
+                headStyles: { fillColor: [99, 102, 241], textColor: [255, 255, 255] },
+                columnStyles: {
+                    0: { cellWidth: 63, halign: 'center' },
+                    1: { cellWidth: 12, halign: 'center' },
+                    2: { cellWidth: 12, halign: 'center' },
+                    3: { cellWidth: 12, halign: 'center' },
+                    4: { cellWidth: 18, halign: 'center' }
+                },
+                didParseCell: (hookData: any) => {
+                    if (hookData.section === 'body' && hookData.row.raw[0]?.styles?.fontStyle === 'bold') {
+                        if (hookData.column.index === 1 || hookData.column.index === 4) {
+                            const valStr = hookData.cell.raw.content?.toString() || hookData.cell.raw.toString();
+                            if (valStr.includes('-')) hookData.cell.styles.textColor = [220, 38, 38];
+                            else if (valStr !== 'R$ 0,00' && valStr !== 'R$ -0,00' && valStr !== '0 un.' && valStr !== '') hookData.cell.styles.textColor = [22, 163, 74];
+                        }
+                    }
+                    if (hookData.section === 'body' && !hookData.row.raw[0]?.styles) {
+                        if (hookData.column.index === 1 || hookData.column.index === 4) {
+                            const valStr = hookData.cell.raw.toString();
+                            if (valStr.includes('-')) hookData.cell.styles.textColor = [220, 38, 38];
+                            else if (valStr !== 'R$ 0,00' && valStr !== 'R$ -0,00' && valStr !== '0' && valStr !== '') hookData.cell.styles.textColor = [22, 163, 74];
+                        }
+                    }
+                }
+            });
+            // @ts-ignore
+            cursorY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : cursorY + 30;
+        }
+
+        if (termComparisonMetrics && termComparisonMetrics.items && termComparisonMetrics.items.length > 0) {
+            if (cursorY > 240) {
+                doc.addPage();
+                cursorY = 20;
+            }
+            doc.setFontSize(11);
+            doc.setTextColor(15, 23, 42);
+            doc.text('DIVERGÊNCIAS (PLANILHA DE CONFRONTO)', 14, cursorY);
 
             const divHead = [['Cód', 'Descrição', 'Lab', 'Est Sist', 'Est Fis', 'Dif Qtd', 'Custo Sist', 'Custo Físico', 'Dif R$']];
             const divBody = termComparisonMetrics.items.map(p => [
@@ -5333,171 +5452,75 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             ]];
 
             autoTable(doc, {
-                startY: afterProductTableY + 6,
+                startY: cursorY + 6,
                 head: divHead,
                 body: divBody,
                 foot: divFoot,
                 theme: 'striped',
-                styles: { fontSize: 7, cellPadding: 1.5 },
+                tableWidth: 'wrap',
+                styles: { fontSize: 6.5, cellPadding: 1.2, overflow: 'linebreak', halign: 'center', valign: 'middle' },
                 headStyles: { fillColor: [15, 23, 42], textColor: [255, 255, 255] },
                 footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
                 columnStyles: {
-                    0: { cellWidth: 15 }, // Cód
-                    1: { cellWidth: 'auto' }, // Descrição
-                    2: { cellWidth: 15 }, // Lab
-                    3: { cellWidth: 15, halign: 'right' }, // Est Sist
-                    4: { cellWidth: 15, halign: 'right' }, // Est Fis
-                    5: { cellWidth: 15, halign: 'right' }, // Dif Qtd
-                    6: { cellWidth: 20, halign: 'right' }, // Custo Sist
-                    7: { cellWidth: 20, halign: 'right' }, // Custo Fis
-                    8: { cellWidth: 20, halign: 'right' }  // Dif R$
+                    0: { cellWidth: 12, halign: 'center' },
+                    1: { cellWidth: 45, halign: 'center' },
+                    2: { cellWidth: 10, halign: 'center' },
+                    3: { cellWidth: 10, halign: 'center' },
+                    4: { cellWidth: 10, halign: 'center' },
+                    5: { cellWidth: 10, halign: 'center' },
+                    6: { cellWidth: 15, halign: 'center' },
+                    7: { cellWidth: 15, halign: 'center' },
+                    8: { cellWidth: 15, halign: 'center' }
                 }
             });
-
             // @ts-ignore
-            afterProductTableY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : afterProductTableY + 50;
-
-            // 3. Tabela Opcional: Resumo de Divergências por Categoria
-            if (termComparisonMetrics.groupedDifferences && termComparisonMetrics.groupedDifferences.length > 0) {
-                if (afterProductTableY > 240) {
-                    doc.addPage();
-                    afterProductTableY = 20;
-                }
-
-                doc.setFontSize(11);
-                doc.setTextColor(15, 23, 42);
-                doc.text('RESUMO DE DIVERGÊNCIAS POR CATEGORIA', 14, afterProductTableY);
-
-                const groupHead = [['Item / Hierarquia', 'Dif Qtd', 'Sist.', 'Fís.', 'Dif R$']];
-
-                const groupBody: any[] = [];
-
-                termComparisonMetrics.groupedDifferences.forEach((g: any) => {
-                    // Add Category Header
-                    groupBody.push([
-                        { content: `${g.groupName} > ${g.deptName} > ${g.catName}`, colSpan: 1, styles: { fontStyle: 'bold', fillColor: [243, 244, 246] } },
-                        { content: `${g.diffQty > 0 ? '+' : ''}${Math.round(g.diffQty).toLocaleString('pt-BR')} un.`, styles: { fontStyle: 'bold', fillColor: [243, 244, 246] } },
-                        { content: '', styles: { fillColor: [243, 244, 246] } },
-                        { content: '', styles: { fillColor: [243, 244, 246] } },
-                        { content: `R$ ${g.diffCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, styles: { fontStyle: 'bold', fillColor: [243, 244, 246] } }
-                    ]);
-
-                    // Add items for this category
-                    const catItems = termComparisonMetrics.items.filter(
-                        (item: any) =>
-                            item.catName?.toLowerCase() === g.catName?.toLowerCase() &&
-                            item.deptName?.toLowerCase() === g.deptName?.toLowerCase() &&
-                            item.groupName?.toLowerCase() === g.groupName?.toLowerCase()
-                    ).sort((a: any, b: any) => a.diffCost - b.diffCost);
-
-                    catItems.forEach((item: any) => {
-                        groupBody.push([
-                            `  ${item.code} - ${item.description}`,
-                            `${item.diffQty > 0 ? '+' : ''}${Math.round(item.diffQty).toLocaleString('pt-BR')}`,
-                            Math.round(item.sysQty).toLocaleString('pt-BR'),
-                            Math.round(item.countedQty).toLocaleString('pt-BR'),
-                            `R$ ${item.diffCost.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-                        ]);
-                    });
-                });
-
-                autoTable(doc, {
-                    startY: afterProductTableY + 6,
-                    head: groupHead,
-                    body: groupBody,
-                    theme: 'striped',
-                    styles: { fontSize: 7, cellPadding: 1.5 },
-                    headStyles: { fillColor: [99, 102, 241], textColor: [255, 255, 255] }, // Indigo-500
-                    columnStyles: {
-                        0: { cellWidth: 'auto' },
-                        1: { cellWidth: 20, halign: 'right' },
-                        2: { cellWidth: 20, halign: 'right' },
-                        3: { cellWidth: 20, halign: 'right' },
-                        4: { cellWidth: 25, halign: 'right' }
-                    },
-                    didParseCell: (hookData: any) => {
-                        // Colorize diff Qtd and R$ for Category Headers
-                        if (hookData.section === 'body' && hookData.row.raw[0]?.styles?.fontStyle === 'bold') {
-                            if (hookData.column.index === 1 || hookData.column.index === 4) {
-                                const valStr = hookData.cell.raw.content?.toString() || hookData.cell.raw.toString();
-                                if (valStr.includes('-')) {
-                                    hookData.cell.styles.textColor = [220, 38, 38]; // Red
-                                } else if (valStr !== 'R$ 0,00' && valStr !== 'R$ -0,00' && valStr !== '0 un.' && valStr !== '') {
-                                    hookData.cell.styles.textColor = [22, 163, 74]; // Green
-                                }
-                            }
-                        }
-                        // Colorize diff Qtd and R$ for Items
-                        if (hookData.section === 'body' && !hookData.row.raw[0]?.styles) {
-                            if (hookData.column.index === 1 || hookData.column.index === 4) {
-                                const valStr = hookData.cell.raw.toString();
-                                if (valStr.includes('-')) {
-                                    hookData.cell.styles.textColor = [220, 38, 38]; // Red
-                                } else if (valStr !== 'R$ 0,00' && valStr !== 'R$ -0,00' && valStr !== '0' && valStr !== '') {
-                                    hookData.cell.styles.textColor = [22, 163, 74]; // Green
-                                }
-                            }
-                        }
-                    }
-                });
-
-                // @ts-ignore
-                afterProductTableY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : afterProductTableY + 30;
-            }
+            cursorY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : cursorY + 50;
         }
 
-        let finalY = afterProductTableY;
+        // Restante do termo: produtos conferidos
+        const productHead = [['Grupo', 'Departamento', 'Categoria', 'Código', 'Produto', 'Qtd', 'Custo Unit', 'Custo Total']];
+        const productBody = scopeInfo.products.map(p => [
+            p.groupName,
+            p.deptName,
+            p.catName,
+            p.code,
+            p.name,
+            Math.round(p.quantity).toLocaleString(),
+            `R$ ${(p.cost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+            `R$ ${((p.cost || 0) * p.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        ]);
+        const productFoot = [[
+            { content: 'TOTAIS DOS ITENS CONFERIDOS', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } },
+            Math.round(scopeInfo.products.reduce((acc, p) => acc + p.quantity, 0)).toLocaleString(),
+            '',
+            `R$ ${scopeInfo.products.reduce((acc, p) => acc + (p.quantity * (p.cost || 0)), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        ]];
 
-        if (termComparisonMetrics) {
-            // Check if we need a new page for the summary
-            if (finalY > 250) {
-                doc.addPage();
-                finalY = 20;
+        autoTable(doc, {
+            startY: cursorY,
+            head: productHead,
+            body: productBody,
+            foot: productFoot,
+            theme: 'striped',
+            tableWidth: 'wrap',
+            styles: { fontSize: 7, cellPadding: 1.5, overflow: 'linebreak', halign: 'center', valign: 'middle' },
+            headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] },
+            footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
+            columnStyles: {
+                0: { cellWidth: 18, halign: 'center' },
+                1: { cellWidth: 28, halign: 'center' },
+                2: { cellWidth: 24, halign: 'center' },
+                3: { cellWidth: 16, halign: 'center' },
+                4: { cellWidth: 42, halign: 'center' },
+                5: { cellWidth: 10, halign: 'center' },
+                6: { cellWidth: 20, halign: 'center' },
+                7: { cellWidth: 20, halign: 'center' }
             }
+        });
 
-            doc.setFontSize(11);
-            doc.setTextColor(15, 23, 42);
-            doc.text('RESUMO FINANCEIRO DA CONFERÊNCIA', 14, finalY);
-            finalY += 6;
-
-            const diffType = termComparisonMetrics.diffCost < 0 ? 'Prejuízo (Falta)' : termComparisonMetrics.diffCost > 0 ? 'Sobra (Excesso)' : 'Zero';
-            const scopeAuditedCost = (scopeInfo.products || []).reduce((sum: number, p: any) => sum + ((p.quantity || 0) * (p.cost || 0)), 0);
-            const representativity = getFinancialRepresentativity(scopeAuditedCost, termComparisonMetrics.diffCost);
-            const representativityLabel = representativity === null
-                ? 'N/A'
-                : `${representativity.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
-
-            const summaryRows = [
-                ['Estoque Sistema (Qtde)', Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')],
-                ['Custo Total Sistema', termComparisonMetrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })],
-                ['Estoque Físico (Qtde)', Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')],
-                ['Custo Total Físico', termComparisonMetrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })],
-                ['Diferença de Estoque (Qtde)', termComparisonMetrics.diffQty.toLocaleString('pt-BR')],
-                ['Resultado Financeiro', termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) + ` (${diffType})`],
-                ['Representatividade no Auditado', representativityLabel]
-            ];
-
-            autoTable(doc, {
-                startY: finalY,
-                body: summaryRows,
-                theme: 'grid',
-                styles: { fontSize: 9, cellPadding: 2 },
-                columnStyles: {
-                    0: { cellWidth: 80, fontStyle: 'bold', fillColor: [248, 250, 252] },
-                    1: { cellWidth: 60, halign: 'right' }
-                },
-                didParseCell: (hookData: any) => {
-                    if (hookData.row.index === 5 && hookData.column.index === 1) { // Resultado Financeiro value cell
-                        hookData.cell.styles.fontStyle = 'bold';
-                        if (termComparisonMetrics.diffCost < 0) {
-                            hookData.cell.styles.textColor = [220, 38, 38]; // Red
-                        } else if (termComparisonMetrics.diffCost > 0) {
-                            hookData.cell.styles.textColor = [22, 163, 74]; // Green
-                        }
-                    }
-                }
-            });
-        }
+        // @ts-ignore
+        cursorY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : cursorY + 50;
+        const finalY = cursorY;
 
         const safeName = scopeInfo.group.name.replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 30);
         const termTypeFile = termModal.type === 'custom' ? 'personalizado' : termModal.type;

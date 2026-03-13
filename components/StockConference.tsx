@@ -2517,8 +2517,16 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
         head: [tableColumn],
         body: tableRows,
         theme: 'grid',
-        styles: { fontSize: 8 },
+        styles: { fontSize: 8, overflow: 'linebreak' },
         headStyles: { fillColor: [66, 133, 244] },
+        columnStyles: {
+          0: { cellWidth: 24 },
+          1: { cellWidth: 72 },
+          2: { cellWidth: 20, halign: 'right' },
+          3: { cellWidth: 20, halign: 'right' },
+          4: { cellWidth: 20, halign: 'right' },
+          5: { cellWidth: 26, halign: 'center' }
+        },
         didParseCell: (data: any) => {
           if (data.section === 'body') {
             const diffVal = parseFloat(data.row.raw[4]);

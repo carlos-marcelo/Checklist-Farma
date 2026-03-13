@@ -653,8 +653,16 @@ const StockConferenceReportViewer = ({ report, onClose, currentUser }: StockConf
                 head: [tableColumn],
                 body: tableRows,
                 theme: 'grid',
-                styles: { fontSize: 8 },
+                styles: { fontSize: 8, overflow: 'linebreak' },
                 headStyles: { fillColor: [66, 133, 244] },
+                columnStyles: {
+                    0: { cellWidth: 24 },
+                    1: { cellWidth: 72 },
+                    2: { cellWidth: 20, halign: 'right' },
+                    3: { cellWidth: 20, halign: 'right' },
+                    4: { cellWidth: 20, halign: 'right' },
+                    5: { cellWidth: 26, halign: 'center' }
+                },
                 didParseCell: (data: any) => {
                     if (data.section === 'body' && data.column.index === 4) {
                         const diffVal = parseFloat(data.row.raw[4]);
@@ -1255,6 +1263,7 @@ const LoginScreen = ({
                                         onChange={(e) => setPassword(e.target.value)}
                                         className={getPasswordInputClass(password) + " pr-12"}
                                         placeholder="••••••••"
+                                        autoComplete={isRegistering ? "new-password" : "current-password"}
                                         required
                                     />
                                     <button
@@ -1278,6 +1287,7 @@ const LoginScreen = ({
                                         onChange={(e) => setConfirmPassword(e.target.value)}
                                         className={getPasswordInputClass(confirmPassword) + " pr-12"}
                                         placeholder="••••••••"
+                                        autoComplete="new-password"
                                         required
                                     />
                                     <button
@@ -6528,6 +6538,7 @@ const App: React.FC = () => {
                                                             value={newPassInput}
                                                             onChange={(e) => setNewPassInput(e.target.value)}
                                                             placeholder="Preencher apenas para alterar"
+                                                            autoComplete="new-password"
                                                             className={`w-full rounded-lg p-3 pr-12 outline-none shadow-inner-light transition-all ${newPassInput && confirmPassInput && newPassInput !== confirmPassInput
                                                                 ? 'bg-red-50 border border-red-500 text-red-900 focus:ring-2 focus:ring-red-200'
                                                                 : newPassInput && confirmPassInput && newPassInput === confirmPassInput
@@ -6552,6 +6563,7 @@ const App: React.FC = () => {
                                                             value={confirmPassInput}
                                                             onChange={(e) => setConfirmPassInput(e.target.value)}
                                                             placeholder="Confirme a nova senha"
+                                                            autoComplete="new-password"
                                                             className={`w-full rounded-lg p-3 pr-12 outline-none shadow-inner-light transition-all ${newPassInput && confirmPassInput && newPassInput !== confirmPassInput
                                                                 ? 'bg-red-50 border border-red-500 text-red-900 focus:ring-2 focus:ring-red-200'
                                                                 : newPassInput && confirmPassInput && newPassInput === confirmPassInput
@@ -6703,6 +6715,7 @@ const App: React.FC = () => {
                                                     placeholder="Senha Provisória"
                                                     value={newUserPass}
                                                     onChange={(e) => setNewUserPass(e.target.value)}
+                                                    autoComplete="new-password"
                                                     className="w-full bg-white/70 border border-gray-200 rounded-xl p-3 pr-10 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all font-medium"
                                                 />
                                                 <button
@@ -6720,6 +6733,7 @@ const App: React.FC = () => {
                                                     placeholder="Confirmar Senha"
                                                     value={newUserConfirmPass}
                                                     onChange={(e) => setNewUserConfirmPass(e.target.value)}
+                                                    autoComplete="new-password"
                                                     className={`w-full bg-white/70 border border-gray-200 rounded-xl p-3 pr-10 text-sm text-gray-900 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all font-medium ${newUserPass && newUserConfirmPass && newUserPass !== newUserConfirmPass ? 'border-red-300 bg-red-50/10' : ''}`}
                                                 />
                                                 <button
