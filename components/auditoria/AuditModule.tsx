@@ -5216,8 +5216,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }
     }, []);
 
-    const handlePrintTerm = async () => {
+    const handlePrintTerm = async (options?: { divergencesOnly?: boolean }) => {
         if (!data || !termModal || !termForm) return;
+        const divergencesOnly = !!options?.divergencesOnly;
         const scopeInfo = buildTermScopeInfo(termModal);
         if (!scopeInfo) return;
 
@@ -5425,14 +5426,29 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const representativityLabel = representativity === null
                 ? 'N/A'
                 : `${representativity.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`;
+            const fmtCurrency = (value: number) => value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+            const fmtInt = (value: number) => Math.round(value || 0).toLocaleString('pt-BR');
+            const mixPending = Math.max(0, Number(branchMetrics.skus || 0) - Number(branchMetrics.doneSkus || 0));
 
             const summaryRows = [
+                [{ content: 'INDICADORES DA FILIAL', styles: { fontStyle: 'bold', fillColor: [238, 242, 255], halign: 'center' } }, { content: '', styles: { fillColor: [238, 242, 255] } }],
+                ['Conferência Global da Filial', `${Number(branchMetrics.progress || 0).toLocaleString('pt-BR', { maximumFractionDigits: 0 })}%`],
+                ['SKUs Totais (Mix Importado)', fmtInt(Number(branchMetrics.skus || 0))],
+                ['Mix Auditado (Conf./Pend.)', `${fmtInt(Number(branchMetrics.doneSkus || 0))} / ${fmtInt(mixPending)}`],
+                ['Unidades Totais (Conf./Total)', `${fmtInt(Number(branchMetrics.doneUnits || 0))} / ${fmtInt(Number(branchMetrics.units || 0))}`],
+                ['Valor em Custo (Conf./Total)', `${fmtCurrency(Number(branchMetrics.doneCost || 0))} / ${fmtCurrency(Number(branchMetrics.cost || 0))}`],
+                ['Total Conferido R$', fmtCurrency(Number(filialTotalsMetrics.doneCost || 0))],
+                ['Falta Conferir R$', fmtCurrency(Number(filialTotalsMetrics.pendingCost || 0))],
+                ['Qtde Divergência', `${Number(filialTotalsMetrics.diffQty || 0) > 0 ? '+' : ''}${fmtInt(Number(filialTotalsMetrics.diffQty || 0))} un.`],
+                ['Divergência R$', fmtCurrency(Number(filialTotalsMetrics.diffCost || 0))],
+                ['Rep. Divergência', `${Number(filialTotalsMetrics.repDivergencePct || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%`],
+                [{ content: 'DADOS DO TERMO (ESCOPO)', styles: { fontStyle: 'bold', fillColor: [238, 242, 255], halign: 'center' } }, { content: '', styles: { fillColor: [238, 242, 255] } }],
                 ['Estoque Sistema (Qtde)', Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')],
-                ['Custo Total Sistema', termComparisonMetrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })],
+                ['Custo Total Sistema', fmtCurrency(Number(termComparisonMetrics.sysCost || 0))],
                 ['Estoque Físico (Qtde)', Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')],
-                ['Custo Total Físico', termComparisonMetrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })],
+                ['Custo Total Físico', fmtCurrency(Number(termComparisonMetrics.countedCost || 0))],
                 ['Diferença de Estoque (Qtde)', termComparisonMetrics.diffQty.toLocaleString('pt-BR')],
-                ['Resultado Financeiro', termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) + ` (${diffType})`],
+                ['Resultado Financeiro', fmtCurrency(Number(termComparisonMetrics.diffCost || 0)) + ` (${diffType})`],
                 ['Representatividade no Auditado', representativityLabel]
             ];
 
@@ -5446,13 +5462,16 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     1: { cellWidth: 70, halign: 'center' }
                 },
                 didParseCell: (hookData: any) => {
-                    if (hookData.row.index === 5 && hookData.column.index === 1) {
+                    if (hookData.section !== 'body' || hookData.column.index !== 1) return;
+                    const rowLabel = String(hookData.row?.raw?.[0]?.content ?? hookData.row?.raw?.[0] ?? '').trim().toLowerCase();
+                    if (!rowLabel) return;
+                    const isFinancialResult = rowLabel.includes('resultado financeiro');
+                    const isDiffMoney = rowLabel === 'divergência r$';
+                    if (isFinancialResult || isDiffMoney) {
                         hookData.cell.styles.fontStyle = 'bold';
-                        if (termComparisonMetrics.diffCost < 0) {
-                            hookData.cell.styles.textColor = [220, 38, 38];
-                        } else if (termComparisonMetrics.diffCost > 0) {
-                            hookData.cell.styles.textColor = [22, 163, 74];
-                        }
+                        const value = isFinancialResult ? Number(termComparisonMetrics.diffCost || 0) : Number(filialTotalsMetrics.diffCost || 0);
+                        if (value < 0) hookData.cell.styles.textColor = [220, 38, 38];
+                        if (value > 0) hookData.cell.styles.textColor = [22, 163, 74];
                     }
                 }
             });
@@ -5594,54 +5613,56 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             cursorY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : cursorY + 50;
         }
 
-        // Restante do termo: produtos conferidos
-        const productHead = [['Grupo', 'Departamento', 'Categoria', 'Código', 'Produto', 'Qtd', 'Custo Unit', 'Custo Total']];
-        const productBody = scopeInfo.products.map(p => [
-            p.groupName,
-            p.deptName,
-            p.catName,
-            p.code,
-            p.name,
-            Math.round(p.quantity).toLocaleString(),
-            `R$ ${(p.cost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
-            `R$ ${((p.cost || 0) * p.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        ]);
-        const productFoot = [[
-            { content: 'TOTAIS DOS ITENS CONFERIDOS', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } },
-            Math.round(scopeInfo.products.reduce((acc, p) => acc + p.quantity, 0)).toLocaleString(),
-            '',
-            `R$ ${scopeInfo.products.reduce((acc, p) => acc + (p.quantity * (p.cost || 0)), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-        ]];
+        if (!divergencesOnly) {
+            // Restante do termo: produtos conferidos
+            const productHead = [['Grupo', 'Departamento', 'Categoria', 'Código', 'Produto', 'Qtd', 'Custo Unit', 'Custo Total']];
+            const productBody = scopeInfo.products.map(p => [
+                p.groupName,
+                p.deptName,
+                p.catName,
+                p.code,
+                p.name,
+                Math.round(p.quantity).toLocaleString(),
+                `R$ ${(p.cost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`,
+                `R$ ${((p.cost || 0) * p.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            ]);
+            const productFoot = [[
+                { content: 'TOTAIS DOS ITENS CONFERIDOS', colSpan: 5, styles: { halign: 'right', fontStyle: 'bold' } },
+                Math.round(scopeInfo.products.reduce((acc, p) => acc + p.quantity, 0)).toLocaleString(),
+                '',
+                `R$ ${scopeInfo.products.reduce((acc, p) => acc + (p.quantity * (p.cost || 0)), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+            ]];
 
-        autoTable(doc, {
-            startY: cursorY,
-            head: productHead,
-            body: productBody,
-            foot: productFoot,
-            theme: 'striped',
-            tableWidth: 'wrap',
-            styles: { fontSize: 7, cellPadding: 1.5, overflow: 'linebreak', halign: 'center', valign: 'middle' },
-            headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] },
-            footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
-            columnStyles: {
-                0: { cellWidth: 18, halign: 'center' },
-                1: { cellWidth: 28, halign: 'center' },
-                2: { cellWidth: 24, halign: 'center' },
-                3: { cellWidth: 16, halign: 'center' },
-                4: { cellWidth: 42, halign: 'center' },
-                5: { cellWidth: 10, halign: 'center' },
-                6: { cellWidth: 20, halign: 'center' },
-                7: { cellWidth: 20, halign: 'center' }
-            }
-        });
+            autoTable(doc, {
+                startY: cursorY,
+                head: productHead,
+                body: productBody,
+                foot: productFoot,
+                theme: 'striped',
+                tableWidth: 'wrap',
+                styles: { fontSize: 7, cellPadding: 1.5, overflow: 'linebreak', halign: 'center', valign: 'middle' },
+                headStyles: { fillColor: [79, 70, 229], textColor: [255, 255, 255] },
+                footStyles: { fillColor: [241, 245, 249], textColor: [15, 23, 42], fontStyle: 'bold' },
+                columnStyles: {
+                    0: { cellWidth: 18, halign: 'center' },
+                    1: { cellWidth: 28, halign: 'center' },
+                    2: { cellWidth: 24, halign: 'center' },
+                    3: { cellWidth: 16, halign: 'center' },
+                    4: { cellWidth: 42, halign: 'center' },
+                    5: { cellWidth: 10, halign: 'center' },
+                    6: { cellWidth: 20, halign: 'center' },
+                    7: { cellWidth: 20, halign: 'center' }
+                }
+            });
 
-        // @ts-ignore
-        cursorY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : cursorY + 50;
-        const finalY = cursorY;
+            // @ts-ignore
+            cursorY = doc.lastAutoTable?.finalY ? doc.lastAutoTable.finalY + 10 : cursorY + 50;
+        }
 
         const safeName = scopeInfo.group.name.replace(/[^a-zA-Z0-9-_]+/g, '_').slice(0, 30);
         const termTypeFile = termModal.type === 'custom' ? 'personalizado' : termModal.type;
-        const fileName = `Termo_Auditoria_F${data.filial}_${termTypeFile}_${safeName}.pdf`;
+        const modeSuffix = divergencesOnly ? '_somente_divergencias' : '';
+        const fileName = `Termo_Auditoria_F${data.filial}_${termTypeFile}_${safeName}${modeSuffix}.pdf`;
         insertAppEventLog({
             company_id: selectedCompany?.id || null,
             branch: selectedFilial || null,
@@ -5655,7 +5676,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             status: 'success',
             success: true,
             source: 'web',
-            event_meta: { type: termModal.type, group: scopeInfo.group.name }
+            event_meta: { type: termModal.type, group: scopeInfo.group.name, divergencesOnly }
         }).catch(() => { });
         doc.save(fileName);
     };
@@ -8357,12 +8378,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
                                 Produtos no termo: {termScopeInfo.products.length}
                             </span>
-                            <button
-                                onClick={handlePrintTerm}
-                                className="w-full sm:w-auto px-6 py-3 rounded-xl bg-slate-900 text-white font-black text-[11px] uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-md"
-                            >
-                                Imprimir Termo
-                            </button>
+                            <div className="w-full sm:w-auto flex flex-col sm:flex-row gap-2">
+                                <button
+                                    onClick={() => handlePrintTerm({ divergencesOnly: true })}
+                                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-amber-600 text-white font-black text-[11px] uppercase tracking-widest hover:bg-amber-500 transition-all shadow-md"
+                                >
+                                    Imprimir Só Divergências
+                                </button>
+                                <button
+                                    onClick={() => handlePrintTerm()}
+                                    className="w-full sm:w-auto px-6 py-3 rounded-xl bg-slate-900 text-white font-black text-[11px] uppercase tracking-widest hover:bg-indigo-600 transition-all shadow-md"
+                                >
+                                    Imprimir Termo Completo
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>,
