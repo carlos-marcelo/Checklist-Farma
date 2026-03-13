@@ -1,6 +1,9 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import * as XLSX from 'xlsx';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
     AuditData,
     ViewState,
@@ -2080,11 +2083,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             reader.onload = (e) => {
                 try {
                     const ab = e.target?.result;
-                    const XLSX = (window as any).XLSX;
-                    if (!XLSX) {
-                        reject(new Error("Biblioteca XLSX não encontrada."));
-                        return;
-                    }
                     const workbook = XLSX.read(ab, { type: 'array' });
                     const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
                     const rows = XLSX.utils.sheet_to_json(firstSheet, { header: 1 });
@@ -4936,13 +4934,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 console.error("Error saving term draft:", err);
             }
         }
-        // @ts-ignore
-        const { jsPDF } = (window as any).jspdf || {};
-        if (!jsPDF) {
-            alert('Biblioteca de PDF não carregada.');
-            return;
-        }
-
         const doc = new jsPDF('p', 'mm', 'a4');
         let y = 18;
 
@@ -5005,8 +4996,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             ])
         ];
 
-        // @ts-ignore
-        doc.autoTable({
+        autoTable(doc, {
             startY: y,
             head: [['Responsável', 'CPF', 'Ass.']],
             body: signatureRows,
@@ -5055,8 +5045,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             `R$ ${scopeInfo.products.reduce((acc, p) => acc + (p.quantity * (p.cost || 0)), 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
         ]];
 
-        // @ts-ignore
-        doc.autoTable({
+        autoTable(doc, {
             startY: afterSignY,
             head: productHead,
             body: productBody,
@@ -5105,8 +5094,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 `R$ ${(termComparisonMetrics.diffCost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
             ]];
 
-            // @ts-ignore
-            doc.autoTable({
+            autoTable(doc, {
                 startY: afterProductTableY + 6,
                 head: divHead,
                 body: divBody,
@@ -5175,8 +5163,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     });
                 });
 
-                // @ts-ignore
-                doc.autoTable({
+                autoTable(doc, {
                     startY: afterProductTableY + 6,
                     head: groupHead,
                     body: groupBody,
@@ -5252,8 +5239,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 ['Representatividade no Auditado', representativityLabel]
             ];
 
-            // @ts-ignore
-            doc.autoTable({
+            autoTable(doc, {
                 startY: finalY,
                 body: summaryRows,
                 theme: 'grid',
@@ -5762,11 +5748,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const handleExportPDF = async () => {
         if (!data) return;
-        const jsPDF = (window as any).jspdf?.jsPDF;
-        if (!jsPDF) {
-            alert("Biblioteca jsPDF não encontrada.");
-            return;
-        }
         const doc = new jsPDF('l', 'mm', 'a4');
         const ts = new Date().toLocaleString('pt-BR');
 
@@ -5784,9 +5765,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             ["VALOR TOTAL (Custo)", `R$ ${branchMetrics.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`, "VALOR CONFERIDO", `R$ ${branchMetrics.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`]
         ];
 
-        if ((doc as any).autoTable) {
-            (doc as any).autoTable({ startY: 40, body: summaryData, theme: 'grid', styles: { fontSize: 9, cellPadding: 2 }, headStyles: { fillColor: [79, 70, 229] } });
-        }
+        autoTable(doc, { startY: 40, body: summaryData, theme: 'grid', styles: { fontSize: 9, cellPadding: 2 }, headStyles: { fillColor: [79, 70, 229] } });
 
         doc.addPage();
         doc.setFontSize(16); doc.setTextColor(15, 23, 42);
@@ -5823,16 +5802,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             });
         });
 
-        if ((doc as any).autoTable) {
-            (doc as any).autoTable({
-                startY: 30,
-                head: [['Hierarquia de Inventário (Grupo > Depto > Cat)', 'Mix Total', 'Mix Conf.', 'Prog Mix', 'Unid Total', 'Unid Conf.', 'Prog Unid', 'Custo Total', 'Custo Conf.']],
-                body: hierarchyRows,
-                theme: 'grid',
-                styles: { fontSize: 7, cellPadding: 1.5 },
-                headStyles: { fillColor: [15, 23, 42] }
-            });
-        }
+        autoTable(doc, {
+            startY: 30,
+            head: [['Hierarquia de Inventário (Grupo > Depto > Cat)', 'Mix Total', 'Mix Conf.', 'Prog Mix', 'Unid Total', 'Unid Conf.', 'Prog Unid', 'Custo Total', 'Custo Conf.']],
+            body: hierarchyRows,
+            theme: 'grid',
+            styles: { fontSize: 7, cellPadding: 1.5 },
+            headStyles: { fillColor: [15, 23, 42] }
+        });
 
         const fileName = `Auditoria_F${data.filial}_Analitica.pdf`;
         insertAppEventLog({

@@ -1,5 +1,7 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { Product, PVRecord, SessionInfo } from '../../preVencidos/types';
 import { insertAppEventLog } from '../../supabaseService';
 import ScannerInput from './ScannerInput';
@@ -454,12 +456,6 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
         event_meta: { total_records: pvRecords.length }
       }).catch(() => { });
     }
-    const jsPDF = (window as any).jspdf?.jsPDF;
-    if (!jsPDF) {
-      alert('Biblioteca de PDF não carregada.');
-      return;
-    }
-
     const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
     doc.setFontSize(16);
     doc.text('Relatório de Pré-Vencidos', 10, 20);
@@ -494,7 +490,7 @@ const PVRegistration: React.FC<PVRegistrationProps> = ({
       ]);
     });
 
-    (doc as any).autoTable({
+    autoTable(doc, {
       startY: 40,
       head: [tableColumn],
       body: tableRows,

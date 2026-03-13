@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import * as XLSX from 'xlsx';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import {
   CheckCircle,
   AlertTriangle,
@@ -319,11 +322,6 @@ const parseHTML = (text: string): any[] => {
 
 // Excel Parser using SheetJS
 const parseExcel = async (file: File): Promise<any[]> => {
-  const XLSX = (window as any).XLSX;
-  if (!XLSX) {
-    throw new Error("Biblioteca Excel não carregada. Verifique se o script foi carregado.");
-  }
-
   const arrayBuffer = await file.arrayBuffer();
   const workbook = XLSX.read(arrayBuffer, { type: 'array' });
 
@@ -438,11 +436,6 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const signatureHashRef = useRef('');
 
   // --- Effects ---
-
-  useEffect(() => {
-    // Re-initialize icons when component updates significantly
-    if ((window as any).lucide) (window as any).lucide.createIcons();
-  }, [step, activeItem]);
 
   // Auto-save session periodically during conference
   useEffect(() => {
@@ -672,7 +665,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     return () => {
       isMounted = false;
     };
-  }, [userEmail, companies, sessionId, masterProducts.size, inventory.size]);
+  }, [userEmail, companies]);
 
   const persistSession = async (options?: {
     step?: AppStep;
@@ -2263,12 +2256,6 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
           source: 'web'
         }).catch(() => { });
       }
-      const jsPDF = (window as any).jspdf.jsPDF;
-      if (!jsPDF) {
-        alert("Erro: Biblioteca PDF não carregada.");
-        return;
-      }
-
       const doc = new jsPDF();
       const dateStr = new Date().toLocaleDateString('pt-BR');
 
@@ -2322,7 +2309,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
         tableRows.push(rowData);
       });
 
-      (doc as any).autoTable({
+      autoTable(doc, {
         startY: 65,
         head: [tableColumn],
         body: tableRows,

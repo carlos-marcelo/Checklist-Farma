@@ -1,5 +1,7 @@
 
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { Product, PVRecord, SalesRecord, AppView, SessionInfo, PVSaleClassification, SalesUploadRecord } from '../../preVencidos/types';
 import type { UserRole } from '../../types';
 import {
@@ -2953,12 +2955,6 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
   };
 
   const buildClosingReportPDF = async (records: DbPVSalesHistory[], metrics: DashboardMetrics, prefix: 'final' | 'preview', periodLabel: string) => {
-    const jsPDF = (window as any).jspdf?.jsPDF;
-    if (!jsPDF) {
-      alert('Biblioteca de PDF não carregada. O relatório não pôde ser gerado.');
-      return null;
-    }
-
     try {
       const doc = new jsPDF({ unit: 'pt', format: 'a4' });
       const pageWidth = doc.internal.pageSize.getWidth();
@@ -3045,7 +3041,7 @@ const PreVencidosManager: React.FC<PreVencidosManagerProps> = ({
         `Custo: ${formatCurrency(item.positiveCost || 0)} / ${formatCurrency(item.negativeCost || 0)}`
       ]));
 
-      (doc as any).autoTable({
+      autoTable(doc, {
         startY: rankingStartY + 12,
         head: [['Pos.', 'Vendedor', '+PV', 'N', 'Ignorou', 'Custo (+/-)']],
         body: rankingRows,

@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { Camera, FileText, CheckSquare, Printer, Clipboard, ClipboardList, Image as ImageIcon, Trash2, Menu, X, ChevronRight, Download, Star, AlertTriangle, CheckCircle, AlertCircle, LayoutDashboard, FileCheck, Settings, LogOut, Users, Palette, Upload, UserPlus, History, RotateCcw, Save, Search, Eye, EyeOff, Phone, User as UserIcon, Ban, Check, Filter, UserX, Undo2, CheckSquare as CheckSquareIcon, Trophy, Frown, PartyPopper, Lock, Loader2, Building2, MapPin, Store, MessageSquare, Send, ThumbsUp, ThumbsDown, Clock, CheckCheck, Lightbulb, MessageSquareQuote, Package, ArrowRight, ArrowLeft, ShieldCheck, HelpCircle, Info, LayoutGrid, UserCircle, FileSearch, ChevronDown, Calendar, RefreshCw, UserCircle2, Plus, SearchX, WifiOff } from 'lucide-react';
+import { jsPDF } from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { CHECKLISTS as BASE_CHECKLISTS, THEMES, ACCESS_MODULES, ACCESS_LEVELS, INPUT_TYPE_LABELS, generateId } from './constants';
 import { ChecklistData, ChecklistImages, InputType, ChecklistSection, ChecklistDefinition, ChecklistItem, ThemeColor, AppConfig, User, ReportHistoryItem, StockConferenceHistoryItem, CompanyArea, AccessLevelId, AccessModule, AccessLevelMeta, UserRole, StockConferenceSummary } from './types';
 import AuditModule from './components/auditoria/AuditModule';
@@ -596,12 +598,6 @@ const StockConferenceReportViewer = ({ report, onClose, currentUser }: StockConf
                     event_meta: { report_id: report?.id || null }
                 }).catch(() => { });
             }
-            const jsPDF = (window as any).jspdf?.jsPDF;
-            if (!jsPDF) {
-                alert('Biblioteca de PDF não carregada.');
-                return;
-            }
-
             const doc = new jsPDF();
             doc.setFontSize(18);
             doc.text('Relatório de Conferência de Estoque', 14, 20);
@@ -651,7 +647,7 @@ const StockConferenceReportViewer = ({ report, onClose, currentUser }: StockConf
                 ]);
             });
 
-            (doc as any).autoTable({
+            autoTable(doc, {
                 startY: totalsY + 16,
                 head: [tableColumn],
                 body: tableRows,
@@ -8212,7 +8208,7 @@ const App: React.FC = () => {
                                                                     <MessageSquareQuote size={40} className="text-green-600" />
                                                                 </div>
                                                                 <p className="text-[10px] font-black text-green-600 uppercase tracking-widest mb-2 flex items-center gap-1.5">
-                                                                    <div className="w-1.5 h-1.5 rounded-full bg-green-500" /> Resposta Oficial
+                                                                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block" /> Resposta Oficial
                                                                 </p>
                                                                 <p className="text-sm font-medium text-green-900 leading-relaxed relative z-10">{ticket.admin_response}</p>
                                                             </div>

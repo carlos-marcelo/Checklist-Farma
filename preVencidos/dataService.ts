@@ -1,7 +1,5 @@
-
+import * as XLSX from 'xlsx';
 import { Product, PVRecord, SalesRecord, DCBReportRecord, InventoryCostRecord } from './types';
-
-declare const XLSX: any;
 
 /**
  * Normaliza códigos reduzidos para evitar erros de tipo (string vs number) e espaços
