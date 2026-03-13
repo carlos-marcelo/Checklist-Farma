@@ -6033,6 +6033,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     }, []);
     const termScopeInfo = useMemo(() => (termModal ? buildTermScopeInfo(termModal) : null), [termModal, data]);
     const canEditTerm = isMaster && !isReadOnlyCompletedView;
+    const canFillTermSignatures = !isReadOnlyCompletedView;
     const partialInfoList = useMemo(() => {
         if (!data?.partialStarts || data.partialStarts.length === 0) return [];
         const buildDeptLabel = (d: Department) => `${d.numericId || d.id} - ${d.name}`;
@@ -7422,14 +7423,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 onBlur={(e) => validateTermFieldOnBlur('manager1_name', e.target.value)}
                                                 placeholder="Nome do Gestor 1"
                                                 data-term-field="manager1_name"
-                                                readOnly={!canEditTerm}
+                                                readOnly={!canFillTermSignatures}
                                                 className={`w-full bg-white border rounded-xl px-4 py-2 font-bold text-xs ${
                                                     termFieldErrors.manager1_name
                                                         ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
                                                         : (termTouchedFields.manager1_name && isTermFieldValid('manager1_name', termForm.managerName2)
                                                             ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
                                                             : 'border-slate-200 text-slate-700')
-                                                } ${termShakeFields.manager1_name ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                } ${termShakeFields.manager1_name ? 'term-field-shake' : ''} ${!canFillTermSignatures ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
                                             {termFieldErrors.manager1_name && (
                                                 <p className="text-[10px] font-bold text-red-600">{termFieldErrors.manager1_name}</p>
@@ -7445,14 +7446,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 placeholder="CPF Gestor 1"
                                                 data-term-field="manager1_cpf"
                                                 maxLength={14}
-                                                readOnly={!canEditTerm}
+                                                readOnly={!canFillTermSignatures}
                                                 className={`w-full bg-white border rounded-xl px-4 py-2 font-bold text-xs ${
                                                     termFieldErrors.manager1_cpf
                                                         ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
                                                         : (termTouchedFields.manager1_cpf && isTermFieldValid('manager1_cpf', termForm.managerCpf2)
                                                             ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
                                                             : 'border-slate-200 text-slate-700')
-                                                } ${termShakeFields.manager1_cpf ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                } ${termShakeFields.manager1_cpf ? 'term-field-shake' : ''} ${!canFillTermSignatures ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
                                             {termFieldErrors.manager1_cpf && (
                                                 <p className="text-[10px] font-bold text-red-600">{termFieldErrors.manager1_cpf}</p>
@@ -7461,7 +7462,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         {termForm.managerSignature2 ? (
                                             <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
                                                 <img src={termForm.managerSignature2} alt="Assinatura Gestor" className="max-h-full" />
-                                                {canEditTerm && (
+                                                {canFillTermSignatures && (
                                                     <button
                                                         type="button"
                                                         onClick={() => updateTermForm(prev => ({ ...prev, managerSignature2: '' }))}
@@ -7472,7 +7473,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                     </button>
                                                 )}
                                             </div>
-                                        ) : canEditTerm ? (
+                                        ) : canFillTermSignatures ? (
                                             <SignaturePad onEnd={async (dataUrl) => {
                                                 const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
                                                 updateTermForm(prev => ({ ...prev, managerSignature2: compressed }));
@@ -7494,14 +7495,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 onBlur={(e) => validateTermFieldOnBlur('manager2_name', e.target.value)}
                                                 placeholder="Nome do Gestor 2"
                                                 data-term-field="manager2_name"
-                                                readOnly={!canEditTerm}
+                                                readOnly={!canFillTermSignatures}
                                                 className={`w-full bg-white border rounded-xl px-4 py-2 font-bold text-xs ${
                                                     termFieldErrors.manager2_name
                                                         ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
                                                         : (termTouchedFields.manager2_name && isTermFieldValid('manager2_name', termForm.managerName)
                                                             ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
                                                             : 'border-slate-200 text-slate-700')
-                                                } ${termShakeFields.manager2_name ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                } ${termShakeFields.manager2_name ? 'term-field-shake' : ''} ${!canFillTermSignatures ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
                                             {termFieldErrors.manager2_name && (
                                                 <p className="text-[10px] font-bold text-red-600">{termFieldErrors.manager2_name}</p>
@@ -7517,14 +7518,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                 placeholder="CPF Gestor 2"
                                                 data-term-field="manager2_cpf"
                                                 maxLength={14}
-                                                readOnly={!canEditTerm}
+                                                readOnly={!canFillTermSignatures}
                                                 className={`w-full bg-white border rounded-xl px-4 py-2 font-bold text-xs ${
                                                     termFieldErrors.manager2_cpf
                                                         ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
                                                         : (termTouchedFields.manager2_cpf && isTermFieldValid('manager2_cpf', termForm.managerCpf)
                                                             ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
                                                             : 'border-slate-200 text-slate-700')
-                                                } ${termShakeFields.manager2_cpf ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                } ${termShakeFields.manager2_cpf ? 'term-field-shake' : ''} ${!canFillTermSignatures ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
                                             {termFieldErrors.manager2_cpf && (
                                                 <p className="text-[10px] font-bold text-red-600">{termFieldErrors.manager2_cpf}</p>
@@ -7533,7 +7534,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         {termForm.managerSignature ? (
                                             <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
                                                 <img src={termForm.managerSignature} alt="Assinatura Gestor" className="max-h-full" />
-                                                {canEditTerm && (
+                                                {canFillTermSignatures && (
                                                     <button
                                                         type="button"
                                                         onClick={() => updateTermForm(prev => ({ ...prev, managerSignature: '' }))}
@@ -7544,7 +7545,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                     </button>
                                                 )}
                                             </div>
-                                        ) : canEditTerm ? (
+                                        ) : canFillTermSignatures ? (
                                             <SignaturePad onEnd={async (dataUrl) => {
                                                 const compressed = await ImageUtils.compressImage(dataUrl, { maxWidth: 600, quality: 0.6 });
                                                 updateTermForm(prev => ({ ...prev, managerSignature: compressed }));
@@ -7583,14 +7584,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                             onBlur={(e) => validateTermFieldOnBlur(`collab_${idx}_name`, e.target.value)}
                                                             placeholder={`Colaborador ${collabNumber}`}
                                                             data-term-field={`collab_${idx}_name`}
-                                                            readOnly={!canEditTerm}
+                                                            readOnly={!canFillTermSignatures}
                                                             className={`w-full bg-white border rounded-xl px-4 py-2 font-semibold text-xs ${
                                                                 termFieldErrors[`collab_${idx}_name`]
                                                                     ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
                                                                     : (termTouchedFields[`collab_${idx}_name`] && isTermFieldValid(`collab_${idx}_name`, collab.name)
                                                                         ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
                                                                         : 'border-slate-200 text-slate-700')
-                                                            } ${termShakeFields[`collab_${idx}_name`] ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                            } ${termShakeFields[`collab_${idx}_name`] ? 'term-field-shake' : ''} ${!canFillTermSignatures ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                                         />
                                                         <input
                                                             type="text"
@@ -7606,14 +7607,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                             placeholder={`CPF ${collabNumber}`}
                                                             data-term-field={`collab_${idx}_cpf`}
                                                             maxLength={14}
-                                                            readOnly={!canEditTerm}
+                                                            readOnly={!canFillTermSignatures}
                                                             className={`w-full bg-white border rounded-xl px-4 py-2 font-semibold text-xs ${
                                                                 termFieldErrors[`collab_${idx}_cpf`]
                                                                     ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
                                                                     : (termTouchedFields[`collab_${idx}_cpf`] && isTermFieldValid(`collab_${idx}_cpf`, collab.cpf)
                                                                         ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
                                                                         : 'border-slate-200 text-slate-700')
-                                                            } ${termShakeFields[`collab_${idx}_cpf`] ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                            } ${termShakeFields[`collab_${idx}_cpf`] ? 'term-field-shake' : ''} ${!canFillTermSignatures ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                                         />
                                                     </div>
                                                     {(termFieldErrors[`collab_${idx}_name`] || termFieldErrors[`collab_${idx}_cpf`]) && (
@@ -7629,7 +7630,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                     {collab.signature ? (
                                                         <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
                                                             <img src={collab.signature} alt="Assinatura Colaborador" className="max-h-full" />
-                                                            {canEditTerm && (
+                                                            {canFillTermSignatures && (
                                                                 <button
                                                                     type="button"
                                                                     onClick={() => updateTermForm(prev => ({
@@ -7643,7 +7644,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                                 </button>
                                                             )}
                                                         </div>
-                                                    ) : canEditTerm ? (
+                                                    ) : canFillTermSignatures ? (
                                                         <SignaturePad
                                                             label={`Assinatura ${collabNumber}`}
                                                             onEnd={async (dataUrl) => {
@@ -7662,7 +7663,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         );
                                     })}
                                 </div>
-                                {canEditTerm && (
+                                {canFillTermSignatures && (
                                     <div className="flex justify-end">
                                         <button
                                             type="button"
