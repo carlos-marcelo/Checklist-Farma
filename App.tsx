@@ -238,6 +238,7 @@ const canonicalizeFilterLabel = (value: string) => {
 };
 
 const normalizeFilterKey = (value: string) => canonicalizeFilterLabel(value).toLowerCase();
+const isMobileLayout = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches;
 
 /**
  * Normaliza nomes de filiais para uma forma canônica.
@@ -1397,7 +1398,7 @@ const App: React.FC = () => {
     const [formData, setFormData] = useState<Record<string, ChecklistData>>({});
     const [images, setImages] = useState<Record<string, ChecklistImages>>({});
     const [signatures, setSignatures] = useState<Record<string, Record<string, string>>>({});
-    const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+    const [isSidebarOpen, setIsSidebarOpen] = useState(() => isMobileLayout());
     const [showErrors, setShowErrors] = useState(false);
 
     const [currentView, setCurrentView] = useState<'checklist' | 'summary' | 'dashboard' | 'report' | 'settings' | 'history' | 'view_history' | 'support' | 'stock' | 'access' | 'pre' | 'audit' | 'logs' | 'cadastros_globais'>(() => {
@@ -4060,7 +4061,7 @@ const App: React.FC = () => {
         }
         setCurrentView(view);
         window.scrollTo(0, 0);
-        setIsSidebarOpen(false);
+        setIsSidebarOpen(isMobileLayout());
     };
 
     const handleNextChecklist = () => {
@@ -5477,7 +5478,7 @@ const App: React.FC = () => {
         setAuditJumpFilial(filial);
         setCurrentView('audit');
         window.scrollTo(0, 0);
-        setIsSidebarOpen(false);
+        setIsSidebarOpen(isMobileLayout());
     }, []);
 
     useEffect(() => {

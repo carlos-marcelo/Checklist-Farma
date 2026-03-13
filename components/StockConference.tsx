@@ -36,7 +36,9 @@ import {
   FileText,
   ChevronRight,
   Barcode,
-  Package
+  Package,
+  Camera,
+  Smartphone
 } from 'lucide-react';
 import SignaturePad from './SignaturePad';
 import * as SupabaseService from '../supabaseService';
@@ -424,8 +426,16 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const [countInput, setCountInput] = useState('');
   const [lastScanned, setLastScanned] = useState<{ item: StockItem, product: Product } | null>(null);
   const [accumulationMode, setAccumulationMode] = useState(false);
+  const [isMobileViewport, setIsMobileViewport] = useState(false);
+  const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [cameraStatusMsg, setCameraStatusMsg] = useState('Posicione o código de barras dentro do quadro.');
   const inputRef = useRef<HTMLInputElement>(null);
   const countRef = useRef<HTMLInputElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraLoopRef = useRef<number | null>(null);
+  const barcodeDetectorRef = useRef<any>(null);
+  const lastDetectedCodeRef = useRef<string>('');
   const [isSavingStockReport, setIsSavingStockReport] = useState(false);
   const [isSavingSession, setIsSavingSession] = useState(false);
   const [isDirty, setIsDirty] = useState(false); // Track if there are unsaved changes
@@ -473,6 +483,14 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   // Limpeza de cache legado no mount
   useEffect(() => {
     StockStorage.cleanupLegacyStockStorage();
+  }, []);
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 768px)');
+    const sync = () => setIsMobileViewport(media.matches);
+    sync();
+    media.addEventListener('change', sync);
+    return () => media.removeEventListener('change', sync);
   }, []);
 
   // --- Calculations (Memoized for performance and Hook Stability) ---
@@ -1056,40 +1074,159 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     return undefined;
   };
 
-  const handleScanSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const code = scanInput.trim();
-    if (!code) return;
+  const processScannedCode = (rawCode: string, notifyErrors = true): 'accumulated' | 'quantity' | 'invalid' => {
+    const code = rawCode.trim();
+    if (!code) return 'invalid';
 
     const product = findProduct(code);
     if (product) {
-      // Validar se produto existe na lista de ESTOQUE
       if (!inventory.has(product.reducedCode)) {
         playSound('error');
-        alert(`O produto "${product.description}" (Red: ${product.reducedCode}) não consta na lista de estoque carregada. Contagem não permitida para itens fora da lista.`);
+        if (notifyErrors) {
+          alert(`O produto "${product.description}" (Red: ${product.reducedCode}) não consta na lista de estoque carregada. Contagem não permitida para itens fora da lista.`);
+        } else {
+          setCameraStatusMsg('Produto fora da lista de estoque desta conferência.');
+        }
         setScanInput('');
-        return;
+        return 'invalid';
       }
 
       if (accumulationMode) {
-        applyAccumulation(product);
+        void applyAccumulation(product);
         setActiveItem(null);
         setCountInput('');
         setScanInput('');
         setTimeout(() => inputRef.current?.focus(), 50);
-        return;
+        return 'accumulated';
       }
 
       setActiveItem(product);
       setScanInput('');
       setCountInput('');
       setTimeout(() => countRef.current?.focus(), 50);
-    } else {
-      playSound('error');
-      alert("Produto não encontrado na base de cadastro!");
-      setScanInput('');
+      return 'quantity';
     }
+
+    playSound('error');
+    if (notifyErrors) {
+      alert("Produto não encontrado na base de cadastro!");
+    } else {
+      setCameraStatusMsg('Código não encontrado. Ajuste foco/iluminação e tente novamente.');
+    }
+    setScanInput('');
+    return 'invalid';
   };
+
+  const handleScanSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    processScannedCode(scanInput, true);
+  };
+
+  const stopCameraScanner = useCallback(() => {
+    if (cameraLoopRef.current !== null) {
+      window.clearInterval(cameraLoopRef.current);
+      cameraLoopRef.current = null;
+    }
+    if (cameraStreamRef.current) {
+      cameraStreamRef.current.getTracks().forEach(track => track.stop());
+      cameraStreamRef.current = null;
+    }
+    setIsCameraOpen(false);
+    setCameraStatusMsg('Posicione o código de barras dentro do quadro.');
+    lastDetectedCodeRef.current = '';
+  }, []);
+
+  const startCameraScanner = useCallback(async () => {
+    const BarcodeDetectorCtor = (window as any).BarcodeDetector;
+    if (!BarcodeDetectorCtor) {
+      setCameraStatusMsg('Seu navegador não suporta leitura direta por câmera. Use scanner físico ou digitação.');
+      setIsCameraOpen(true);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 }
+        },
+        audio: false
+      });
+
+      cameraStreamRef.current = stream;
+      setIsCameraOpen(true);
+      setCameraStatusMsg('Câmera ativa. Mire no código para bipar.');
+
+      window.setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          void videoRef.current.play().catch(() => {
+            setCameraStatusMsg('Não foi possível iniciar a reprodução da câmera.');
+          });
+        }
+      }, 50);
+
+      if (!barcodeDetectorRef.current) {
+        barcodeDetectorRef.current = new BarcodeDetectorCtor({
+          formats: ['ean_13', 'ean_8', 'code_128', 'code_39', 'upc_a', 'upc_e']
+        });
+      }
+      const lastDetectedAtRef = { current: 0 };
+
+      cameraLoopRef.current = window.setInterval(async () => {
+        const video = videoRef.current;
+        if (!video || video.readyState < 2 || !barcodeDetectorRef.current) return;
+
+        try {
+          const detections = await barcodeDetectorRef.current.detect(video);
+          const firstCode = String(detections?.[0]?.rawValue || '').trim();
+          if (!firstCode) return;
+          const now = Date.now();
+          if (firstCode === lastDetectedCodeRef.current && now - lastDetectedAtRef.current < 1200) return;
+
+          lastDetectedCodeRef.current = firstCode;
+          lastDetectedAtRef.current = now;
+          const result = processScannedCode(firstCode, false);
+          if (result === 'accumulated') {
+            setCameraStatusMsg(`Somado via acúmulo (${firstCode}). Pode bipar o próximo.`);
+            window.setTimeout(() => {
+              // Libera novo bip em sequência (inclusive mesmo SKU) sem duplicar leitura instantânea.
+              lastDetectedCodeRef.current = '';
+            }, 700);
+            return;
+          }
+
+          if (result === 'quantity') {
+            setCameraStatusMsg(`Código lido: ${firstCode}`);
+            stopCameraScanner();
+          }
+        } catch {
+          // Ignora falhas pontuais de detecção para manter loop leve.
+        }
+      }, 250);
+    } catch {
+      setIsCameraOpen(true);
+      setCameraStatusMsg('Permissão de câmera negada ou indisponível neste dispositivo.');
+    }
+  }, [processScannedCode, stopCameraScanner]);
+
+  useEffect(() => {
+    return () => {
+      if (cameraLoopRef.current !== null) {
+        window.clearInterval(cameraLoopRef.current);
+      }
+      if (cameraStreamRef.current) {
+        cameraStreamRef.current.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (step !== 'conference' && isCameraOpen) {
+      stopCameraScanner();
+    }
+  }, [isCameraOpen, step, stopCameraScanner]);
 
   const ensureSessionStart = () => {
     if (!sessionStartTime) {
@@ -1663,65 +1800,67 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     return (
       <div className="flex flex-col h-full bg-gray-100">
         {/* Header Bar */}
-        <header className="bg-white shadow-sm p-4 flex justify-between items-center z-10 sticky top-0">
-          <div className="flex items-center">
+        <header className="bg-white shadow-sm p-3 md:p-4 z-10 sticky top-0">
+          <div className="flex items-center mb-3 md:mb-0">
             <ClipboardList className="w-6 h-6 text-blue-600 mr-2" />
             <h1 className="font-bold text-gray-800 hidden md:block">Conferência</h1>
           </div>
 
-          {/* Progress Bar Section - Enhanced */}
-          <div className="flex-1 max-w-xl mx-4">
-            <div className="flex justify-between text-xs text-gray-500 uppercase font-semibold mb-1">
-              <span className={stats.isRecount ? "text-orange-600" : "text-blue-600"}>
-                {stats.isRecount ? 'Progresso Recontagem' : 'Progresso Geral'}
-              </span>
-              <span className="font-mono text-gray-700">{stats.counted} / {stats.total} SKUs ({stats.percent}%)</span>
-            </div>
-            <div className="w-full h-4 bg-gray-200 rounded-full overflow-hidden shadow-inner border border-gray-300">
-              <div
-                className={`h-full transition-all duration-500 ease-out flex items-center justify-center text-[9px] font-bold text-white uppercase ${stats.isRecount ? 'bg-orange-500' : (stats.percent === 100 ? 'bg-green-500' : 'bg-blue-600')}`}
-                style={{ width: `${stats.percent}%` }}
-              >
-                {stats.percent > 10 && `${stats.percent}%`}
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            {/* Progress Bar Section - Enhanced */}
+            <div className="w-full md:flex-1 md:max-w-xl md:mr-4">
+              <div className="flex justify-between text-[11px] md:text-xs text-gray-500 uppercase font-semibold mb-1 gap-2">
+                <span className={`${stats.isRecount ? "text-orange-600" : "text-blue-600"} leading-4`}>
+                  {stats.isRecount ? 'Progresso Recontagem' : 'Progresso Geral'}
+                </span>
+                <span className="font-mono text-gray-700 whitespace-nowrap">{stats.counted} / {stats.total} SKUs ({stats.percent}%)</span>
+              </div>
+              <div className="w-full h-4 bg-gray-200 rounded-full overflow-hidden shadow-inner border border-gray-300">
+                <div
+                  className={`h-full transition-all duration-500 ease-out flex items-center justify-center text-[9px] font-bold text-white uppercase ${stats.isRecount ? 'bg-orange-500' : (stats.percent === 100 ? 'bg-green-500' : 'bg-blue-600')}`}
+                  style={{ width: `${stats.percent}%` }}
+                >
+                  {stats.percent > 10 && `${stats.percent}%`}
+                </div>
+              </div>
+              <p className="text-[11px] md:text-[10px] text-gray-500 mt-1 leading-4">
+                Contagem por SKU (produto único), não por unidades.
+              </p>
+              {/* Auto-save indicator */}
+              <div className="flex items-center justify-start md:justify-end mt-1">
+                {isSavingSession ? (
+                  <span className="text-[10px] text-blue-600 flex items-center gap-1">
+                    <RefreshCw className="w-3 h-3 animate-spin" />
+                    Salvando...
+                  </span>
+                ) : sessionId ? (
+                  <span className="text-[10px] text-green-600 flex items-center gap-1">
+                    <CheckCircle className="w-3 h-3" />
+                    Salvo automaticamente
+                  </span>
+                ) : null}
               </div>
             </div>
-            <p className="text-[10px] text-gray-500 mt-1">
-              Contagem por SKU (produto único), não por unidades.
-            </p>
-            {/* Auto-save indicator */}
-            <div className="flex items-center justify-end mt-1">
-              {isSavingSession ? (
-                <span className="text-[10px] text-blue-600 flex items-center gap-1">
-                  <RefreshCw className="w-3 h-3 animate-spin" />
-                  Salvando...
-                </span>
-              ) : sessionId ? (
-                <span className="text-[10px] text-green-600 flex items-center gap-1">
-                  <CheckCircle className="w-3 h-3" />
-                  Salvo automaticamente
-                </span>
-              ) : null}
-            </div>
-          </div>
 
-          <div className="flex flex-col items-end space-y-1">
-            <div className="flex items-center space-x-2">
+            <div className="w-full md:w-auto md:min-w-[320px]">
+              <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={handleRestartSession}
-                className="bg-red-50 text-red-600 border border-red-200 px-3 py-2 rounded-lg text-xs font-bold uppercase tracking-wide hover:bg-red-100 transition disabled:opacity-70"
+                  className="bg-red-50 text-red-600 border border-red-200 px-2.5 py-2 rounded-lg text-[11px] md:text-xs font-bold uppercase tracking-wide hover:bg-red-100 transition disabled:opacity-70 text-center"
               >
                 Recomeçar contagem
               </button>
               <button
                 onClick={() => setStep('divergence')}
-                className="bg-indigo-50 text-indigo-700 px-3 py-2 rounded-lg text-sm font-medium hover:bg-indigo-100 transition border border-indigo-200 whitespace-nowrap"
+                  className="bg-indigo-50 text-indigo-700 px-2.5 py-2 rounded-lg text-[12px] md:text-sm font-medium hover:bg-indigo-100 transition border border-indigo-200 text-center whitespace-nowrap"
               >
                 Ver Conferência
               </button>
+              </div>
+              <p className="text-[10px] text-red-500 uppercase tracking-wide mt-2 md:text-right">
+                Aviso: tudo que foi bipado será perdido ao reiniciar.
+              </p>
             </div>
-            <p className="text-[10px] text-red-500 uppercase tracking-wide">
-              Aviso: tudo que foi bipado será perdido ao reiniciar.
-            </p>
           </div>
         </header>
 
@@ -1761,6 +1900,21 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
                       className={`w-full pl-12 pr-4 py-6 text-2xl font-mono border-2 rounded-xl focus:ring transition outline-none text-gray-800 placeholder-gray-300 ${stats.isRecount ? 'border-orange-200 bg-orange-50/30 focus:border-orange-500 focus:ring-orange-200' : 'border-blue-100 bg-blue-50/30 focus:border-blue-500 focus:ring-blue-200'}`}
                     />
                   </form>
+                  {isMobileViewport && (
+                    <button
+                      type="button"
+                      onClick={() => void startCameraScanner()}
+                      className="mt-3 w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100 transition"
+                    >
+                      <Camera className="w-4 h-4" />
+                      Bipar com câmera (celular)
+                    </button>
+                  )}
+                  {isMobileViewport && (
+                    <p className="mt-2 text-xs text-gray-500">
+                      No celular: ative <strong>ACUMULO</strong> antes para inserir direto e já bipar o próximo.
+                    </p>
+                  )}
                   {accumulationMode && (
                     <p className="mt-3 text-center text-xs text-emerald-600">
                       Cada bip soma 1 unidade ao produto atual automaticamente.
@@ -2502,6 +2656,43 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       {step === 'conference' && renderConference()}
       {step === 'divergence' && renderDivergence()}
       {step === 'report' && renderReport()}
+
+      {isCameraOpen && (
+        <div className="fixed inset-0 z-50 bg-black/80 p-4 flex items-center justify-center">
+          <div className="w-full max-w-md bg-gray-950 rounded-2xl border border-gray-800 overflow-hidden shadow-2xl">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+              <div className="flex items-center gap-2 text-gray-100 font-semibold">
+                <Smartphone className="w-4 h-4 text-emerald-400" />
+                Leitor por Câmera
+              </div>
+              <button
+                type="button"
+                onClick={stopCameraScanner}
+                className="text-gray-300 hover:text-white transition"
+                aria-label="Fechar leitor por câmera"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-4">
+              <div className="relative rounded-xl border border-emerald-400/40 overflow-hidden bg-black">
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full aspect-[3/4] object-cover"
+                />
+                <div className="pointer-events-none absolute inset-5 border-2 border-emerald-400/70 rounded-xl" />
+              </div>
+              <p className="mt-3 text-xs text-emerald-300 leading-5">{cameraStatusMsg}</p>
+              <p className="mt-1 text-[11px] text-gray-400">
+                Dica: mantenha boa iluminação e enquadre um único código por vez.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
