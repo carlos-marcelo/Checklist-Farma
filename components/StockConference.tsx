@@ -38,9 +38,7 @@ import {
   Barcode,
   Package,
   Camera,
-  Smartphone,
-  Flashlight,
-  FlashlightOff
+  Smartphone
 } from 'lucide-react';
 import SignaturePad from './SignaturePad';
 import * as SupabaseService from '../supabaseService';
@@ -431,15 +429,12 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [cameraStatusMsg, setCameraStatusMsg] = useState('Posicione o código de barras dentro do quadro.');
-  const [isTorchSupported, setIsTorchSupported] = useState(false);
-  const [isTorchOn, setIsTorchOn] = useState(false);
   const [lightAssistEnabled, setLightAssistEnabled] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const countRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const cameraLoopRef = useRef<number | null>(null);
-  const imageCaptureRef = useRef<any>(null);
   const barcodeDetectorRef = useRef<any>(null);
   const lastDetectedCodeRef = useRef<string>('');
   const [isSavingStockReport, setIsSavingStockReport] = useState(false);
@@ -1138,11 +1133,8 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       cameraStreamRef.current.getTracks().forEach(track => track.stop());
       cameraStreamRef.current = null;
     }
-    imageCaptureRef.current = null;
-    setIsTorchOn(false);
     if (closeModal) {
       setIsCameraOpen(false);
-      setIsTorchSupported(false);
       setLightAssistEnabled(false);
       setCameraStatusMsg('Posicione o código de barras dentro do quadro.');
     }
@@ -1152,59 +1144,6 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const stopCameraScanner = useCallback(() => {
     clearCameraResources(true);
   }, [clearCameraResources]);
-
-  const applyTorch = useCallback(async (enabled: boolean) => {
-    const videoTrack = cameraStreamRef.current?.getVideoTracks?.()?.[0];
-    if (!videoTrack) return false;
-    let applied = false;
-
-    try {
-      await videoTrack.applyConstraints({ advanced: [{ torch: enabled } as any] });
-      applied = true;
-    } catch {
-      try {
-        await videoTrack.applyConstraints({ advanced: [{ fillLightMode: enabled ? 'flash' : 'off' } as any] });
-        applied = true;
-      } catch {
-        // fallback below
-      }
-    }
-
-    // Fallback para navegadores/dispositivos que expõem torch via ImageCapture.
-    if (!applied && imageCaptureRef.current?.setOptions) {
-      try {
-        await imageCaptureRef.current.setOptions({ torch: enabled });
-        applied = true;
-      } catch {
-        // mantém false
-      }
-    }
-
-    if (!applied) return false;
-
-    // Validação: alguns devices aceitam o comando, mas não alteram fisicamente a lanterna.
-    const settings = (videoTrack.getSettings?.() || {}) as any;
-    if (typeof settings.torch === 'boolean') {
-      setIsTorchOn(settings.torch);
-      return settings.torch === enabled;
-    }
-
-    setIsTorchOn(enabled);
-    return true;
-  }, []);
-
-  const toggleTorch = useCallback(async () => {
-    if (!isTorchSupported) return;
-    const next = !isTorchOn;
-    const ok = await applyTorch(next);
-    if (!ok) {
-      setCameraStatusMsg('Não foi possível alterar a lanterna neste dispositivo.');
-      setIsTorchSupported(false);
-      setIsTorchOn(false);
-      return;
-    }
-    setCameraStatusMsg(next ? 'Lanterna ligada para facilitar a leitura.' : 'Lanterna desligada.');
-  }, [applyTorch, isTorchOn, isTorchSupported]);
 
   const startCameraScanner = useCallback(async () => {
     const BarcodeDetectorCtor = (window as any).BarcodeDetector;
@@ -1238,33 +1177,8 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       }
 
       cameraStreamRef.current = stream;
-      const videoTrack = stream.getVideoTracks?.()[0];
-      const caps = (videoTrack?.getCapabilities?.() || {}) as any;
-      const fillLightModes = Array.isArray(caps?.fillLightMode) ? caps.fillLightMode : [];
-      imageCaptureRef.current = null;
-      if ((window as any).ImageCapture && videoTrack) {
-        try {
-          imageCaptureRef.current = new (window as any).ImageCapture(videoTrack);
-        } catch {
-          imageCaptureRef.current = null;
-        }
-      }
-      const torchAvailable =
-        Boolean(caps?.torch) ||
-        fillLightModes.includes('flash') ||
-        fillLightModes.includes('torch') ||
-        Boolean(imageCaptureRef.current);
-      setIsTorchSupported(torchAvailable);
-      setIsTorchOn(false);
       setIsCameraOpen(true);
       setCameraStatusMsg('Câmera ativa. Mire no código para bipar.');
-
-      if (torchAvailable) {
-        const torchAuto = await applyTorch(true);
-        if (torchAuto) {
-          setCameraStatusMsg('Câmera ativa com lanterna ligada. Mire no código para bipar.');
-        }
-      }
 
       window.setTimeout(() => {
         if (videoRef.current) {
@@ -1317,7 +1231,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       setIsCameraOpen(true);
       setCameraStatusMsg('Permissão de câmera negada ou indisponível neste dispositivo.');
     }
-  }, [applyTorch, clearCameraResources, processScannedCode, stopCameraScanner]);
+  }, [clearCameraResources, processScannedCode, stopCameraScanner]);
 
   useEffect(() => {
     return () => {
@@ -2786,19 +2700,6 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
               <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => void toggleTorch()}
-                  disabled={!isTorchSupported}
-                  className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${isTorchSupported
-                    ? (isTorchOn
-                      ? 'border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200'
-                      : 'border-gray-700 bg-gray-900 text-gray-200 hover:bg-gray-800')
-                    : 'border-gray-800 bg-gray-900 text-gray-500 cursor-not-allowed'}`}
-                >
-                  {isTorchOn ? <FlashlightOff className="w-4 h-4" /> : <Flashlight className="w-4 h-4" />}
-                  {isTorchOn ? 'Desligar lanterna' : 'Ligar lanterna'}
-                </button>
-                <button
-                  type="button"
                   onClick={() => setLightAssistEnabled(prev => !prev)}
                   className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${lightAssistEnabled
                     ? 'border-yellow-300 bg-yellow-100 text-yellow-800 hover:bg-yellow-200'
@@ -2819,13 +2720,17 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
                 <div className="pointer-events-none absolute left-8 right-8 top-1/2 -translate-y-1/2">
                   <div className="h-[2px] bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.9)]" />
                 </div>
-                {lightAssistEnabled && !isTorchOn && (
-                  <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-white/20 via-transparent to-white/20" />
+                {lightAssistEnabled && (
+                  <>
+                    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.38)_0%,rgba(255,255,255,0.12)_45%,rgba(0,0,0,0.28)_100%)]" />
+                    <div className="pointer-events-none absolute inset-0 backdrop-contrast-125 backdrop-brightness-110" />
+                    <div className="pointer-events-none absolute inset-x-5 top-[35%] h-[30%] border border-yellow-300/80 rounded-lg shadow-[0_0_20px_rgba(253,224,71,0.35)]" />
+                  </>
                 )}
               </div>
               <p className="mt-3 text-xs text-emerald-300 leading-5">{cameraStatusMsg}</p>
               <p className="mt-1 text-[11px] text-gray-400">
-                Dica: mantenha boa iluminação e enquadre um único código por vez.
+                Dica: mantenha boa iluminação e enquadre um único código por vez. Use o modo iluminação em ambiente escuro.
               </p>
             </div>
           </div>
