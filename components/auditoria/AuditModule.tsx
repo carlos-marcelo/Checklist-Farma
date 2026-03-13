@@ -951,7 +951,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     useEffect(() => {
         const normalized = String(initialFilial || '').trim();
         if (!normalized) return;
-        setSelectedFilial(prev => (prev ? prev : normalized));
+        setSelectedFilial(prev => (prev === normalized ? prev : normalized));
     }, [initialFilial]);
 
     const loadAuditNum = useCallback(async (silent: boolean = false) => {
@@ -1493,12 +1493,13 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             if (savedData) {
                 // Restoration of basic settings - but let loadAuditNum fetch full fresh context usually.
                 // However, we can use savedData if Supabase fails.
-                if (savedData.filial) setSelectedFilial(savedData.filial);
+                const forcedInitialFilial = String(initialFilial || '').trim();
+                if (!forcedInitialFilial && savedData.filial) setSelectedFilial(savedData.filial);
                 if (savedData.inventoryNumber) setInventoryNumber(savedData.inventoryNumber);
             }
         };
         loadLocal();
-    }, []);
+    }, [initialFilial]);
 
     useEffect(() => {
         if (data) {
