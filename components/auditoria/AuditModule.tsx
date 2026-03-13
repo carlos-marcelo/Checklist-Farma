@@ -4028,6 +4028,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         // NÃO re-classifica itens que já têm dept/cat válidos — apenas corrige o grupo
         if (( !hasDirectExcelMetrics || shouldNormalizeLegacyIds ) && nextMetrics && scope.groupId) {
             const termGroupName = GROUP_CONFIG_DEFAULTS[scope.groupId] || `Grupo ${scope.groupId}`;
+            const scopeGroupIdNorm = normalizeScopeId(scope.groupId);
+            const scopeGroupNameNorm = normalizeText(termGroupName);
 
             // Build localLookup only to TRY to upgrade DIVERSOS items that might now be in data.groups
             const localLookup = new Map<string, { deptId?: string; deptName: string; catId?: string; catName: string }>();
@@ -4056,7 +4058,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     const rawGroupName = String(item.groupName || '').trim();
                     const isSemGrupo = normalizeText(rawGroupName) === normalizeText('DIVERSOS (SEM GRUPO)');
                     const currentGroupId = normalizeScopeId(item.groupId);
-                    const resolvedGroupId = currentGroupId || (rawGroupName || isSemGrupo ? '' : normalizeScopeId(scope.groupId));
+                    // Nunca "puxa" item sem grupo para o grupo do termo aberto.
+                    // Se o item não trouxer grupo de origem, permanece sem grupo.
+                    const resolvedGroupId = currentGroupId || '';
                     const resolvedGroupName = rawGroupName || (resolvedGroupId ? termGroupName : 'DIVERSOS (SEM GRUPO)');
 
                     const alreadyClassified =
@@ -4083,6 +4087,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         catName: match ? match.catName : (item.catName || 'DIVERSOS (SEM CATEGORIA)')
                     };
                 });
+
+                // Em termo de grupo, mantém somente itens realmente pertencentes ao grupo do escopo.
+                // Isso evita contaminação visual/financeira (ex.: grupo 66 exibindo divergência de outro grupo).
+                if (scope.type === 'group') {
+                    nextMetrics.items = nextMetrics.items.filter((item: any) => {
+                        const rowGroupId = normalizeScopeId(item.groupId);
+                        const rowGroupName = normalizeText(item.groupName);
+                        if (rowGroupId) return rowGroupId === scopeGroupIdNorm;
+                        if (rowGroupName) return rowGroupName === scopeGroupNameNorm;
+                        return false;
+                    });
+                }
             }
 
             // Re-aggregate groupedDifferences from corrected items
@@ -4116,6 +4132,107 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 nextMetrics.groupedDifferences = Object.values(gMap).sort((a, b) => a.diffCost - b.diffCost);
             }
         }
+        // Filtro final obrigatório por escopo para evitar contaminação entre grupos/departamentos/categorias.
+        // Aplica inclusive quando o termo possui excelMetrics direto salvo.
+        if (nextMetrics && scope.type !== 'custom') {
+            const scopeCategories = getScopeCategories(scope.groupId, scope.deptId, scope.catId);
+            const allowedCatKeys = new Set(
+                scopeCategories.map(({ group, dept, cat }) =>
+                    partialScopeKey({ groupId: group.id, deptId: dept.id, catId: cat.id })
+                )
+            );
+            const inScope = (row: any) => {
+                const key = partialScopeKey({ groupId: row?.groupId, deptId: row?.deptId, catId: row?.catId });
+                if (allowedCatKeys.has(key)) return true;
+                // fallback legado por nome quando IDs vierem ausentes
+                return scopeCategories.some(({ group, dept, cat }) =>
+                    normalizeText(row?.groupName) === normalizeText(group.name) &&
+                    normalizeText(row?.deptName) === normalizeText(dept.name) &&
+                    normalizeText(row?.catName) === normalizeText(cat.name)
+                );
+            };
+
+            const scopedItems = Array.isArray(nextMetrics.items)
+                ? nextMetrics.items.filter(inScope)
+                : [];
+
+            if (scopedItems.length > 0) {
+                const gMap: Record<string, {
+                    groupId?: string; groupName: string;
+                    deptId?: string; deptName: string;
+                    catId?: string; catName: string;
+                    sysQty: number; sysCost: number;
+                    countedQty: number; countedCost: number;
+                    diffCost: number; diffQty: number;
+                }> = {};
+
+                scopedItems.forEach((item: any) => {
+                    const key = `${normalizeScopeId(item.groupId) || normalizeText(item.groupName)}|${normalizeScopeId(item.deptId) || normalizeText(item.deptName)}|${normalizeScopeId(item.catId) || normalizeText(item.catName)}`;
+                    if (!gMap[key]) {
+                        gMap[key] = {
+                            groupId: normalizeScopeId(item.groupId) || undefined,
+                            groupName: item.groupName || 'DIVERSOS (SEM GRUPO)',
+                            deptId: normalizeScopeId(item.deptId) || undefined,
+                            deptName: item.deptName || 'DIVERSOS (SEM DEPARTAMENTO)',
+                            catId: normalizeScopeId(item.catId) || undefined,
+                            catName: item.catName || 'DIVERSOS (SEM CATEGORIA)',
+                            sysQty: 0,
+                            sysCost: 0,
+                            countedQty: 0,
+                            countedCost: 0,
+                            diffCost: 0,
+                            diffQty: 0
+                        };
+                    }
+                    gMap[key].sysQty += Number(item?.sysQty || 0);
+                    gMap[key].sysCost += Number(item?.sysCost || 0);
+                    gMap[key].countedQty += Number(item?.countedQty || 0);
+                    gMap[key].countedCost += Number(item?.countedCost || 0);
+                    gMap[key].diffQty += Number(item?.diffQty || 0);
+                    gMap[key].diffCost += Number(item?.diffCost || 0);
+                });
+
+                const groupedDifferences = Object.values(gMap).sort((a, b) => a.diffCost - b.diffCost);
+                const totals = scopedItems.reduce((acc: any, item: any) => ({
+                    sysQty: acc.sysQty + Number(item?.sysQty || 0),
+                    sysCost: acc.sysCost + Number(item?.sysCost || 0),
+                    countedQty: acc.countedQty + Number(item?.countedQty || 0),
+                    countedCost: acc.countedCost + Number(item?.countedCost || 0),
+                    diffQty: acc.diffQty + Number(item?.diffQty || 0),
+                    diffCost: acc.diffCost + Number(item?.diffCost || 0)
+                }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0 });
+
+                nextMetrics = {
+                    ...nextMetrics,
+                    ...totals,
+                    items: scopedItems,
+                    groupedDifferences
+                };
+            } else if (Array.isArray(nextMetrics.groupedDifferences)) {
+                const grouped = nextMetrics.groupedDifferences.filter(inScope);
+                if (grouped.length > 0) {
+                    const totals = grouped.reduce((acc: any, row: any) => ({
+                        sysQty: acc.sysQty + Number(row?.sysQty || 0),
+                        sysCost: acc.sysCost + Number(row?.sysCost || 0),
+                        countedQty: acc.countedQty + Number(row?.countedQty || 0),
+                        countedCost: acc.countedCost + Number(row?.countedCost || 0),
+                        diffQty: acc.diffQty + Number(row?.diffQty || 0),
+                        diffCost: acc.diffCost + Number(row?.diffCost || 0)
+                    }), { sysQty: 0, sysCost: 0, countedQty: 0, countedCost: 0, diffQty: 0, diffCost: 0 });
+                    nextMetrics = {
+                        ...nextMetrics,
+                        ...totals,
+                        groupedDifferences: grouped,
+                        items: []
+                    };
+                } else {
+                    nextMetrics = null;
+                }
+            } else {
+                nextMetrics = null;
+            }
+        }
+
         setTermComparisonMetrics(nextMetrics);
 
         // Persist re-classified metrics & form to termDrafts always (not conditional on reference equality)
