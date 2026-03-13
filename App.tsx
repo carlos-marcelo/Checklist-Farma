@@ -1516,6 +1516,10 @@ const App: React.FC = () => {
     // User Activity
     const [lastUserActivity, setLastUserActivity] = useState<number>(Date.now());
     const ACTIVITY_TIMEOUT = 5000;
+    const SESSION_COMMAND_POLL_MS = 5000;
+    const USER_APPROVAL_POLL_MS = 15000;
+    const MASTER_SESSIONS_POLL_MS = 15000;
+    const MASTER_FORCE_LOGOUT_SWEEP_MS = 5000;
     const viewStartRef = useRef<{ view: string; startedAt: number } | null>(null);
     const prevViewRef = useRef<string | null>(null);
     const autoLoginLoggedRef = useRef(false);
@@ -2756,6 +2760,7 @@ const App: React.FC = () => {
         let isCheckingCommand = false;
         const checkSessionCommand = async () => {
             if (isCheckingCommand) return;
+            if (document.hidden) return;
             isCheckingCommand = true;
             try {
                 const mySession = await SupabaseService.fetchActiveSessionByClientId(clientIdRef.current);
@@ -2777,7 +2782,7 @@ const App: React.FC = () => {
         };
 
         checkSessionCommand();
-        const commandInterval = setInterval(checkSessionCommand, 2000);
+        const commandInterval = setInterval(checkSessionCommand, SESSION_COMMAND_POLL_MS);
         const handleWakeCommandCheck = () => {
             if (!document.hidden) checkSessionCommand();
         };
@@ -2789,12 +2794,13 @@ const App: React.FC = () => {
             document.removeEventListener('visibilitychange', handleWakeCommandCheck);
             window.removeEventListener('focus', handleWakeCommandCheck);
         };
-    }, [currentUser?.email, handleLogout, remoteForceLogoutDeadline]);
+    }, [currentUser?.email, handleLogout, remoteForceLogoutDeadline, SESSION_COMMAND_POLL_MS]);
 
     // Polling curto para fila de aprovação de usuários (evita atraso para aparecer novos cadastros).
     useEffect(() => {
         if (!currentUser) return;
         if (!hasModuleAccess('userApproval')) return;
+        if (currentView !== 'access') return;
 
         let cancelled = false;
         let inFlight = false;
@@ -2816,7 +2822,7 @@ const App: React.FC = () => {
         };
 
         refreshUsers();
-        const interval = setInterval(refreshUsers, 4000);
+        const interval = setInterval(refreshUsers, USER_APPROVAL_POLL_MS);
         const handleWake = () => {
             if (!document.hidden) refreshUsers();
         };
@@ -2829,7 +2835,7 @@ const App: React.FC = () => {
             document.removeEventListener('visibilitychange', handleWake);
             window.removeEventListener('focus', handleWake);
         };
-    }, [currentUser?.email, currentUser?.role, accessMatrix]);
+    }, [currentUser?.email, currentUser?.role, accessMatrix, currentView, USER_APPROVAL_POLL_MS]);
 
     const handleRegister = async (newUser: User) => {
         try {
@@ -4239,15 +4245,16 @@ const App: React.FC = () => {
         if (currentView !== 'logs' || currentUser?.role !== 'MASTER' || !currentUser?.company_id) return;
 
         refreshActiveSessions();
-        const interval = setInterval(refreshActiveSessions, 8000); // 8 segundos
+        const interval = setInterval(refreshActiveSessions, MASTER_SESSIONS_POLL_MS);
 
         return () => clearInterval(interval);
-    }, [currentView, currentUser?.role, currentUser?.company_id, refreshActiveSessions]);
+    }, [currentView, currentUser?.role, currentUser?.company_id, refreshActiveSessions, MASTER_SESSIONS_POLL_MS]);
 
     useEffect(() => {
         if (currentView !== 'logs' || currentUser?.role !== 'MASTER') return;
 
         const interval = setInterval(async () => {
+            if (document.hidden) return;
             const activeIds = new Set(activeSessions.map(s => s.client_id));
             const now = Date.now();
             const staleForceLogoutIds = Object.entries(pendingSessionCommands)
@@ -4268,10 +4275,10 @@ const App: React.FC = () => {
                 staleForceLogoutIds.forEach(clientId => forcedSessionCleanupRef.current.delete(clientId));
                 await refreshActiveSessions();
             }
-        }, 2000);
+        }, MASTER_FORCE_LOGOUT_SWEEP_MS);
 
         return () => clearInterval(interval);
-    }, [currentView, currentUser?.role, activeSessions, pendingSessionCommands, refreshActiveSessions]);
+    }, [currentView, currentUser?.role, activeSessions, pendingSessionCommands, refreshActiveSessions, MASTER_FORCE_LOGOUT_SWEEP_MS]);
 
     const filteredEventLogs = useMemo(() => {
         let filtered = [...appEventLogs];
