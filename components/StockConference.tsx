@@ -71,6 +71,11 @@ const getSessionProgressScore = (session?: SupabaseService.DbStockConferenceSess
   }, 0);
 };
 
+const STOCK_DEBUG = import.meta.env.DEV && Boolean((globalThis as any).__STOCK_DEBUG);
+const stockDebugLog = (...args: any[]) => {
+  if (STOCK_DEBUG) console.log(...args);
+};
+
 // --- Types ---
 
 interface Product {
@@ -579,36 +584,36 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     lastSyncTimestampRef.current = ts;
     manualSessionStartedRef.current = true;
 
-    console.log('✅ Session restored from data:', { id: session.id, products: prodMap.size, inventory: inventoryMap.size });
+    stockDebugLog('✅ Session restored from data:', { id: session.id, products: prodMap.size, inventory: inventoryMap.size });
     return true;
   };
 
   useEffect(() => {
     if (!userEmail) {
-      console.log("⚠️ No userEmail, skipping session load");
+      stockDebugLog("⚠️ No userEmail, skipping session load");
       return;
     }
 
     let isMounted = true;
     const loadSession = async () => {
-      console.log("🔍 Attempting to load session for:", userEmail, "manualStarted:", manualSessionStartedRef.current);
+      stockDebugLog("🔍 Attempting to load session for:", userEmail, "manualStarted:", manualSessionStartedRef.current);
 
       if (manualSessionStartedRef.current) {
         const hasInMemorySession = Boolean(sessionId) || masterProducts.size > 0 || inventory.size > 0;
         if (hasInMemorySession) {
-          console.log("ℹ️ Skipping load - manual session already started with in-memory data");
+          stockDebugLog("ℹ️ Skipping load - manual session already started with in-memory data");
           return;
         }
-        console.warn("⚠️ Manual session flag was set without in-memory data. Unlocking auto-restore.");
+        stockDebugLog("⚠️ Manual session flag was set without in-memory data. Unlocking auto-restore.");
         manualSessionStartedRef.current = false;
       }
 
       let supabaseSession: SupabaseService.DbStockConferenceSession | null = null;
       try {
-        console.log("🔄 Fetching session from Supabase...");
+        stockDebugLog("🔄 Fetching session from Supabase...");
         supabaseSession = await SupabaseService.fetchStockConferenceSession(userEmail);
         if (!isMounted) {
-          console.log("⚠️ Component unmounted, aborting load");
+          stockDebugLog("⚠️ Component unmounted, aborting load");
           return;
         }
       } catch (error) {
@@ -647,9 +652,9 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
         if (!isMounted) break;
         const restored = restoreSessionFromData(candidate.session);
         if (!restored) continue;
-        console.log(`✅ Session restored from ${candidate.source === "local" ? "IndexedDB" : "Supabase"}`);
+        stockDebugLog(`✅ Session restored from ${candidate.source === "local" ? "IndexedDB" : "Supabase"}`);
         if (candidate.source === "local") {
-          console.log("🔁 Local session has priority, syncing it back to Supabase...");
+          stockDebugLog("🔁 Local session has priority, syncing it back to Supabase...");
           await persistSession();
         } else {
           await StockStorage.saveLocalStockSession(userEmail || '', candidate.session);
@@ -657,7 +662,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
         return;
       }
 
-      console.log("⚠️ No session found in Supabase or IndexedDB.");
+      stockDebugLog("⚠️ No session found in Supabase or IndexedDB.");
     };
 
     loadSession();
@@ -688,7 +693,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     // Allow saving empty session if step implies we are setting up, or prevent saving nothing?
     // If clearing, we might want to save an empty state. But here we check size > 0.
     if (productSource.size === 0 && inventorySource.size === 0) {
-      console.warn('⚠️ persistSession ignored: No products or inventory to save.');
+      stockDebugLog('⚠️ persistSession ignored: No products or inventory to save.');
       return;
     }
 
@@ -721,14 +726,14 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
 
     // Save to IndexedDB (Async)
     await StockStorage.saveLocalStockSession(userEmail, payload);
-    console.log('💾 Session saved to IndexedDB');
+    stockDebugLog('💾 Session saved to IndexedDB');
 
     if (options?.skipSupabase) {
       setIsSavingSession(false);
       return; // Fast return to save bandwidth
     }
 
-    console.log('🔄 Persisting stock session to Supabase...', {
+    stockDebugLog('🔄 Persisting stock session to Supabase...', {
       email: userEmail,
       id: sessionId,
       products: payload.products.length,
@@ -766,7 +771,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
         setSessionId(saved.id);
         const newTs = getSessionTimestamp(saved);
         lastSyncTimestampRef.current = newTs;
-        console.log('✅ Stock session saved to Supabase! ID:', saved.id);
+        stockDebugLog('✅ Stock session saved to Supabase! ID:', saved.id);
       } else {
         console.error('❌ Supabase returned null - check error details');
       }
@@ -1670,7 +1675,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
               <span className={stats.isRecount ? "text-orange-600" : "text-blue-600"}>
                 {stats.isRecount ? 'Progresso Recontagem' : 'Progresso Geral'}
               </span>
-              <span className="font-mono text-gray-700">{stats.counted} / {stats.total} ({stats.percent}%)</span>
+              <span className="font-mono text-gray-700">{stats.counted} / {stats.total} SKUs ({stats.percent}%)</span>
             </div>
             <div className="w-full h-4 bg-gray-200 rounded-full overflow-hidden shadow-inner border border-gray-300">
               <div
@@ -1680,6 +1685,9 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
                 {stats.percent > 10 && `${stats.percent}%`}
               </div>
             </div>
+            <p className="text-[10px] text-gray-500 mt-1">
+              Contagem por SKU (produto único), não por unidades.
+            </p>
             {/* Auto-save indicator */}
             <div className="flex items-center justify-end mt-1">
               {isSavingSession ? (
@@ -1901,13 +1909,19 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
               )}
 
               <div className="mt-auto pt-4 border-t border-gray-200">
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-100">
-                    <span className="text-xs text-gray-400">Total {stats.isRecount ? 'Recontagem' : 'Itens'}</span>
+                    <span className="text-xs text-gray-400">Total de SKUs</span>
                     <p className="text-xl font-bold text-gray-700">{stats.total}</p>
                   </div>
                   <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-100">
-                    <span className="text-xs text-gray-400">Falta Contar</span>
+                    <span className="text-xs text-gray-400">SKUs Conferidos</span>
+                    <p className="text-xl font-bold text-emerald-600">
+                      {stats.counted}
+                    </p>
+                  </div>
+                  <div className="bg-white p-3 rounded-lg shadow-sm border border-gray-100">
+                    <span className="text-xs text-gray-400">SKUs Faltando</span>
                     <p className="text-xl font-bold text-orange-500">
                       {stats.total - stats.counted}
                     </p>

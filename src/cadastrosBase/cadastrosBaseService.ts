@@ -14,6 +14,10 @@ const inMemoryCache = new Map<string, DbGlobalBaseFile>();
 
 // Controle de requisições em andamento para evitar downloads duplicados simultâneos
 const pendingRequests = new Map<string, Promise<DbGlobalBaseFile | null>>();
+const CADASTROS_DEBUG = import.meta.env.DEV && Boolean((globalThis as any).__CADASTROS_DEBUG);
+const cadastrosDebugLog = (...args: any[]) => {
+  if (CADASTROS_DEBUG) console.log(...args);
+};
 
 async function attachParsedFile(data: DbGlobalBaseFile & { _blob?: Blob, _parsedFile?: File }): Promise<DbGlobalBaseFile> {
   if (data._parsedFile) return data as DbGlobalBaseFile;
@@ -66,12 +70,12 @@ export const CadastrosBaseService = {
 
     // Se já existe uma promessa idêntica em andamento, retorna ela
     if (pendingRequests.has(cacheKey)) {
-      console.log(`[CadastrosBaseService] Reuso de request em andamento para ${moduleKey}`);
+      cadastrosDebugLog(`[CadastrosBaseService] Reuso de request em andamento para ${moduleKey}`);
       return pendingRequests.get(cacheKey)!;
     }
 
     const fetchPromise = (async () => {
-      console.log(`[CadastrosBaseService] Início de getGlobalBaseFileCached para ${moduleKey} (Cache-First)`);
+      cadastrosDebugLog(`[CadastrosBaseService] Início de getGlobalBaseFileCached para ${moduleKey} (Cache-First)`);
       const startTime = performance.now();
 
       try {
@@ -93,7 +97,7 @@ export const CadastrosBaseService = {
 
         // 0. Verifica cache em memória primeiro (Instantâneo)
         if (inMemoryCache.has(cacheKey)) {
-          console.log(`[CadastrosBaseService] Memória HIT para ${moduleKey}`);
+          cadastrosDebugLog(`[CadastrosBaseService] Memória HIT para ${moduleKey}`);
           const memData = inMemoryCache.get(cacheKey)!;
 
           if (forceFresh) {
@@ -101,7 +105,7 @@ export const CadastrosBaseService = {
             const remoteUpdated = remoteMeta?.updated_at || remoteMeta?.uploaded_at || '';
             const localUpdated = memData.updated_at || memData.uploaded_at || '';
             if (remoteMeta && remoteUpdated && remoteUpdated !== localUpdated) {
-              console.log(`[CadastrosBaseService] forceFresh: atualizando memória para ${moduleKey}`);
+              cadastrosDebugLog(`[CadastrosBaseService] forceFresh: atualizando memória para ${moduleKey}`);
               const fullRemoteData = await SupabaseService.fetchGlobalBaseFileFull(companyId, moduleKey);
               if (fullRemoteData) {
                 const preparedData = await attachParsedFile(fullRemoteData);
@@ -122,7 +126,7 @@ export const CadastrosBaseService = {
         const cachedData: any = await localforage.getItem(cacheKey);
 
         if (cachedData && (cachedData.file_data_base64 || cachedData._blob || cachedData._parsedFile)) {
-          console.log(`[CadastrosBaseService] IndexedDB HIT para ${moduleKey}`);
+          cadastrosDebugLog(`[CadastrosBaseService] IndexedDB HIT para ${moduleKey}`);
           const preparedCachedData = await attachParsedFile(cachedData);
 
           if (forceFresh) {
@@ -130,7 +134,7 @@ export const CadastrosBaseService = {
             const remoteUpdated = remoteMeta?.updated_at || remoteMeta?.uploaded_at || '';
             const localUpdated = preparedCachedData.updated_at || preparedCachedData.uploaded_at || '';
             if (remoteMeta && remoteUpdated && remoteUpdated !== localUpdated) {
-              console.log(`[CadastrosBaseService] forceFresh: atualizando IndexedDB para ${moduleKey}`);
+              cadastrosDebugLog(`[CadastrosBaseService] forceFresh: atualizando IndexedDB para ${moduleKey}`);
               const fullRemoteData = await SupabaseService.fetchGlobalBaseFileFull(companyId, moduleKey);
               if (fullRemoteData) {
                 const preparedData = await attachParsedFile(fullRemoteData);
@@ -151,7 +155,7 @@ export const CadastrosBaseService = {
         }
 
         // 2. Cache MISS - Baixa do Supabase esperando completar
-        console.log(`[CadastrosBaseService] Cache MISS para ${moduleKey}, baixando...`);
+        cadastrosDebugLog(`[CadastrosBaseService] Cache MISS para ${moduleKey}, baixando...`);
         const fullRemoteData = await SupabaseService.fetchGlobalBaseFileFull(companyId, moduleKey);
 
         if (fullRemoteData) {
@@ -186,14 +190,14 @@ export const CadastrosBaseService = {
         const localUpdated = localData.updated_at || localData.uploaded_at || '';
 
         if (remoteUpdated !== localUpdated) {
-          console.log(`[CadastrosBaseService] Nova versão detectada para ${moduleKey}, atualizando em background...`);
+          cadastrosDebugLog(`[CadastrosBaseService] Nova versão detectada para ${moduleKey}, atualizando em background...`);
           const fullRemoteData = await SupabaseService.fetchGlobalBaseFileFull(companyId, moduleKey);
           if (fullRemoteData) {
             const preparedData = await attachParsedFile(fullRemoteData);
             const dataToSave = { ...preparedData, file_data_base64: null };
             await localforage.setItem(cacheKey, dataToSave);
             inMemoryCache.set(cacheKey, preparedData);
-            console.log(`[CadastrosBaseService] Cache atualizado com sucesso: ${moduleKey}`);
+            cadastrosDebugLog(`[CadastrosBaseService] Cache atualizado com sucesso: ${moduleKey}`);
           }
         }
       }
@@ -209,7 +213,7 @@ export const CadastrosBaseService = {
     try {
       inMemoryCache.clear();
       await localforage.clear();
-      console.log('Cache de Cadastros Base limpado.');
+      cadastrosDebugLog('Cache de Cadastros Base limpado.');
     } catch (error) {
       console.error('Erro ao limpar cache:', error);
     }

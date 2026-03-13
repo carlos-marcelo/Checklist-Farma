@@ -7,6 +7,10 @@ import { AnalysisReportPayload } from './preVencidos/analysisReport';
 
 const pvSalesHistoryExcludedColumns = new Set<string>();
 const pvReportsExcludedColumns = new Set<string>(['updated_at']);
+const STOCK_SYNC_DEBUG = import.meta.env.DEV && Boolean((globalThis as any).__STOCK_DEBUG);
+const stockSyncDebugLog = (...args: any[]) => {
+  if (STOCK_SYNC_DEBUG) console.log(...args);
+};
 
 export interface DbUser {
   id?: string;
@@ -937,7 +941,7 @@ export async function upsertStockConferenceSession(session: DbStockConferenceSes
       payload.id = session.id;
     }
 
-    console.log('📤 Sending to Supabase:', {
+    stockSyncDebugLog('📤 Sending to Supabase:', {
       user_email: payload.user_email,
       hasId: !!payload.id,
       productsCount: payload.products.length,
@@ -955,7 +959,7 @@ export async function upsertStockConferenceSession(session: DbStockConferenceSes
       throw error;
     }
 
-    console.log('✅ Stock session persisted to Supabase:', data?.id);
+    stockSyncDebugLog('✅ Stock session persisted to Supabase:', data?.id);
     return data;
   } catch (error) {
     console.error('❌ Error upserting stock conference session:', error);
@@ -2611,9 +2615,12 @@ export async function upsertActiveSession(session: Partial<DbActiveSession>): Pr
       // Corrida entre abas/pings: outra requisição pode ter inserido o mesmo client_id.
       // Nesse caso, faz fallback para UPDATE e evita erro 409 no console.
       const isConflict =
+        (insertError as any)?.status === 409 ||
         (insertError as any)?.code === '23505' ||
+        String((insertError as any)?.code || '').toUpperCase() === 'PGRST116' ||
         String((insertError as any)?.message || '').toLowerCase().includes('duplicate key') ||
-        String((insertError as any)?.details || '').toLowerCase().includes('already exists');
+        String((insertError as any)?.details || '').toLowerCase().includes('already exists') ||
+        String((insertError as any)?.message || '').toLowerCase().includes('conflict');
 
       if (isConflict) {
         const { data: retryRows, error: retryError } = await supabase

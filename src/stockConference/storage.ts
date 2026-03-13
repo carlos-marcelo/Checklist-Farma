@@ -10,6 +10,10 @@ const stockStore = localforage.createInstance({
 
 const LOCAL_STOCK_SESSION_PREFIX = 'STOCK_SESSION_';
 const buildLocalSessionKey = (email: string) => `${LOCAL_STOCK_SESSION_PREFIX}${email}`;
+const STOCK_STORAGE_DEBUG = import.meta.env.DEV && Boolean((globalThis as any).__STOCK_DEBUG);
+const stockStorageDebugLog = (...args: any[]) => {
+    if (STOCK_STORAGE_DEBUG) console.log(...args);
+};
 
 /**
  * Carrega a sessão de estoque do IndexedDB (Padrão localforage - Assíncrono)
@@ -39,7 +43,7 @@ export async function saveLocalStockSession(email: string, session: DbStockConfe
         } catch (e) { }
 
         await stockStore.setItem(key, session);
-        console.log(`[StockStorage] Sessão salva em IndexedDB para ${email}`);
+        stockStorageDebugLog(`[StockStorage] Sessão salva em IndexedDB para ${email}`);
     } catch (error) {
         console.error('Erro ao salvar sessão no IndexedDB (Stock):', error);
     }
@@ -67,7 +71,7 @@ export function cleanupLegacyStockStorage() {
         keys.forEach(key => {
             if (key.startsWith(LOCAL_STOCK_SESSION_PREFIX)) {
                 window.localStorage.removeItem(key);
-                console.log(`[Cleanup] Removida chave legada: ${key}`);
+                stockStorageDebugLog(`[Cleanup] Removida chave legada: ${key}`);
             }
         });
     } catch (e) {
