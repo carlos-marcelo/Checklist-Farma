@@ -438,6 +438,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const videoRef = useRef<HTMLVideoElement>(null);
   const cameraStreamRef = useRef<MediaStream | null>(null);
   const cameraLoopRef = useRef<number | null>(null);
+  const imageCaptureRef = useRef<any>(null);
   const barcodeDetectorRef = useRef<any>(null);
   const lastDetectedCodeRef = useRef<string>('');
   const [isSavingStockReport, setIsSavingStockReport] = useState(false);
@@ -1136,6 +1137,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       cameraStreamRef.current.getTracks().forEach(track => track.stop());
       cameraStreamRef.current = null;
     }
+    imageCaptureRef.current = null;
     setIsCameraOpen(false);
     setCameraStatusMsg('Posicione o código de barras dentro do quadro.');
     setIsTorchOn(false);
@@ -1146,19 +1148,41 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const applyTorch = useCallback(async (enabled: boolean) => {
     const videoTrack = cameraStreamRef.current?.getVideoTracks?.()?.[0];
     if (!videoTrack) return false;
+    let applied = false;
+
     try {
       await videoTrack.applyConstraints({ advanced: [{ torch: enabled } as any] });
-      setIsTorchOn(enabled);
-      return true;
+      applied = true;
     } catch {
       try {
         await videoTrack.applyConstraints({ advanced: [{ fillLightMode: enabled ? 'flash' : 'off' } as any] });
-        setIsTorchOn(enabled);
-        return true;
+        applied = true;
       } catch {
-        return false;
+        // fallback below
       }
     }
+
+    // Fallback para navegadores/dispositivos que expõem torch via ImageCapture.
+    if (!applied && imageCaptureRef.current?.setOptions) {
+      try {
+        await imageCaptureRef.current.setOptions({ torch: enabled });
+        applied = true;
+      } catch {
+        // mantém false
+      }
+    }
+
+    if (!applied) return false;
+
+    // Validação: alguns devices aceitam o comando, mas não alteram fisicamente a lanterna.
+    const settings = (videoTrack.getSettings?.() || {}) as any;
+    if (typeof settings.torch === 'boolean') {
+      setIsTorchOn(settings.torch);
+      return settings.torch === enabled;
+    }
+
+    setIsTorchOn(enabled);
+    return true;
   }, []);
 
   const toggleTorch = useCallback(async () => {
@@ -1208,11 +1232,19 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       const videoTrack = stream.getVideoTracks?.()[0];
       const caps = (videoTrack?.getCapabilities?.() || {}) as any;
       const fillLightModes = Array.isArray(caps?.fillLightMode) ? caps.fillLightMode : [];
+      imageCaptureRef.current = null;
+      if ((window as any).ImageCapture && videoTrack) {
+        try {
+          imageCaptureRef.current = new (window as any).ImageCapture(videoTrack);
+        } catch {
+          imageCaptureRef.current = null;
+        }
+      }
       const torchAvailable =
         Boolean(caps?.torch) ||
         fillLightModes.includes('flash') ||
         fillLightModes.includes('torch') ||
-        typeof videoTrack?.applyConstraints === 'function';
+        Boolean(imageCaptureRef.current);
       setIsTorchSupported(torchAvailable);
       setIsTorchOn(false);
       setIsCameraOpen(true);
