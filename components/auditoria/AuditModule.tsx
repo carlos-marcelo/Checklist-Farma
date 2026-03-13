@@ -1019,7 +1019,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 const normalized = normalizeAuditDataStructure(reconciled);
                 const normalizedData = (normalized.data || reconciled) as AuditData;
                 setData(normalizedData);
-                setTermDrafts(((normalizedData as any).termDrafts || {}) as Record<string, TermForm>);
+                setTermDrafts(current =>
+                    composeTermDraftsForPersist(
+                        ((normalizedData as any).termDrafts || {}) as Record<string, TermForm>,
+                        current
+                    )
+                );
                 if (getAuditDataStrength(normalizedData) > 0) {
                     await CacheService.set(backupKey, { ...latest, data: normalizedData } as any);
                 }
@@ -1112,7 +1117,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     const normalizedData = (normalized.data || reconciled) as AuditData;
                     setData(normalizedData);
                     const draftsFromData = ((normalizedData as any).termDrafts || {}) as Record<string, TermForm>;
-                    setTermDrafts(draftsFromData);
+                    setTermDrafts(current => composeTermDraftsForPersist(draftsFromData, current));
                     setDbSessionId(latest.id);
                     if (getAuditDataStrength(normalizedData) > 0) {
                         await CacheService.set(backupKey, { ...latest, data: normalizedData } as any);
@@ -5045,35 +5050,33 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         }
         if (Object.keys(termFieldErrors).length > 0) setTermFieldErrors({});
 
-        if (isMaster) {
-            const key = buildTermKey(termModal);
-            const persistedMetrics =
-                termComparisonMetrics ||
-                termForm.excelMetrics ||
-                termDrafts[key]?.excelMetrics;
-            const formToPersist = persistedMetrics
-                ? { ...termForm, excelMetrics: persistedMetrics }
-                : termForm;
-            const nextDrafts = upsertScopeDraft(termDrafts, termModal, formToPersist);
-            setTermDrafts(nextDrafts);
-            try {
-                // Persistence consolidated in audit_sessions (data field)
-                const progress = calculateProgress(data || {} as any);
-                const savedSession = await persistAuditSession({
-                    id: dbSessionId,
-                    branch: selectedFilial,
-                    audit_number: nextAuditNumber,
-                    status: 'open',
-                    data: { ...data, termDrafts: nextDrafts } as any,
-                    progress: progress,
-                    user_email: userEmail
-                });
-                if (savedSession) {
-                    await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
-                }
-            } catch (err) {
-                console.error("Error saving term draft:", err);
+        const key = buildTermKey(termModal);
+        const persistedMetrics =
+            termComparisonMetrics ||
+            termForm.excelMetrics ||
+            termDrafts[key]?.excelMetrics;
+        const formToPersist = persistedMetrics
+            ? { ...termForm, excelMetrics: persistedMetrics }
+            : termForm;
+        const nextDrafts = upsertScopeDraft(termDrafts, termModal, formToPersist);
+        setTermDrafts(nextDrafts);
+        try {
+            // Persistence consolidated in audit_sessions (data field)
+            const progress = calculateProgress(data || {} as any);
+            const savedSession = await persistAuditSession({
+                id: dbSessionId,
+                branch: selectedFilial,
+                audit_number: nextAuditNumber,
+                status: 'open',
+                data: { ...data, termDrafts: nextDrafts } as any,
+                progress: progress,
+                user_email: userEmail
+            });
+            if (savedSession) {
+                await CacheService.set(`audit_session_${selectedFilial}`, savedSession as any);
             }
+        } catch (err) {
+            console.error("Error saving term draft:", err);
         }
         const doc = new jsPDF('p', 'mm', 'a4');
         let y = 18;
