@@ -532,6 +532,35 @@ const mergeTermDraftMaps = (
     return base;
 };
 
+const cloneTermCollaborators = (collaborators?: TermCollaborator[]) =>
+    (collaborators || []).map(c => ({
+        name: c?.name || '',
+        cpf: c?.cpf || '',
+        signature: c?.signature || ''
+    }));
+
+const applyTermSigners = (base: TermForm, source: TermForm): TermForm => ({
+    ...base,
+    managerName2: source.managerName2 || '',
+    managerCpf2: source.managerCpf2 || '',
+    managerSignature2: source.managerSignature2 || '',
+    managerName: source.managerName || '',
+    managerCpf: source.managerCpf || '',
+    managerSignature: source.managerSignature || '',
+    collaborators: cloneTermCollaborators(source.collaborators)
+});
+
+const replicateSignersToAllTermDrafts = (
+    drafts: Record<string, TermForm>,
+    source: TermForm
+): Record<string, TermForm> => {
+    const next: Record<string, TermForm> = {};
+    Object.entries(drafts || {}).forEach(([key, draft]) => {
+        next[key] = applyTermSigners(draft, source);
+    });
+    return next;
+};
+
 const mergeExcelMetricsPools = (pools: any[]): any | null => {
     const validPools = (pools || []).filter(Boolean);
     if (validPools.length === 0) return null;
@@ -1607,8 +1636,35 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             return;
         }
 
-        // Se não for Master, não precisa confirmar nem salvar (já que não salvou nada)
+        // Usuário não-master também pode preencher assinaturas/termos.
+        // Faz persistência rápida em background antes de limpar a UI.
         if (!isMaster) {
+            if (!isReadOnlyCompletedView && data) {
+                const snapshotData = ({ ...data, termDrafts: composeTermDraftsForPersist(((data as any)?.termDrafts || {}) as Record<string, TermForm>, termDrafts) } as any);
+                const snapshotSessionId = dbSessionId;
+                const snapshotBranch = selectedFilial;
+                const snapshotAudit = nextAuditNumber;
+                const snapshotProgress = calculateProgress(data);
+
+                void (async () => {
+                    try {
+                        const savedSession = await persistAuditSession({
+                            id: snapshotSessionId,
+                            branch: snapshotBranch,
+                            audit_number: snapshotAudit,
+                            status: 'open',
+                            data: snapshotData,
+                            progress: snapshotProgress,
+                            user_email: userEmail
+                        });
+                        if (savedSession) {
+                            await CacheService.set(`audit_session_${snapshotBranch}`, savedSession as any);
+                        }
+                    } catch (err) {
+                        console.error("Error saving session for non-master in background:", err);
+                    }
+                })();
+            }
             resetAuditUi();
             void AuditStorage.clearLocalAuditSession();
             return;
@@ -3603,6 +3659,35 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         collaborators: Array.from({ length: 10 }, () => ({ name: '', cpf: '', signature: '' }))
     });
 
+    const hasAnySignerData = (form?: TermForm | null) => {
+        const localNormName = (value?: string) => String(value || '').trim().replace(/\s+/g, ' ');
+        const localCpfDigits = (value?: string) => String(value || '').replace(/\D/g, '');
+        if (!form) return false;
+        if (
+            localNormName(form.managerName2) ||
+            localCpfDigits(form.managerCpf2) ||
+            String(form.managerSignature2 || '').trim() ||
+            localNormName(form.managerName) ||
+            localCpfDigits(form.managerCpf) ||
+            String(form.managerSignature || '').trim()
+        ) return true;
+        return (form.collaborators || []).some(c =>
+            localNormName(c.name) || localCpfDigits(c.cpf) || String(c.signature || '').trim()
+        );
+    };
+
+    const getLatestSignerTemplate = (): TermForm | null => {
+        const localDrafts = Object.values(termDrafts || {});
+        for (let i = localDrafts.length - 1; i >= 0; i--) {
+            if (hasAnySignerData(localDrafts[i])) return localDrafts[i];
+        }
+        const persistedDrafts = Object.values((((data as any)?.termDrafts || {}) as Record<string, TermForm>) || {});
+        for (let i = persistedDrafts.length - 1; i >= 0; i--) {
+            if (hasAnySignerData(persistedDrafts[i])) return persistedDrafts[i];
+        }
+        return null;
+    };
+
     const openTermModal = (scope: TermScope) => {
         const key = buildTermKey(scope);
         let draft = termDrafts[key];
@@ -3610,11 +3695,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         if (!draft && scope.type === 'custom' && scope.batchId && legacyKey) draft = termDrafts[legacyKey];
         const backupMetrics = (((data as any)?.termExcelMetricsByKey || {}) as Record<string, any>)[key];
         const hasExplicitRemovalDraft = !!(draft?.excelMetricsRemovedAt && !draft?.excelMetrics);
+        const signerTemplate = getLatestSignerTemplate();
         const nextFormBase = draft
             ? (!draft.inventoryNumber && (inventoryNumber || data?.inventoryNumber)
                 ? { ...draft, inventoryNumber: inventoryNumber || data?.inventoryNumber || '' }
                 : draft)
-            : createDefaultTermForm();
+            : (signerTemplate
+                ? applyTermSigners(createDefaultTermForm(), signerTemplate)
+                : createDefaultTermForm());
         const nextForm = (!hasExplicitRemovalDraft && backupMetrics && !nextFormBase?.excelMetrics)
             ? { ...nextFormBase, excelMetrics: backupMetrics }
             : nextFormBase;
@@ -4041,11 +4129,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         termComparisonMetrics ||
                         next.excelMetrics ||
                         current[key]?.excelMetrics;
-                    return upsertScopeDraft(
+                    const currentScopeDrafts = upsertScopeDraft(
                         current,
                         termModal,
                         persistedMetrics ? { ...next, excelMetrics: persistedMetrics } : next
                     );
+                    return replicateSignersToAllTermDrafts(currentScopeDrafts, next);
                 });
             }
             return next;
@@ -4096,14 +4185,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             const nextDrafts = shouldKeepExistingDraft
                 ? currentDrafts
                 : upsertScopeDraft(currentDrafts, currentScope, formToSave);
+            const syncedDrafts = replicateSignersToAllTermDrafts(nextDrafts, currentForm);
             const metricsStore = { ...(((currentData as any)?.termExcelMetricsByKey || {}) as Record<string, any>) };
             if (forceCleared) {
                 delete metricsStore[key];
             } else if (persistedMetrics) {
                 metricsStore[key] = persistedMetrics;
             }
-            const nextDataWithTerms = { ...currentData, termDrafts: nextDrafts, termExcelMetricsByKey: metricsStore } as any;
-            setTermDrafts(nextDrafts);
+            const nextDataWithTerms = { ...currentData, termDrafts: syncedDrafts, termExcelMetricsByKey: metricsStore } as any;
+            setTermDrafts(syncedDrafts);
             setData(nextDataWithTerms as AuditData);
             void (async () => {
                 try {
@@ -5059,7 +5149,8 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             ? { ...termForm, excelMetrics: persistedMetrics }
             : termForm;
         const nextDrafts = upsertScopeDraft(termDrafts, termModal, formToPersist);
-        setTermDrafts(nextDrafts);
+        const syncedDrafts = replicateSignersToAllTermDrafts(nextDrafts, termForm);
+        setTermDrafts(syncedDrafts);
         try {
             // Persistence consolidated in audit_sessions (data field)
             const progress = calculateProgress(data || {} as any);
@@ -5068,7 +5159,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 branch: selectedFilial,
                 audit_number: nextAuditNumber,
                 status: 'open',
-                data: { ...data, termDrafts: nextDrafts } as any,
+                data: { ...data, termDrafts: syncedDrafts } as any,
                 progress: progress,
                 user_email: userEmail
             });
