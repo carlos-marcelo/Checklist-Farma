@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -1249,6 +1250,18 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       stopCameraScanner();
     }
   }, [isCameraOpen, step, stopCameraScanner]);
+
+  useEffect(() => {
+    if (!isCameraOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    const previousOverscroll = document.body.style.overscrollBehavior;
+    document.body.style.overflow = 'hidden';
+    document.body.style.overscrollBehavior = 'none';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.body.style.overscrollBehavior = previousOverscroll;
+    };
+  }, [isCameraOpen]);
 
   const ensureSessionStart = () => {
     if (!sessionStartTime) {
@@ -2679,8 +2692,8 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       {step === 'divergence' && renderDivergence()}
       {step === 'report' && renderReport()}
 
-      {isCameraOpen && (
-        <div className="fixed inset-0 z-50 bg-black/80 p-4 flex items-center justify-center">
+      {isCameraOpen && typeof document !== 'undefined' && createPortal((
+        <div className="fixed inset-0 z-[2147483647] bg-black/80 p-4 flex items-center justify-center">
           <div className="w-full max-w-md bg-gray-950 rounded-2xl border border-gray-800 overflow-hidden shadow-2xl">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
               <div className="flex items-center gap-2 text-gray-100 font-semibold">
@@ -2735,7 +2748,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
             </div>
           </div>
         </div>
-      )}
+      ), document.body)}
     </div>
   );
 };
