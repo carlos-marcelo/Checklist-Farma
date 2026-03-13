@@ -756,33 +756,33 @@ const ExcelMetricsDashboard: React.FC<{
                 <span className="text-indigo-800 flex items-center gap-1.5"><Boxes className="w-3.5 h-3.5" /> Planilha de Divergências</span>
             </div>
             <div className="grid grid-cols-3 gap-2">
-                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2 min-w-0">
                     <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Est. Sist (Qtde)</span>
-                    <span className="text-[14px] font-black text-slate-700">{Math.round(metrics.sysQty).toLocaleString('pt-BR')} un.</span>
+                    <span className="mobile-metric-number text-[12px] sm:text-[14px] font-black text-slate-700 leading-tight break-words">{Math.round(metrics.sysQty).toLocaleString('pt-BR')} un.</span>
                 </div>
-                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2 min-w-0">
                     <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Est. Físico (Qtde)</span>
-                    <span className="text-[14px] font-black text-slate-700">{Math.round(metrics.countedQty).toLocaleString('pt-BR')} un.</span>
+                    <span className="mobile-metric-number text-[12px] sm:text-[14px] font-black text-slate-700 leading-tight break-words">{Math.round(metrics.countedQty).toLocaleString('pt-BR')} un.</span>
                 </div>
-                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2 min-w-0">
                     <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Diferença (Qtde)</span>
-                    <span className={`text-[14px] font-black ${metrics.diffQty < 0 ? 'text-red-600' : metrics.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
+                    <span className={`mobile-metric-number text-[12px] sm:text-[14px] font-black leading-tight break-words ${metrics.diffQty < 0 ? 'text-red-600' : metrics.diffQty > 0 ? 'text-emerald-600' : 'text-slate-500'}`}>
                         {metrics.diffQty > 0 ? '+' : ''}{Math.round(metrics.diffQty).toLocaleString('pt-BR')} un.
                     </span>
                 </div>
             </div>
             <div className="grid grid-cols-3 gap-2 mt-2">
-                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2 min-w-0">
                     <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Custo Sist</span>
-                    <span className="text-[14px] font-black text-slate-700">{metrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                    <span className="mobile-metric-number text-[12px] sm:text-[14px] font-black text-slate-700 leading-tight break-words">{metrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                 </div>
-                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2">
+                <div className="bg-slate-50 border border-slate-100 rounded-lg p-2 min-w-0">
                     <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Custo Físico</span>
-                    <span className="text-[14px] font-black text-slate-700">{metrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
+                    <span className="mobile-metric-number text-[12px] sm:text-[14px] font-black text-slate-700 leading-tight break-words">{metrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</span>
                 </div>
-                <div className={`border rounded-lg p-2 ${metrics.diffCost < 0 ? 'bg-red-50 border-red-200' : metrics.diffCost > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-100'}`}>
+                <div className={`border rounded-lg p-2 min-w-0 ${metrics.diffCost < 0 ? 'bg-red-50 border-red-200' : metrics.diffCost > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-100'}`}>
                     <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest block mb-1">Resultado Fin.</span>
-                    <span className={`text-[14px] font-black ${metrics.diffCost < 0 ? 'text-red-700' : metrics.diffCost > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
+                    <span className={`mobile-metric-number text-[12px] sm:text-[14px] font-black leading-tight break-words ${metrics.diffCost < 0 ? 'text-red-700' : metrics.diffCost > 0 ? 'text-emerald-700' : 'text-slate-500'}`}>
                         {metrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                     </span>
                     {metrics.diffCost < 0 && <span className="text-[8px] font-black text-red-500 uppercase block">Prejuízo</span>}
@@ -6779,7 +6779,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             <div className="space-y-3">
                                                 {batchSummaryByGroup.map(group => (
                                                     <div key={`group-${group.groupLabel}`} className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-                                                        <div className="text-[9px] font-black uppercase tracking-widest text-blue-700/70 mb-2">
+                                                        <div className="text-[9px] font-black uppercase tracking-widest text-blue-700/70 mb-2 break-words leading-relaxed">
                                                             {group.groupLabel}
                                                         </div>
                                                         <div className="flex flex-wrap gap-2">
@@ -6787,7 +6787,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                                 <button
                                                                     key={`batch-${batch.batchId}`}
                                                                     onClick={() => openUnifiedPartialTerm(batch.batchId)}
-                                                                    className="text-xs font-semibold bg-white border border-blue-200 px-3 py-1 rounded-lg hover:bg-blue-600 hover:text-white transition-colors whitespace-nowrap"
+                                                                    className="w-full sm:w-auto max-w-full text-left text-[11px] sm:text-xs leading-tight font-semibold bg-white border border-blue-200 px-3 py-1.5 rounded-lg hover:bg-blue-600 hover:text-white transition-colors break-words"
                                                                     title={batch.lastAt ? `Concluído em ${new Date(batch.lastAt).toLocaleString('pt-BR', { hour12: false })}` : undefined}
                                                                 >
                                                                     Termo único • {batch.count} contagens • {batch.lastAt ? new Date(batch.lastAt).toLocaleString('pt-BR', { hour12: false }) : ''}
@@ -7014,27 +7014,27 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         </div>
                                     </div>
                                     <h2 onClick={() => setView({ level: 'departments', selectedGroupId: group.id })} className="text-xl font-black text-slate-900 uppercase italic mb-6 cursor-pointer group-hover:text-indigo-600 flex-1 leading-tight tracking-tight">{group.name}</h2>
-                                    <div className="grid grid-cols-2 gap-6 pt-6 border-t border-slate-50 mb-6">
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 pt-6 border-t border-slate-50 mb-6">
                                         <div>
                                             <p className="text-[8px] font-black text-slate-400 uppercase italic mb-1">Carga de Mix</p>
-                                            <div className="flex justify-between text-xs font-bold items-center">
-                                                <span className="text-slate-400">Total: {m.skus}</span>
-                                                <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-md text-[9px]">{m.doneSkus} Conf.</span>
+                                            <div className="flex flex-wrap justify-between gap-2 text-xs font-bold items-center">
+                                                <span className="text-slate-400 min-w-0 break-words mobile-metric-number">Total: {m.skus}</span>
+                                                <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-md text-[9px] mobile-metric-number">{m.doneSkus} Conf.</span>
                                             </div>
                                         </div>
-                                        <div className="border-l border-slate-100 pl-6">
+                                        <div className="sm:border-l border-slate-100 sm:pl-6">
                                             <p className="text-[8px] font-black text-slate-400 uppercase italic mb-1">Volume de Unid.</p>
-                                            <div className="flex justify-between text-xs font-bold items-center">
-                                                <span className="text-slate-400">Total: {Math.round(m.units).toLocaleString()}</span>
-                                                <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md text-[9px]">{Math.round(m.doneUnits).toLocaleString()} Aud.</span>
+                                            <div className="flex flex-wrap justify-between gap-2 text-xs font-bold items-center">
+                                                <span className="text-slate-400 min-w-0 break-words mobile-metric-number">Total: {Math.round(m.units).toLocaleString()}</span>
+                                                <span className="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-md text-[9px] mobile-metric-number">{Math.round(m.doneUnits).toLocaleString()} Aud.</span>
                                             </div>
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-1 gap-1 mb-6 pt-4 border-t border-slate-50">
                                         <p className="text-[8px] font-black text-slate-400 uppercase italic">Valor Total (Custo)</p>
-                                        <div className="flex justify-between text-sm font-black">
-                                            <span className="text-slate-400">R$ {m.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                                            <span className="text-emerald-600">R$ {m.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} Aud.</span>
+                                        <div className="flex flex-col sm:flex-row sm:justify-between gap-1 text-sm font-black min-w-0">
+                                            <span className="text-slate-400 mobile-metric-number leading-tight break-words">R$ {m.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                            <span className="text-emerald-600 mobile-metric-number leading-tight break-words">R$ {m.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} Aud.</span>
                                         </div>
                                     </div>
 
@@ -7086,19 +7086,19 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         const deptPartialPercent = deptHasInProgress ? getPartialPercentForDept(selectedGroup!, dept, totalSkus) : 0;
                         const deptProgressValue = deptAllDone ? 100 : deptHasInProgress ? deptPartialPercent : m.progress;
                         return (
-                            <div key={dept.id} className={`rounded-[2rem] border shadow-sm hover:shadow-md transition-all p-8 flex items-center gap-10 group ${deptHasInProgress ? 'bg-blue-50/60 border-blue-200' : 'bg-white border-slate-200'}`}>
-                                <div className="flex flex-col items-center justify-center bg-slate-50 rounded-[2rem] p-6 min-w-[160px] border border-slate-100 shadow-inner">
+                            <div key={dept.id} className={`rounded-[2rem] border shadow-sm hover:shadow-md transition-all p-4 sm:p-6 lg:p-8 flex flex-col lg:flex-row items-stretch lg:items-center gap-4 sm:gap-6 lg:gap-10 group ${deptHasInProgress ? 'bg-blue-50/60 border-blue-200' : 'bg-white border-slate-200'}`}>
+                                <div className="flex flex-col items-center justify-center bg-slate-50 rounded-[2rem] p-4 sm:p-6 w-full lg:w-auto lg:min-w-[160px] border border-slate-100 shadow-inner">
                                     <span className="text-[9px] font-black text-slate-400 uppercase mb-2 italic">SISTEMA ID</span>
                                     <span className="text-5xl font-black text-indigo-700 leading-none tracking-tighter">{dept.numericId || '--'}</span>
                                 </div>
-                                <div className="flex-1">
-                                    <div className="flex justify-between items-start mb-6">
-                                        <h2 onClick={() => setView(prev => ({ ...prev, level: 'categories', selectedDeptId: dept.id }))} className="text-3xl font-black text-slate-900 uppercase italic leading-none group-hover:text-indigo-600 cursor-pointer tracking-tighter">{dept.name}</h2>
-                                        <div className="flex gap-2">
+                                <div className="flex-1 min-w-0">
+                                    <div className="flex flex-col gap-3 sm:gap-4 sm:flex-row sm:justify-between sm:items-start mb-4 sm:mb-6">
+                                        <h2 onClick={() => setView(prev => ({ ...prev, level: 'categories', selectedDeptId: dept.id }))} className="text-xl sm:text-2xl lg:text-3xl font-black text-slate-900 uppercase italic leading-tight break-words group-hover:text-indigo-600 cursor-pointer tracking-tight sm:tracking-tighter max-w-full">{dept.name}</h2>
+                                        <div className="flex flex-wrap gap-2 sm:justify-end">
                                             <button
                                                 onClick={() => { if (isComplete) openTermModal({ type: 'department', groupId: selectedGroup!.id, deptId: dept.id }); }}
                                                 disabled={!isComplete}
-                                                className={`px-4 py-2 min-w-[76px] rounded-xl text-[10px] font-black uppercase transition-all shadow-sm ${isComplete ? 'bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white' : 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed'}`}
+                                                className={`px-3 py-2 min-w-[72px] rounded-xl text-[10px] font-black uppercase transition-all shadow-sm ${isComplete ? 'bg-indigo-50 text-indigo-600 border border-indigo-100 hover:bg-indigo-600 hover:text-white' : 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed'}`}
                                                 title={isComplete ? 'Assinar e imprimir termo' : 'Conclua 100% para liberar'}
                                             >
                                                 Termo
@@ -7106,7 +7106,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             <button
                                                 onClick={() => startScopeAudit(selectedGroup?.id, dept.id)}
                                                 disabled={deptAllDone}
-                                                className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${deptAllDone
+                                                className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${deptAllDone
                                                     ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                     : deptHasInProgress
                                                         ? 'bg-blue-600 text-white border-blue-500'
@@ -7118,22 +7118,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             <button
                                                 onClick={() => toggleScopeStatus(selectedGroup?.id, dept.id)}
                                                 disabled={!isMaster || !deptHasStarted}
-                                                className={`px-4 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${!isMaster || !deptHasStarted ? 'bg-slate-50 text-slate-200 border-slate-100 cursor-not-allowed' : 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white'}`}
+                                                className={`px-3 py-2 rounded-xl border text-[10px] font-black uppercase transition-all shadow-sm ${!isMaster || !deptHasStarted ? 'bg-slate-50 text-slate-200 border-slate-100 cursor-not-allowed' : 'bg-emerald-50 text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white'}`}
                                             >
                                                 Alternar Tudo
                                             </button>
-                                            <button onClick={() => setView(prev => ({ ...prev, level: 'categories', selectedDeptId: dept.id }))} className="w-12 h-12 rounded-2xl bg-slate-900 text-white flex items-center justify-center hover:bg-indigo-600 transition-all shadow-lg">
-                                                <ChevronRight className="w-6 h-6" />
+                                            <button onClick={() => setView(prev => ({ ...prev, level: 'categories', selectedDeptId: dept.id }))} className="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center hover:bg-indigo-600 transition-all shadow-lg">
+                                                <ChevronRight className="w-5 h-5" />
                                             </button>
                                         </div>
                                     </div>
                                     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-6 mb-6">
-                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Mix Total</span><span className="text-lg font-black text-slate-400">{m.skus}</span></div>
-                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Mix Aud.</span><span className="text-xl font-black text-emerald-600 tabular-nums">{m.doneSkus}</span></div>
-                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Unid Totais</span><span className="text-lg font-black text-slate-400">{Math.round(m.units).toLocaleString()}</span></div>
-                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Unid Aud.</span><span className="text-xl font-black text-indigo-600 tabular-nums">{Math.round(m.doneUnits).toLocaleString()}</span></div>
-                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Custo Total</span><span className="text-lg font-black text-slate-400">R$ {m.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
-                                        <div className="flex flex-col"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Custo Aud.</span><span className="text-xl font-black text-emerald-600 tabular-nums">R$ {m.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
+                                        <div className="flex flex-col min-w-0"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Mix Total</span><span className="mobile-metric-number text-lg font-black text-slate-400 break-words">{m.skus}</span></div>
+                                        <div className="flex flex-col min-w-0"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Mix Aud.</span><span className="mobile-metric-number text-xl font-black text-emerald-600 break-words">{m.doneSkus}</span></div>
+                                        <div className="flex flex-col min-w-0"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Unid Totais</span><span className="mobile-metric-number text-lg font-black text-slate-400 break-words">{Math.round(m.units).toLocaleString()}</span></div>
+                                        <div className="flex flex-col min-w-0"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Unid Aud.</span><span className="mobile-metric-number text-xl font-black text-indigo-600 break-words">{Math.round(m.doneUnits).toLocaleString()}</span></div>
+                                        <div className="flex flex-col min-w-0"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Custo Total</span><span className="mobile-metric-number text-lg font-black text-slate-400 break-words">R$ {m.cost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
+                                        <div className="flex flex-col min-w-0"><span className="text-[9px] font-black text-slate-400 uppercase italic mb-1">Custo Aud.</span><span className="mobile-metric-number text-xl font-black text-emerald-600 break-words">R$ {m.doneCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span></div>
                                     </div>
 
                                     {(() => {
@@ -7179,23 +7179,21 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         const startLabel = catStatus === AuditStatus.IN_PROGRESS ? 'PAUSAR' : 'INICIAR';
                         const catProgressValue = catStatus === AuditStatus.DONE ? 100 : catStatus === AuditStatus.IN_PROGRESS ? 50 : 0;
                         return (
-                            <div key={cat.id} className={`p-6 rounded-[2rem] border-2 flex items-center justify-between gap-8 transition-all hover:shadow-lg group ${catStatus === AuditStatus.DONE ? 'border-slate-200 bg-white' : catStatus === AuditStatus.IN_PROGRESS ? 'border-blue-200 bg-blue-50/40' : 'border-slate-50 bg-white'}`}>
-                                <div className="flex-1">
-                                    <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-2xl uppercase italic leading-none cursor-pointer hover:underline transition-all ${catStatus === AuditStatus.DONE ? 'text-slate-900' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-900' : 'text-slate-900'} tracking-tighter`}>{cat.name}</h3>
-                                    <div className="flex gap-10 mt-3 items-center">
-                                        <div className="flex flex-col">
+                            <div key={cat.id} className={`p-4 sm:p-6 rounded-[2rem] border-2 flex flex-col gap-4 sm:gap-6 transition-all hover:shadow-lg group ${catStatus === AuditStatus.DONE ? 'border-slate-200 bg-white' : catStatus === AuditStatus.IN_PROGRESS ? 'border-blue-200 bg-blue-50/40' : 'border-slate-50 bg-white'}`}>
+                                <div className="min-w-0">
+                                    <h3 onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className={`font-black text-xl sm:text-2xl uppercase italic leading-tight cursor-pointer hover:underline transition-all break-words ${catStatus === AuditStatus.DONE ? 'text-slate-900' : catStatus === AuditStatus.IN_PROGRESS ? 'text-blue-900' : 'text-slate-900'} tracking-tight sm:tracking-tighter`}>{cat.name}</h3>
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-6 mt-3 items-start">
+                                        <div className="flex flex-col min-w-0">
                                             <span className="text-[9px] font-black text-slate-400 uppercase italic">SKUs Importados</span>
-                                            <span className="text-md font-black text-slate-800 tabular-nums leading-none whitespace-nowrap">{cat.itemsCount} Mix</span>
+                                            <span className="mobile-metric-number text-md font-black text-slate-800 leading-none break-words">{cat.itemsCount} Mix</span>
                                         </div>
-                                        <div className="w-px h-6 bg-slate-100"></div>
-                                        <div className="flex flex-col">
+                                        <div className="flex flex-col min-w-0">
                                             <span className="text-[9px] font-black text-slate-400 uppercase italic">Estoque Físico</span>
-                                            <span className="text-md font-black text-indigo-600 tabular-nums leading-none whitespace-nowrap">{cat.totalQuantity.toLocaleString()} Unid.</span>
+                                            <span className="mobile-metric-number text-md font-black text-indigo-600 leading-none break-words">{cat.totalQuantity.toLocaleString()} Unid.</span>
                                         </div>
-                                        <div className="w-px h-6 bg-slate-100"></div>
-                                        <div className="flex flex-col">
+                                        <div className="flex flex-col min-w-0">
                                             <span className="text-[9px] font-black text-slate-400 uppercase italic">Valor em Custo</span>
-                                            <span className="text-md font-black text-emerald-600 tabular-nums leading-none whitespace-nowrap">R$ {cat.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                                            <span className="mobile-metric-number text-md font-black text-emerald-600 leading-none break-words">R$ {cat.totalCost.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
                                         </div>
 
                                     </div>
@@ -7213,18 +7211,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         />
                                     </div>
                                 </div>
-                                <div className="flex gap-4">
+                                <div className="flex flex-wrap gap-2 sm:gap-3">
                                     <button
                                         onClick={() => { if (catStatus === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: cat.id }); }}
                                         disabled={catStatus !== AuditStatus.DONE}
-                                        className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${catStatus === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:text-white hover:bg-indigo-600' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
+                                        className={`px-3 sm:px-5 py-2.5 sm:py-3 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${catStatus === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:text-white hover:bg-indigo-600' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
                                     >
                                         Termo
                                     </button>
                                     <button
                                         onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, cat.id)}
                                         disabled={catStatus === AuditStatus.DONE}
-                                        className={`px-6 py-4 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${catStatus === AuditStatus.DONE
+                                        className={`px-3 sm:px-5 py-2.5 sm:py-3 rounded-xl text-[10px] font-black uppercase transition-all border shadow-sm ${catStatus === AuditStatus.DONE
                                             ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                             : catStatus === AuditStatus.IN_PROGRESS
                                                 ? 'bg-blue-600 text-white border-blue-500'
@@ -7232,11 +7230,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                     >
                                         {startLabel}
                                     </button>
-                                    <button onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className="px-6 py-4 rounded-xl bg-slate-50 text-slate-400 text-[10px] font-black uppercase hover:text-indigo-600 hover:bg-white transition-all border border-transparent hover:border-indigo-100 shadow-sm">Detalhar</button>
+                                    <button onClick={() => setView(prev => ({ ...prev, level: 'products', selectedCatId: cat.id }))} className="px-3 sm:px-5 py-2.5 sm:py-3 rounded-xl bg-slate-50 text-slate-400 text-[10px] font-black uppercase hover:text-indigo-600 hover:bg-white transition-all border border-transparent hover:border-indigo-100 shadow-sm">Detalhar</button>
                                     <button
                                         onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, cat.id)}
                                         disabled={!canFinalize}
-                                        className={`px-10 py-4 rounded-xl font-black text-[11px] uppercase tracking-widest transition-all shadow-md active:scale-95 ${!canFinalize ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : catStatus === AuditStatus.DONE ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}
+                                        className={`px-4 sm:px-8 py-2.5 sm:py-3 rounded-xl font-black text-[10px] sm:text-[11px] uppercase tracking-wider sm:tracking-widest transition-all shadow-md active:scale-95 ${!canFinalize ? 'bg-slate-200 text-slate-400 cursor-not-allowed' : catStatus === AuditStatus.DONE ? 'bg-emerald-600 text-white' : 'bg-slate-900 text-white hover:bg-indigo-600'}`}
                                     >
                                         {!canFinalize ? 'INICIE A AUDITORIA' : catStatus === AuditStatus.DONE ? 'CONCLUÍDO' : 'FINALIZAR'}
                                     </button>
@@ -7250,23 +7248,23 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         const canFinalize = isMaster && catStatus !== AuditStatus.TODO;
                         const startLabel = catStatus === AuditStatus.IN_PROGRESS ? 'PAUSAR' : 'INICIAR';
                         return (
-                            <div className="bg-white rounded-[3rem] shadow-2xl overflow-hidden border border-slate-200">
-                                <div className="bg-slate-900 p-10 text-white flex justify-between items-center relative">
+                            <div className="bg-white rounded-[2rem] sm:rounded-[3rem] shadow-2xl overflow-hidden border border-slate-200">
+                                <div className="bg-slate-900 p-4 sm:p-6 lg:p-10 text-white flex flex-col gap-4 lg:flex-row lg:justify-between lg:items-center relative">
                                     <div className="absolute top-0 right-0 p-4 opacity-10 pointer-events-none">
                                         <Boxes className="w-40 h-40 text-white" />
                                     </div>
-                                    <div className="relative z-10">
-                                        <h2 className="text-4xl font-black uppercase italic leading-none mb-3 tracking-tighter">{selectedCat.name}</h2>
-                                        <div className="flex items-center gap-6">
-                                            <span className="text-5xl font-black text-indigo-400 leading-none drop-shadow-sm">ID: {selectedCat.numericId || '--'}</span>
-                                            <div className="w-px h-10 bg-white/20"></div>
-                                            <div className="flex flex-col">
-                                                <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest italic">{selectedGroup?.name}</p>
-                                                <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest italic">{selectedDept?.name}</p>
+                                    <div className="relative z-10 min-w-0 w-full">
+                                        <h2 className="text-xl sm:text-3xl lg:text-4xl font-black uppercase italic leading-tight mb-3 tracking-tight sm:tracking-tighter break-words">{selectedCat.name}</h2>
+                                        <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4 min-w-0">
+                                            <span className="text-3xl sm:text-5xl font-black text-indigo-400 leading-none drop-shadow-sm whitespace-nowrap">ID: {selectedCat.numericId || '--'}</span>
+                                            <div className="hidden sm:block w-px h-10 bg-white/20"></div>
+                                            <div className="flex flex-col min-w-0">
+                                                <p className="text-[10px] text-slate-500 uppercase font-black tracking-widest italic break-words">{selectedGroup?.name}</p>
+                                                <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest italic break-words">{selectedDept?.name}</p>
                                             </div>
                                         </div>
                                     </div>
-                                    <div className="flex gap-6 items-center relative z-10">
+                                    <div className="flex flex-wrap gap-2 sm:gap-3 items-center relative z-10 w-full lg:w-auto">
                                         <div className="text-right mr-6 hidden lg:block">
                                             <p className="text-[10px] font-black text-slate-500 uppercase italic mb-1">Resumo de Carga</p>
                                             <p className="text-2xl font-black leading-none">{selectedCat.itemsCount} SKUs <span className="text-indigo-400 mx-2">|</span> {selectedCat.totalQuantity.toLocaleString()} Unid.</p>
@@ -7274,14 +7272,14 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         <button
                                             onClick={() => { if (catStatus === AuditStatus.DONE) openTermModal({ type: 'category', groupId: selectedGroup!.id, deptId: selectedDept!.id, catId: selectedCat.id }); }}
                                             disabled={catStatus !== AuditStatus.DONE}
-                                            className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${catStatus === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-600 hover:text-white' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
+                                            className={`px-3 sm:px-5 py-2.5 sm:py-4 rounded-xl sm:rounded-2xl font-black text-[10px] sm:text-[11px] uppercase tracking-wider sm:tracking-widest shadow-xl transition-all active:scale-95 border ${catStatus === AuditStatus.DONE ? 'bg-indigo-50 text-indigo-600 border-indigo-200 hover:bg-indigo-600 hover:text-white' : 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'}`}
                                         >
                                             Imprimir Termo
                                         </button>
                                         <button
                                             onClick={() => startScopeAudit(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
                                             disabled={catStatus === AuditStatus.DONE}
-                                            className={`px-6 py-5 rounded-2xl font-black text-[11px] uppercase tracking-widest shadow-xl transition-all active:scale-95 border ${catStatus === AuditStatus.DONE
+                                            className={`px-3 sm:px-5 py-2.5 sm:py-4 rounded-xl sm:rounded-2xl font-black text-[10px] sm:text-[11px] uppercase tracking-wider sm:tracking-widest shadow-xl transition-all active:scale-95 border ${catStatus === AuditStatus.DONE
                                                 ? 'bg-slate-100 text-slate-300 border-slate-200 cursor-not-allowed'
                                                 : catStatus === AuditStatus.IN_PROGRESS
                                                     ? 'bg-blue-600 text-white border-blue-500'
@@ -7292,30 +7290,30 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         <button
                                             onClick={() => toggleScopeStatus(selectedGroup?.id, selectedDept?.id, selectedCat.id)}
                                             disabled={!canFinalize}
-                                            className={`px-10 py-5 rounded-2xl font-black text-[12px] uppercase tracking-[0.2em] shadow-2xl transition-all active:scale-95 border-b-4 ${!canFinalize ? 'bg-slate-300 border-slate-400 text-slate-500 cursor-not-allowed' : catStatus === AuditStatus.DONE ? 'bg-emerald-600 border-emerald-800' : 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500'}`}
+                                            className={`px-3 sm:px-8 py-2.5 sm:py-4 rounded-xl sm:rounded-2xl font-black text-[10px] sm:text-[12px] uppercase tracking-wider sm:tracking-[0.2em] shadow-2xl transition-all active:scale-95 border-b-4 ${!canFinalize ? 'bg-slate-300 border-slate-400 text-slate-500 cursor-not-allowed' : catStatus === AuditStatus.DONE ? 'bg-emerald-600 border-emerald-800' : 'bg-indigo-600 border-indigo-800 hover:bg-indigo-500'}`}
                                         >
                                             {!canFinalize ? 'INICIE A AUDITORIA' : catStatus === AuditStatus.DONE ? 'REABRIR CATEGORIA' : 'CONCLUIR AUDITORIA'}
                                         </button>
                                     </div>
                                 </div>
-                                <div className="max-h-[650px] overflow-y-auto custom-scrollbar">
+                                <div className="max-h-[650px] overflow-auto custom-scrollbar">
                                     <table className="w-full text-left border-collapse">
                                         <thead className="sticky top-0 bg-slate-50/95 backdrop-blur-md z-20 border-b shadow-sm">
                                             <tr className="border-b border-slate-100">
-                                                <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 tracking-widest italic">Cód. de Barras</th>
-                                                <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 tracking-widest italic">Descrição Analítica do Item</th>
-                                                <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic font-mono">Custo Unit</th>
-                                                <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic font-mono">Custo Total</th>
-                                                <th className="px-12 py-6 text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic">Saldo Importado</th>
+                                                <th className="px-3 sm:px-6 lg:px-12 py-4 sm:py-6 text-[10px] sm:text-[11px] font-black uppercase text-slate-400 tracking-widest italic">Cód. de Barras</th>
+                                                <th className="px-3 sm:px-6 lg:px-12 py-4 sm:py-6 text-[10px] sm:text-[11px] font-black uppercase text-slate-400 tracking-widest italic">Descrição Analítica do Item</th>
+                                                <th className="px-3 sm:px-6 lg:px-12 py-4 sm:py-6 text-[10px] sm:text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic font-mono">Custo Unit</th>
+                                                <th className="px-3 sm:px-6 lg:px-12 py-4 sm:py-6 text-[10px] sm:text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic font-mono">Custo Total</th>
+                                                <th className="px-3 sm:px-6 lg:px-12 py-4 sm:py-6 text-[10px] sm:text-[11px] font-black uppercase text-slate-400 text-right tracking-widest italic">Saldo Importado</th>
                                             </tr>
                                         </thead>
                                         <tbody>{selectedCat.products.map((p, i) => (
                                             <tr key={i} className="border-b border-slate-50 hover:bg-indigo-50/50 transition-colors group text-xs">
-                                                <td className="px-12 py-4 text-slate-500 tabular-nums">{p.code}</td>
-                                                <td className="px-12 py-4 font-black uppercase italic leading-tight text-slate-800 group-hover:text-indigo-600 transition-colors">{p.name}</td>
-                                                <td className="px-12 py-4 text-right tabular-nums text-slate-400 italic">R$ {(p.cost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                                <td className="px-12 py-4 text-right tabular-nums font-bold text-slate-600">R$ {((p.cost || 0) * p.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
-                                                <td className="px-12 py-4 text-2xl font-black text-right tabular-nums group-hover:scale-105 transition-transform">{p.quantity.toLocaleString()}</td>
+                                                <td className="px-3 sm:px-6 lg:px-12 py-3 sm:py-4 text-slate-500 tabular-nums whitespace-nowrap">{p.code}</td>
+                                                <td className="px-3 sm:px-6 lg:px-12 py-3 sm:py-4 font-black uppercase italic leading-tight text-slate-800 group-hover:text-indigo-600 transition-colors min-w-[180px]">{p.name}</td>
+                                                <td className="px-3 sm:px-6 lg:px-12 py-3 sm:py-4 text-right tabular-nums text-slate-400 italic whitespace-nowrap">R$ {(p.cost || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                                                <td className="px-3 sm:px-6 lg:px-12 py-3 sm:py-4 text-right tabular-nums font-bold text-slate-600 whitespace-nowrap">R$ {((p.cost || 0) * p.quantity).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</td>
+                                                <td className="px-3 sm:px-6 lg:px-12 py-3 sm:py-4 text-xl sm:text-2xl font-black text-right tabular-nums group-hover:scale-105 transition-transform whitespace-nowrap">{p.quantity.toLocaleString()}</td>
                                             </tr>))}
                                         </tbody>
                                     </table>
@@ -8044,6 +8042,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         .custom-scrollbar::-webkit-scrollbar-track { background: #f8fafc; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 12px; border: 3px solid #f8fafc; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .mobile-metric-number { font-variant-numeric: tabular-nums; }
+        @media (max-width: 640px) {
+          .mobile-metric-number {
+            display: inline-block;
+            min-width: 8ch;
+            text-align: right;
+            white-space: normal;
+          }
+        }
         .term-field-shake { animation: termFieldShake 0.35s ease-in-out; }
         @keyframes termFieldShake {
           0% { transform: translateX(0); }

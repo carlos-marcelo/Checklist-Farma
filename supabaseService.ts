@@ -2597,43 +2597,17 @@ export async function upsertActiveSession(session: Partial<DbActiveSession>): Pr
     // Heartbeat não deve sobrescrever "command" para evitar perder FORCE_LOGOUT/RELOAD
     const heartbeatPayload: Partial<DbActiveSession> = { ...session };
     delete (heartbeatPayload as any).command;
+    const upsertPayload: Partial<DbActiveSession> = {
+      ...heartbeatPayload,
+      client_id: clientId,
+      updated_at: new Date().toISOString()
+    };
 
-    const { data: updatedRows, error: updateError } = await supabase
+    const { error } = await supabase
       .from('active_sessions')
-      .update(heartbeatPayload)
-      .eq('client_id', clientId)
-      .select('client_id');
+      .upsert(upsertPayload, { onConflict: 'client_id' });
 
-    if (updateError) throw updateError;
-    if (Array.isArray(updatedRows) && updatedRows.length > 0) return true;
-
-    const { error: insertError } = await supabase
-      .from('active_sessions')
-      .insert([{ ...heartbeatPayload, client_id: clientId, command: null }]);
-
-    if (insertError) {
-      // Corrida entre abas/pings: outra requisição pode ter inserido o mesmo client_id.
-      // Nesse caso, faz fallback para UPDATE e evita erro 409 no console.
-      const isConflict =
-        (insertError as any)?.status === 409 ||
-        (insertError as any)?.code === '23505' ||
-        String((insertError as any)?.code || '').toUpperCase() === 'PGRST116' ||
-        String((insertError as any)?.message || '').toLowerCase().includes('duplicate key') ||
-        String((insertError as any)?.details || '').toLowerCase().includes('already exists') ||
-        String((insertError as any)?.message || '').toLowerCase().includes('conflict');
-
-      if (isConflict) {
-        const { data: retryRows, error: retryError } = await supabase
-          .from('active_sessions')
-          .update(heartbeatPayload)
-          .eq('client_id', clientId)
-          .select('client_id');
-
-        if (retryError) throw retryError;
-        return Array.isArray(retryRows) && retryRows.length > 0;
-      }
-      throw insertError;
-    }
+    if (error) throw error;
     return true;
   } catch (error) {
     console.error('Error upserting active session:', error);
