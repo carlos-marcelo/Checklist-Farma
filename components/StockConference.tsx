@@ -433,7 +433,6 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const [cameraStatusMsg, setCameraStatusMsg] = useState('Posicione o código de barras dentro do quadro.');
   const [isTorchSupported, setIsTorchSupported] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
-  const [isCameraPaused, setIsCameraPaused] = useState(false);
   const [lightAssistEnabled, setLightAssistEnabled] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const countRef = useRef<HTMLInputElement>(null);
@@ -1144,7 +1143,6 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     if (closeModal) {
       setIsCameraOpen(false);
       setIsTorchSupported(false);
-      setIsCameraPaused(false);
       setLightAssistEnabled(false);
       setCameraStatusMsg('Posicione o código de barras dentro do quadro.');
     }
@@ -1208,13 +1206,6 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     setCameraStatusMsg(next ? 'Lanterna ligada para facilitar a leitura.' : 'Lanterna desligada.');
   }, [applyTorch, isTorchOn, isTorchSupported]);
 
-  const pauseCameraForExternalTorch = useCallback(() => {
-    clearCameraResources(false);
-    setIsCameraPaused(true);
-    setIsTorchSupported(false);
-    setCameraStatusMsg('Câmera pausada. Agora você pode usar a lanterna externa do celular e depois retomar.');
-  }, [clearCameraResources]);
-
   const startCameraScanner = useCallback(async () => {
     const BarcodeDetectorCtor = (window as any).BarcodeDetector;
     if (!BarcodeDetectorCtor) {
@@ -1266,7 +1257,6 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       setIsTorchSupported(torchAvailable);
       setIsTorchOn(false);
       setIsCameraOpen(true);
-      setIsCameraPaused(false);
       setCameraStatusMsg('Câmera ativa. Mire no código para bipar.');
 
       if (torchAvailable) {
@@ -1325,7 +1315,6 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       }, 250);
     } catch {
       setIsCameraOpen(true);
-      setIsCameraPaused(false);
       setCameraStatusMsg('Permissão de câmera negada ou indisponível neste dispositivo.');
     }
   }, [applyTorch, clearCameraResources, processScannedCode, stopCameraScanner]);
@@ -2810,13 +2799,6 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
                 </button>
                 <button
                   type="button"
-                  onClick={isCameraPaused ? () => void startCameraScanner() : pauseCameraForExternalTorch}
-                  className="inline-flex items-center gap-2 rounded-lg border border-sky-300 bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-200 transition"
-                >
-                  {isCameraPaused ? 'Retomar câmera' : 'Pausar câmera'}
-                </button>
-                <button
-                  type="button"
                   onClick={() => setLightAssistEnabled(prev => !prev)}
                   className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${lightAssistEnabled
                     ? 'border-yellow-300 bg-yellow-100 text-yellow-800 hover:bg-yellow-200'
@@ -2826,24 +2808,18 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
                 </button>
               </div>
               <div className="relative rounded-xl border border-emerald-400/40 overflow-hidden bg-black">
-                {!isCameraPaused ? (
-                  <video
-                    ref={videoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="w-full aspect-[3/4] object-cover"
-                  />
-                ) : (
-                  <div className="w-full aspect-[3/4] flex items-center justify-center text-gray-300 text-sm px-6 text-center">
-                    Câmera pausada para liberar hardware. Ligue a lanterna externa e toque em "Retomar câmera".
-                  </div>
-                )}
+                <video
+                  ref={videoRef}
+                  autoPlay
+                  playsInline
+                  muted
+                  className="w-full aspect-[3/4] object-cover"
+                />
                 <div className="pointer-events-none absolute inset-5 border-2 border-emerald-400/70 rounded-xl" />
                 <div className="pointer-events-none absolute left-8 right-8 top-1/2 -translate-y-1/2">
                   <div className="h-[2px] bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.9)]" />
                 </div>
-                {lightAssistEnabled && !isTorchOn && !isCameraPaused && (
+                {lightAssistEnabled && !isTorchOn && (
                   <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-white/20 via-transparent to-white/20" />
                 )}
               </div>
