@@ -38,7 +38,9 @@ import {
   Barcode,
   Package,
   Camera,
-  Smartphone
+  Smartphone,
+  Flashlight,
+  FlashlightOff
 } from 'lucide-react';
 import SignaturePad from './SignaturePad';
 import * as SupabaseService from '../supabaseService';
@@ -429,6 +431,8 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const [isMobileViewport, setIsMobileViewport] = useState(false);
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [cameraStatusMsg, setCameraStatusMsg] = useState('Posicione o código de barras dentro do quadro.');
+  const [isTorchSupported, setIsTorchSupported] = useState(false);
+  const [isTorchOn, setIsTorchOn] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const countRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1085,6 +1089,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
         if (notifyErrors) {
           alert(`O produto "${product.description}" (Red: ${product.reducedCode}) não consta na lista de estoque carregada. Contagem não permitida para itens fora da lista.`);
         } else {
+          alert(`Produto fora da contagem: "${product.description}" (Red: ${product.reducedCode}).`);
           setCameraStatusMsg('Produto fora da lista de estoque desta conferência.');
         }
         setScanInput('');
@@ -1133,8 +1138,33 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     }
     setIsCameraOpen(false);
     setCameraStatusMsg('Posicione o código de barras dentro do quadro.');
+    setIsTorchOn(false);
+    setIsTorchSupported(false);
     lastDetectedCodeRef.current = '';
   }, []);
+
+  const applyTorch = useCallback(async (enabled: boolean) => {
+    const videoTrack = cameraStreamRef.current?.getVideoTracks?.()?.[0];
+    if (!videoTrack) return false;
+    try {
+      await videoTrack.applyConstraints({ advanced: [{ torch: enabled } as any] });
+      setIsTorchOn(enabled);
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const toggleTorch = useCallback(async () => {
+    if (!isTorchSupported) return;
+    const next = !isTorchOn;
+    const ok = await applyTorch(next);
+    if (!ok) {
+      setCameraStatusMsg('Não foi possível alterar a lanterna neste dispositivo.');
+      return;
+    }
+    setCameraStatusMsg(next ? 'Lanterna ligada para facilitar a leitura.' : 'Lanterna desligada.');
+  }, [applyTorch, isTorchOn, isTorchSupported]);
 
   const startCameraScanner = useCallback(async () => {
     const BarcodeDetectorCtor = (window as any).BarcodeDetector;
@@ -1155,6 +1185,11 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       });
 
       cameraStreamRef.current = stream;
+      const videoTrack = stream.getVideoTracks?.()[0];
+      const caps = (videoTrack?.getCapabilities?.() || {}) as any;
+      const torchAvailable = Boolean(caps?.torch);
+      setIsTorchSupported(torchAvailable);
+      setIsTorchOn(false);
       setIsCameraOpen(true);
       setCameraStatusMsg('Câmera ativa. Mire no código para bipar.');
 
@@ -2675,6 +2710,21 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
               </button>
             </div>
             <div className="p-4">
+              <div className="mb-3 flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={() => void toggleTorch()}
+                  disabled={!isTorchSupported}
+                  className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${isTorchSupported
+                    ? (isTorchOn
+                      ? 'border-amber-300 bg-amber-100 text-amber-800 hover:bg-amber-200'
+                      : 'border-gray-700 bg-gray-900 text-gray-200 hover:bg-gray-800')
+                    : 'border-gray-800 bg-gray-900 text-gray-500 cursor-not-allowed'}`}
+                >
+                  {isTorchOn ? <FlashlightOff className="w-4 h-4" /> : <Flashlight className="w-4 h-4" />}
+                  {isTorchOn ? 'Desligar lanterna' : 'Ligar lanterna'}
+                </button>
+              </div>
               <div className="relative rounded-xl border border-emerald-400/40 overflow-hidden bg-black">
                 <video
                   ref={videoRef}
@@ -2684,6 +2734,9 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
                   className="w-full aspect-[3/4] object-cover"
                 />
                 <div className="pointer-events-none absolute inset-5 border-2 border-emerald-400/70 rounded-xl" />
+                <div className="pointer-events-none absolute left-8 right-8 top-1/2 -translate-y-1/2">
+                  <div className="h-[2px] bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.9)]" />
+                </div>
               </div>
               <p className="mt-3 text-xs text-emerald-300 leading-5">{cameraStatusMsg}</p>
               <p className="mt-1 text-[11px] text-gray-400">
