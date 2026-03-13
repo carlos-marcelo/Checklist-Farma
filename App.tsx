@@ -1441,6 +1441,8 @@ const App: React.FC = () => {
     const [isLoadingMore, setIsLoadingMore] = useState(false);
     const REPORTS_PAGE_SIZE = 20;
     const STOCK_PAGE_SIZE = 20;
+    const MOBILE_CHECKLIST_HISTORY_PAGE_SIZE = 4;
+    const MOBILE_STOCK_HISTORY_PAGE_SIZE = 4;
     const [stockConferenceHistory, setStockConferenceHistory] = useState<StockConferenceHistoryItem[]>([]);
     const [stockConferencePage, setStockConferencePage] = useState(0);
     const [hasMoreStockConferences, setHasMoreStockConferences] = useState(true);
@@ -1453,12 +1455,14 @@ const App: React.FC = () => {
     const [historySearch, setHistorySearch] = useState('');
     const [historyAreaFilter, setHistoryAreaFilter] = useState('all');
     const [historyDateRange, setHistoryDateRange] = useState<string>('all');
+    const [checklistMobilePage, setChecklistMobilePage] = useState(0);
     const [isReloadingReports, setIsReloadingReports] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
     const [stockConferenceReportsRaw, setStockConferenceReportsRaw] = useState<SupabaseService.DbStockConferenceReport[]>([]);
     const [viewingStockConferenceReport, setViewingStockConferenceReport] = useState<EnhancedStockConferenceReport | null>(null);
     const [stockBranchFilters, setStockBranchFilters] = useState<string[]>([]);
     const [stockAreaFilter, setStockAreaFilter] = useState<string>('all');
+    const [stockMobilePage, setStockMobilePage] = useState(0);
     const [dashboardAuditSessions, setDashboardAuditSessions] = useState<SupabaseService.DbAuditSession[]>([]);
     const [isLoadingDashboardAudits, setIsLoadingDashboardAudits] = useState(false);
     const [dashboardAuditsError, setDashboardAuditsError] = useState<string | null>(null);
@@ -2570,6 +2574,16 @@ const App: React.FC = () => {
         });
     }, [stockConferenceHistory, stockBranchFilters, stockAreaFilter]);
 
+    const stockMobileTotalPages = useMemo(() => {
+        return Math.max(1, Math.ceil(filteredStockConferenceHistory.length / MOBILE_STOCK_HISTORY_PAGE_SIZE));
+    }, [filteredStockConferenceHistory.length, MOBILE_STOCK_HISTORY_PAGE_SIZE]);
+    const safeStockMobilePage = Math.min(stockMobilePage, Math.max(0, stockMobileTotalPages - 1));
+
+    const pagedStockConferenceHistory = useMemo(() => {
+        const start = safeStockMobilePage * MOBILE_STOCK_HISTORY_PAGE_SIZE;
+        return filteredStockConferenceHistory.slice(start, start + MOBILE_STOCK_HISTORY_PAGE_SIZE);
+    }, [filteredStockConferenceHistory, safeStockMobilePage, MOBILE_STOCK_HISTORY_PAGE_SIZE]);
+
     useEffect(() => {
         setStockBranchFilters(prev => {
             const filtered = prev.filter(branchKey => stockConferenceBranchKeys.includes(branchKey));
@@ -2582,6 +2596,10 @@ const App: React.FC = () => {
             setStockAreaFilter('all');
         }
     }, [stockConferenceAreaKeys, stockAreaFilter]);
+
+    useEffect(() => {
+        setStockMobilePage(0);
+    }, [stockBranchFilters, stockAreaFilter]);
 
     // --- HANDLERS ---
 
@@ -4823,6 +4841,8 @@ const App: React.FC = () => {
         return date.toLocaleString('pt-BR', { hour12: false });
     }, [filteredEventLogs]);
 
+    const canModerateHistory = hasModuleAccess('historyModeration');
+
     const handleStockAreaFilterChange = (value: string) => setStockAreaFilter(value);
 
     const getFilteredHistory = () => {
@@ -4894,6 +4914,30 @@ const App: React.FC = () => {
             return safeB - safeA;
         });
     };
+
+    const filteredChecklistHistory = useMemo(() => getFilteredHistory(), [
+        reportHistory,
+        canModerateHistory,
+        currentUser?.email,
+        historyFilterUser,
+        historySearch,
+        historyAreaFilter,
+        historyDateRange
+    ]);
+
+    const checklistMobileTotalPages = useMemo(() => {
+        return Math.max(1, Math.ceil(filteredChecklistHistory.length / MOBILE_CHECKLIST_HISTORY_PAGE_SIZE));
+    }, [filteredChecklistHistory.length, MOBILE_CHECKLIST_HISTORY_PAGE_SIZE]);
+    const safeChecklistMobilePage = Math.min(checklistMobilePage, Math.max(0, checklistMobileTotalPages - 1));
+
+    const pagedChecklistHistory = useMemo(() => {
+        const start = safeChecklistMobilePage * MOBILE_CHECKLIST_HISTORY_PAGE_SIZE;
+        return filteredChecklistHistory.slice(start, start + MOBILE_CHECKLIST_HISTORY_PAGE_SIZE);
+    }, [filteredChecklistHistory, safeChecklistMobilePage, MOBILE_CHECKLIST_HISTORY_PAGE_SIZE]);
+
+    useEffect(() => {
+        setChecklistMobilePage(0);
+    }, [historyFilterUser, historySearch, historyAreaFilter, historyDateRange]);
 
     const dashboardAuditOverview = useMemo(() => {
         type BranchMetric = {
@@ -5562,7 +5606,6 @@ const App: React.FC = () => {
     const canEditCompanies = hasModuleAccess('companyEditing');
     const canManageUsers = hasModuleAccess('userManagement');
     const canRespondTickets = hasModuleAccess('supportTickets');
-    const canModerateHistory = hasModuleAccess('historyModeration');
     const canApproveUsers = hasModuleAccess('userApproval');
     const isReadOnly = currentView === 'view_history' || !canControlChecklists;
 
@@ -9695,7 +9738,78 @@ const App: React.FC = () => {
 
                                     {/* Data Table */}
                                     <div className="overflow-hidden rounded-[32px] border border-gray-100 shadow-sm bg-white">
-                                        <div className="overflow-x-auto">
+                                        <div className="md:hidden p-4 space-y-3">
+                                            {filteredChecklistHistory.length === 0 ? (
+                                                <div className="py-10 text-center">
+                                                    <div className="flex flex-col items-center gap-3">
+                                                        <div className="p-4 bg-gray-50 rounded-full text-gray-200">
+                                                            <FileSearch size={36} strokeWidth={1.2} />
+                                                        </div>
+                                                        <p className="text-sm font-bold text-gray-400">Nenhum registro encontrado</p>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    {pagedChecklistHistory.map(report => {
+                                                        const scoreNum = Number(report.score);
+                                                        const scoreFeedback = getScoreFeedback(scoreNum);
+                                                        return (
+                                                            <div key={report.id} className="rounded-2xl border border-gray-100 bg-white p-3 shadow-sm">
+                                                                <div className="flex items-start justify-between gap-3">
+                                                                    <div className="min-w-0">
+                                                                        <p className="text-[11px] font-bold text-gray-700">
+                                                                            {new Date(report.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })} às {new Date(report.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                                        </p>
+                                                                        <p className="text-sm font-black text-gray-900 truncate">{report.empresa_avaliada || 'Empresa não informada'}</p>
+                                                                        <p className="text-xs text-gray-500">{report.filial || 'Filial N/A'} • {report.area || 'Setor Geral'}</p>
+                                                                    </div>
+                                                                    <div className={`inline-flex flex-col items-center justify-center w-12 h-12 rounded-xl ${scoreFeedback.bg} ${scoreFeedback.color} border border-white/60 shadow-sm`}>
+                                                                        <span className="text-sm font-black leading-none">{scoreNum.toFixed(1)}</span>
+                                                                        <span className="text-[8px] font-black opacity-60 mt-0.5">SCORE</span>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="mt-3 flex items-center justify-between">
+                                                                    <span className="text-[11px] text-gray-500 truncate">{report.userName}</span>
+                                                                    <button
+                                                                        onClick={() => handleViewHistoryItem(report)}
+                                                                        disabled={loadingReportId === report.id}
+                                                                        className="inline-flex items-center gap-1 rounded-lg px-2.5 py-1.5 bg-blue-600 text-white text-[11px] font-bold shadow hover:bg-blue-700 transition disabled:opacity-50"
+                                                                    >
+                                                                        {loadingReportId === report.id ? <Loader2 size={12} className="animate-spin" /> : <Eye size={12} />}
+                                                                        Ver
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                    <div className="rounded-xl border border-gray-100 bg-white px-3 py-2 flex items-center justify-between">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setChecklistMobilePage(prev => Math.max(0, prev - 1))}
+                                                            disabled={safeChecklistMobilePage === 0}
+                                                            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-bold text-gray-700 disabled:opacity-40"
+                                                        >
+                                                            <ArrowLeft size={12} />
+                                                            Anterior
+                                                        </button>
+                                                        <span className="text-[11px] font-bold text-gray-500">
+                                                            Página {safeChecklistMobilePage + 1} de {checklistMobileTotalPages}
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setChecklistMobilePage(prev => Math.min(checklistMobileTotalPages - 1, prev + 1))}
+                                                            disabled={safeChecklistMobilePage >= checklistMobileTotalPages - 1}
+                                                            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-bold text-gray-700 disabled:opacity-40"
+                                                        >
+                                                            Próxima
+                                                            <ArrowRight size={12} />
+                                                        </button>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+
+                                        <div className="hidden md:block overflow-x-auto">
                                             <table className="w-full text-left border-collapse">
                                                 <thead>
                                                     <tr className="bg-gray-50/50 border-b border-gray-100">
@@ -9707,7 +9821,7 @@ const App: React.FC = () => {
                                                     </tr>
                                                 </thead>
                                                 <tbody className="divide-y divide-gray-50">
-                                                    {getFilteredHistory().length === 0 ? (
+                                                    {filteredChecklistHistory.length === 0 ? (
                                                         <tr>
                                                             <td colSpan={5} className="px-8 py-24 text-center">
                                                                 <div className="flex flex-col items-center gap-4">
@@ -9720,7 +9834,7 @@ const App: React.FC = () => {
                                                             </td>
                                                         </tr>
                                                     ) : (
-                                                        getFilteredHistory().map(report => {
+                                                        filteredChecklistHistory.map(report => {
                                                             const scoreNum = Number(report.score);
                                                             const scoreFeedback = getScoreFeedback(scoreNum);
 
@@ -9831,7 +9945,7 @@ const App: React.FC = () => {
 
                                             {reportHistory.length > 0 && (
                                                 <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest opacity-60">
-                                                    Mostrando {reportHistory.length} avaliações
+                                                    Mostrando {filteredChecklistHistory.length} avaliações
                                                 </p>
                                             )}
                                         </div>
@@ -9909,7 +10023,72 @@ const App: React.FC = () => {
                                                     Nenhuma conferência de estoque encontrada com os filtros aplicados.
                                                 </div>
                                             ) : (
-                                                <div className="overflow-hidden rounded-2xl border border-gray-100 bg-white">
+                                                <>
+                                                <div className="md:hidden space-y-3">
+                                                    {pagedStockConferenceHistory.map(item => {
+                                                        const createdDate = new Date(item.createdAt);
+                                                        return (
+                                                            <div key={item.id} className="rounded-2xl border border-gray-100 bg-white p-3 shadow-sm">
+                                                                <div className="flex items-start justify-between gap-3">
+                                                                    <div>
+                                                                        <p className="text-[11px] font-bold text-gray-800">
+                                                                            {createdDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })} {createdDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                                                        </p>
+                                                                        <p className="text-sm font-black text-gray-900 mt-0.5">{item.branch}</p>
+                                                                        <p className="text-xs text-gray-500">{item.area}</p>
+                                                                    </div>
+                                                                    <button
+                                                                        onClick={() => handleViewStockConferenceReport(item.id)}
+                                                                        disabled={loadingStockReportId === item.id}
+                                                                        className="inline-flex items-center gap-1 rounded-lg px-2.5 py-2 bg-blue-600 text-white text-[11px] font-bold shadow hover:bg-blue-700 transition disabled:opacity-50"
+                                                                    >
+                                                                        {loadingStockReportId === item.id ? <Loader2 size={13} className="animate-spin" /> : <FileText size={13} />}
+                                                                        Ver
+                                                                    </button>
+                                                                </div>
+                                                                <div className="mt-3 grid grid-cols-3 gap-2">
+                                                                    <div className="rounded-xl bg-gray-50 border border-gray-100 p-2 text-center">
+                                                                        <p className="text-[9px] uppercase tracking-widest text-gray-400 font-black">Total</p>
+                                                                        <p className="text-lg font-black text-gray-800 leading-none mt-1">{item.total}</p>
+                                                                    </div>
+                                                                    <div className="rounded-xl bg-emerald-50 border border-emerald-100 p-2 text-center">
+                                                                        <p className="text-[9px] uppercase tracking-widest text-emerald-600 font-black">Corretos</p>
+                                                                        <p className="text-lg font-black text-emerald-700 leading-none mt-1">{item.matched}</p>
+                                                                    </div>
+                                                                    <div className="rounded-xl bg-red-50 border border-red-100 p-2 text-center">
+                                                                        <p className="text-[9px] uppercase tracking-widest text-red-500 font-black">Diverg.</p>
+                                                                        <p className="text-lg font-black text-red-600 leading-none mt-1">{item.divergent}</p>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                    <div className="rounded-xl border border-gray-100 bg-white px-3 py-2 flex items-center justify-between">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setStockMobilePage(prev => Math.max(0, prev - 1))}
+                                                            disabled={safeStockMobilePage === 0}
+                                                            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-bold text-gray-700 disabled:opacity-40"
+                                                        >
+                                                            <ArrowLeft size={12} />
+                                                            Anterior
+                                                        </button>
+                                                        <span className="text-[11px] font-bold text-gray-500">
+                                                            Página {safeStockMobilePage + 1} de {stockMobileTotalPages}
+                                                        </span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setStockMobilePage(prev => Math.min(stockMobileTotalPages - 1, prev + 1))}
+                                                            disabled={safeStockMobilePage >= stockMobileTotalPages - 1}
+                                                            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-[11px] font-bold text-gray-700 disabled:opacity-40"
+                                                        >
+                                                            Próxima
+                                                            <ArrowRight size={12} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+
+                                                <div className="hidden md:block overflow-hidden rounded-2xl border border-gray-100 bg-white">
                                                     <div className="max-h-[780px] overflow-auto">
                                                         <table className="w-full min-w-[980px] text-left">
                                                             <thead className="sticky top-0 z-10 bg-gray-50 border-b border-gray-100">
@@ -9958,6 +10137,7 @@ const App: React.FC = () => {
                                                             </tbody>
                                                         </table>
                                                     </div>
+                                                </div>
                                                     <div className="px-4 py-3 border-t border-gray-100 bg-gray-50 flex items-center justify-between">
                                                         <span className="text-[11px] text-gray-500">
                                                             {stockConferenceHistory.length} conferência(s) carregada(s)
@@ -9980,7 +10160,7 @@ const App: React.FC = () => {
                                                             <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">Fim do histórico</span>
                                                         )}
                                                     </div>
-                                                </div>
+                                                </>
                                             )}
                                         </div>
                                     )}

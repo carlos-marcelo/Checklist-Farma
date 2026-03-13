@@ -9,6 +9,7 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onEnd, label }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   const [hasSignature, setHasSignature] = useState(false);
+  const hasDrawnRef = useRef(false);
 
   const fillWhite = (ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement) => {
     ctx.save();
@@ -36,49 +37,41 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onEnd, label }) => {
     }
   }, []);
 
-  const getCoordinates = (event: React.MouseEvent | React.TouchEvent) => {
+  const getCoordinates = (event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: 0, y: 0 };
 
     const rect = canvas.getBoundingClientRect();
-    let clientX, clientY;
-
-    if ('touches' in event) {
-      clientX = event.touches[0].clientX;
-      clientY = event.touches[0].clientY;
-    } else {
-      clientX = (event as React.MouseEvent).clientX;
-      clientY = (event as React.MouseEvent).clientY;
-    }
 
     return {
-      x: clientX - rect.left,
-      y: clientY - rect.top
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top
     };
   };
 
-  const startDrawing = (e: React.MouseEvent | React.TouchEvent) => {
-    e.preventDefault();
+  const startDrawing = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
     setIsDrawing(true);
+    hasDrawnRef.current = false;
     const { x, y } = getCoordinates(e);
     const ctx = canvasRef.current?.getContext('2d');
     ctx?.beginPath();
     ctx?.moveTo(x, y);
   };
 
-  const draw = (e: React.MouseEvent | React.TouchEvent) => {
+  const draw = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (!isDrawing) return;
-    e.preventDefault();
     const { x, y } = getCoordinates(e);
     const ctx = canvasRef.current?.getContext('2d');
     ctx?.lineTo(x, y);
     ctx?.stroke();
+    hasDrawnRef.current = true;
     setHasSignature(true);
   };
 
   const endDrawing = () => {
     setIsDrawing(false);
-    if (canvasRef.current && hasSignature) {
+    if (canvasRef.current && hasDrawnRef.current) {
       const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d');
       // Garante fundo branco antes de exportar (corrige fundo preto no PDF / img)
@@ -116,14 +109,12 @@ const SignaturePad: React.FC<SignaturePadProps> = ({ onEnd, label }) => {
           <canvas
             ref={canvasRef}
             className="w-full touch-none cursor-crosshair relative z-10"
-            onMouseDown={startDrawing}
-            onMouseMove={draw}
-            onMouseUp={endDrawing}
-            onMouseLeave={endDrawing}
-            onTouchStart={startDrawing}
-            onTouchMove={draw}
-            onTouchEnd={endDrawing}
-            style={{ height: '160px' }}
+            onPointerDown={startDrawing}
+            onPointerMove={draw}
+            onPointerUp={endDrawing}
+            onPointerCancel={endDrawing}
+            onPointerLeave={endDrawing}
+            style={{ height: '160px', touchAction: 'none' }}
           />
 
           {hasSignature && (

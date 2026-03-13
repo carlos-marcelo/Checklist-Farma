@@ -821,6 +821,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const [termModal, setTermModal] = useState<TermScope | null>(null);
     const [termForm, setTermForm] = useState<TermForm | null>(null);
     const [termDrafts, setTermDrafts] = useState<Record<string, TermForm>>({});
+    const [termFieldErrors, setTermFieldErrors] = useState<Record<string, string>>({});
+    const [termTouchedFields, setTermTouchedFields] = useState<Record<string, boolean>>({});
+    const [termShakeFields, setTermShakeFields] = useState<Record<string, boolean>>({});
     const composeTermDraftsForPersist = useCallback((...maps: Array<Record<string, TermForm> | undefined | null>) => {
         return maps.reduce((acc, current) => mergeTermDraftMaps(acc, (current || {}) as Record<string, TermForm>), {} as Record<string, TermForm>);
     }, []);
@@ -837,9 +840,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
     const termFormRef = useRef<TermForm | null>(null);
     const termDraftsRef = useRef<Record<string, TermForm>>({});
     const rawTermMetricsRef = useRef<typeof rawTermComparisonMetrics>(null);
+    const termShakeTimeoutRef = useRef<number | null>(null);
     useEffect(() => { termFormRef.current = termForm; }, [termForm]);
     useEffect(() => { termDraftsRef.current = termDrafts; }, [termDrafts]);
     useEffect(() => { rawTermMetricsRef.current = rawTermComparisonMetrics; }, [rawTermComparisonMetrics]);
+    useEffect(() => () => {
+        if (termShakeTimeoutRef.current !== null && typeof window !== 'undefined') {
+            window.clearTimeout(termShakeTimeoutRef.current);
+        }
+    }, []);
 
     const termComparisonMetrics = useMemo(() => {
         if (!rawTermComparisonMetrics) return null;
@@ -1383,7 +1392,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                     const file = await CadastrosBaseService.getGlobalBaseFileCached(
                         companyId,
                         key,
-                        key === stockModuleKey ? { forceFresh: true, preferRemote: true } : undefined
+                        key === stockModuleKey ? { forceFresh: true } : undefined
                     );
                     files.push(file);
                 }
@@ -3606,6 +3615,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             : nextFormBase;
         setTermModal(scope);
         setTermForm(nextForm);
+        setTermFieldErrors({});
+        setTermTouchedFields({});
+        setTermShakeFields({});
 
         const scopeGroupIds = getScopeGroupIds(scope);
         const fallbackPools = scope.type === 'custom'
@@ -4046,6 +4058,9 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         setTermModal(null);
         setTermForm(null);
         setTermComparisonMetrics(null);
+        setTermFieldErrors({});
+        setTermTouchedFields({});
+        setTermShakeFields({});
 
         if (!isReadOnlyCompletedView && currentScope && currentForm && currentData) {
             const key = buildTermKey(currentScope);
@@ -4899,10 +4914,136 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         return val;
     };
 
+    const normalizePersonName = (value?: string) => String(value || '').trim().replace(/\s+/g, ' ');
+    const hasNameAndSurname = (value?: string) => normalizePersonName(value).split(' ').filter(Boolean).length >= 2;
+    const cpfDigits = (value?: string) => String(value || '').replace(/\D/g, '');
+    const formatCpf = useCallback((value?: string) => {
+        const digits = cpfDigits(value).slice(0, 11);
+        if (digits.length <= 3) return digits;
+        if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+        if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+        return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+    }, []);
+    const isTermFieldValid = useCallback((fieldKey: string, value?: string) => {
+        const normalized = String(value || '').trim();
+        if (!normalized) return false;
+        if (fieldKey.endsWith('_cpf')) return cpfDigits(value).length >= 11;
+        return hasNameAndSurname(value);
+    }, []);
+    const clearTermFieldError = useCallback((fieldKey: string) => {
+        setTermFieldErrors(prev => {
+            if (!prev[fieldKey]) return prev;
+            const next = { ...prev };
+            delete next[fieldKey];
+            return next;
+        });
+    }, []);
+    const validateTermFieldOnBlur = useCallback((fieldKey: string, value?: string) => {
+        setTermTouchedFields(prev => ({ ...prev, [fieldKey]: true }));
+        const normalized = String(value || '').trim();
+        if (!normalized) {
+            clearTermFieldError(fieldKey);
+            return;
+        }
+        if (fieldKey.endsWith('_cpf')) {
+            if (cpfDigits(value).length < 11) {
+                setTermFieldErrors(prev => ({ ...prev, [fieldKey]: 'CPF deve ter no mínimo 11 números.' }));
+                return;
+            }
+            clearTermFieldError(fieldKey);
+            return;
+        }
+        if (!hasNameAndSurname(value)) {
+            setTermFieldErrors(prev => ({ ...prev, [fieldKey]: 'Informe nome e sobrenome.' }));
+            return;
+        }
+        clearTermFieldError(fieldKey);
+    }, [clearTermFieldError]);
+    const raiseTermFieldErrors = useCallback((nextErrors: Record<string, string>) => {
+        setTermFieldErrors(nextErrors);
+        setTermTouchedFields(prev => {
+            const next = { ...prev };
+            Object.keys(nextErrors).forEach(key => {
+                next[key] = true;
+            });
+            return next;
+        });
+
+        const shakeKeys = Object.keys(nextErrors);
+        const nextShakeState = shakeKeys.reduce((acc, key) => {
+            acc[key] = true;
+            return acc;
+        }, {} as Record<string, boolean>);
+        setTermShakeFields(nextShakeState);
+
+        if (termShakeTimeoutRef.current !== null && typeof window !== 'undefined') {
+            window.clearTimeout(termShakeTimeoutRef.current);
+        }
+        if (typeof window !== 'undefined') {
+            termShakeTimeoutRef.current = window.setTimeout(() => setTermShakeFields({}), 420);
+        }
+
+        const firstInvalidField = shakeKeys[0];
+        if (firstInvalidField && typeof document !== 'undefined') {
+            window.requestAnimationFrame(() => {
+                const el = document.querySelector(`[data-term-field="${firstInvalidField}"]`) as HTMLElement | null;
+                el?.focus();
+                el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            });
+        }
+    }, []);
+
     const handlePrintTerm = async () => {
         if (!data || !termModal || !termForm) return;
         const scopeInfo = buildTermScopeInfo(termModal);
         if (!scopeInfo) return;
+
+        const peopleToValidate = [
+            {
+                label: 'Gestor 1',
+                name: termForm.managerName2,
+                cpf: termForm.managerCpf2,
+                signature: termForm.managerSignature2,
+                nameField: 'manager1_name',
+                cpfField: 'manager1_cpf'
+            },
+            {
+                label: 'Gestor 2',
+                name: termForm.managerName,
+                cpf: termForm.managerCpf,
+                signature: termForm.managerSignature,
+                nameField: 'manager2_name',
+                cpfField: 'manager2_cpf'
+            },
+            ...(termForm.collaborators || []).map((c, idx) => ({
+                label: `Colaborador ${idx + 1}`,
+                name: c.name,
+                cpf: c.cpf,
+                signature: c.signature,
+                nameField: `collab_${idx}_name`,
+                cpfField: `collab_${idx}_cpf`
+            }))
+        ];
+
+        const filledPeople = peopleToValidate.filter(p =>
+            normalizePersonName(p.name) || cpfDigits(p.cpf) || String(p.signature || '').trim()
+        );
+
+        const fieldErrors: Record<string, string> = {};
+        filledPeople.forEach(person => {
+            if (!hasNameAndSurname(person.name)) {
+                fieldErrors[person.nameField] = `${person.label}: informe nome e sobrenome.`;
+            }
+            if (cpfDigits(person.cpf).length < 11) {
+                fieldErrors[person.cpfField] = `${person.label}: CPF deve ter no mínimo 11 números.`;
+            }
+        });
+
+        if (Object.keys(fieldErrors).length > 0) {
+            raiseTermFieldErrors(fieldErrors);
+            return;
+        }
+        if (Object.keys(termFieldErrors).length > 0) setTermFieldErrors({});
 
         if (isMaster) {
             const key = buildTermKey(termModal);
@@ -6407,21 +6548,24 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     return (
         <div className="min-h-screen bg-[#f1f5f9] pb-32 font-sans rounded-3xl overflow-x-hidden overflow-y-visible shadow-inner">
-            <header className="bg-slate-900 text-white sticky top-0 z-[1002] px-8 py-3 shadow-xl flex justify-between items-center border-b border-white/5">
-                <div className="flex items-center gap-6">
+            <header className="bg-slate-900 text-white sticky top-0 z-[1002] px-4 md:px-8 py-3 shadow-xl border-b border-white/5">
+                <div className="max-w-[1400px] mx-auto w-full flex flex-col gap-3 md:flex-row md:justify-between md:items-center">
+                <div className="flex flex-wrap items-center gap-3 md:gap-6 min-w-0">
                     <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-indigo-500 rounded-lg flex items-center justify-center shadow-lg rotate-2">
                             <ClipboardList className="w-6 h-6 text-white" />
                         </div>
-                        <h1 className="text-xl font-black italic tracking-tighter leading-none">AuditFlow</h1>
+                        <h1 className="text-lg md:text-xl font-black italic tracking-tighter leading-none whitespace-nowrap">AuditFlow</h1>
                     </div>
-                    <div className="h-8 w-px bg-white/10 mx-2"></div>
-                    <div className="flex items-center bg-gradient-to-r from-indigo-600 via-indigo-700 to-indigo-900 px-8 py-2.5 rounded-2xl border-2 border-indigo-400/50 shadow-[0_8px_25px_rgba(79,70,229,0.5)] transform hover:scale-105 transition-transform duration-300">
-                        <div className="flex flex-col">
-                            <span className="text-[9px] font-black uppercase tracking-[0.3em] text-indigo-300 leading-none mb-1">AUDITANDO AGORA</span>
-                            <span className="text-2xl font-black italic tracking-tighter leading-tight text-white drop-shadow-md">FILIAL UNIDADE F{data.filial}</span>
+                    <div className="hidden md:block h-8 w-px bg-white/10 mx-2"></div>
+                    <div className="w-full md:w-auto flex items-center justify-between bg-gradient-to-r from-indigo-600 via-indigo-700 to-indigo-900 px-4 md:px-8 py-2.5 rounded-2xl border-2 border-indigo-400/50 shadow-[0_8px_25px_rgba(79,70,229,0.5)] transition-transform duration-300">
+                        <div className="flex flex-col min-w-0">
+                            <span className="text-[8px] md:text-[9px] font-black uppercase tracking-[0.22em] md:tracking-[0.3em] text-indigo-300 leading-none mb-1 whitespace-nowrap">AUDITANDO AGORA</span>
+                            <span className="text-lg md:text-2xl font-black italic tracking-tight md:tracking-tighter leading-tight text-white drop-shadow-md whitespace-nowrap">
+                                FILIAL <span className="hidden sm:inline">UNIDADE </span>F{data.filial}
+                            </span>
                         </div>
-                        <div className="ml-6 flex flex-col items-center">
+                        <div className="ml-3 md:ml-6 flex flex-col items-center shrink-0">
                             <div className="w-3 h-3 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_10px_#34d399]"></div>
                             <span className="text-[8px] font-bold text-emerald-400 mt-1 uppercase">LIVE</span>
                         </div>
@@ -6431,7 +6575,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         <span className="text-xl font-black italic tracking-tight text-white leading-tight">Nº {accessedAuditNumber}</span>
                     </div>
                 </div>
-                <div className="flex gap-3">
+                <div className="flex flex-wrap justify-end gap-2 md:gap-3">
                     <div className="hidden xl:flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10">
                         <button
                             onClick={handleFinishAudit}
@@ -6480,7 +6624,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             setIsRefreshing(false);
                         }}
                         disabled={isRefreshing}
-                        className="relative px-5 py-2.5 rounded-xl font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all shadow-lg active:scale-95"
+                        className="relative px-3 md:px-5 py-2.5 rounded-xl font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all shadow-lg active:scale-95 whitespace-nowrap"
                         style={{
                             background: isRefreshing
                                 ? 'linear-gradient(135deg, #f59e0b, #d97706)'
@@ -6492,18 +6636,20 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                         title="Buscar dados atualizados do servidor"
                     >
                         <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-                        {isRefreshing ? 'ATUALIZANDO...' : 'ATUALIZAR'}
+                        <span className="hidden sm:inline">{isRefreshing ? 'ATUALIZANDO...' : 'ATUALIZAR'}</span>
+                        <span className="sm:hidden">{isRefreshing ? 'SYNC...' : 'SYNC'}</span>
                     </button>
-                    <button onClick={handleExportPDF} className="bg-white/10 hover:bg-white/20 px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all border border-white/10">
-                        <FileBox className="w-4 h-4" /> PDF ANALÍTICO
+                    <button onClick={handleExportPDF} className="bg-white/10 hover:bg-white/20 px-3 md:px-5 py-2 rounded-xl text-white font-black text-[9px] uppercase tracking-widest flex items-center gap-2 transition-all border border-white/10 whitespace-nowrap">
+                        <FileBox className="w-4 h-4" /> <span className="hidden sm:inline">PDF ANALÍTICO</span><span className="sm:hidden">PDF</span>
                     </button>
                     <button onClick={handleSafeExit} className="w-10 h-10 rounded-xl bg-red-600/20 text-red-500 border border-red-500/30 flex items-center justify-center hover:bg-red-600 hover:text-white transition-all shadow-lg active:scale-90" title="Sair e Salvar">
                         <Power className="w-5 h-5" />
                     </button>
                 </div>
+                </div>
             </header>
 
-            <div className="sticky top-[76px] z-[1001] bg-white/90 backdrop-blur-xl border-b border-slate-200 shadow-lg px-8 py-5">
+            <div className="sticky top-[72px] md:top-[76px] z-[1001] bg-white/90 backdrop-blur-xl border-b border-slate-200 shadow-lg px-4 md:px-8 py-4 md:py-5">
                 {(partialInfoList.length > 0 || (data?.partialCompleted && data.partialCompleted.length > 0)) && (
                     <div className="max-w-[1400px] mx-auto mb-4">
                         <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-2xl shadow-sm">
@@ -7269,19 +7415,48 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             <input
                                                 type="text"
                                                 value={termForm.managerName2}
-                                                onChange={(e) => updateTermForm(prev => ({ ...prev, managerName2: e.target.value }))}
+                                                onChange={(e) => {
+                                                    clearTermFieldError('manager1_name');
+                                                    updateTermForm(prev => ({ ...prev, managerName2: e.target.value }));
+                                                }}
+                                                onBlur={(e) => validateTermFieldOnBlur('manager1_name', e.target.value)}
                                                 placeholder="Nome do Gestor 1"
+                                                data-term-field="manager1_name"
                                                 readOnly={!canEditTerm}
-                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                className={`w-full bg-white border rounded-xl px-4 py-2 font-bold text-xs ${
+                                                    termFieldErrors.manager1_name
+                                                        ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
+                                                        : (termTouchedFields.manager1_name && isTermFieldValid('manager1_name', termForm.managerName2)
+                                                            ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
+                                                            : 'border-slate-200 text-slate-700')
+                                                } ${termShakeFields.manager1_name ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
+                                            {termFieldErrors.manager1_name && (
+                                                <p className="text-[10px] font-bold text-red-600">{termFieldErrors.manager1_name}</p>
+                                            )}
                                             <input
                                                 type="text"
                                                 value={termForm.managerCpf2}
-                                                onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf2: e.target.value }))}
+                                                onChange={(e) => {
+                                                    clearTermFieldError('manager1_cpf');
+                                                    updateTermForm(prev => ({ ...prev, managerCpf2: formatCpf(e.target.value) }));
+                                                }}
+                                                onBlur={(e) => validateTermFieldOnBlur('manager1_cpf', e.target.value)}
                                                 placeholder="CPF Gestor 1"
+                                                data-term-field="manager1_cpf"
+                                                maxLength={14}
                                                 readOnly={!canEditTerm}
-                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                className={`w-full bg-white border rounded-xl px-4 py-2 font-bold text-xs ${
+                                                    termFieldErrors.manager1_cpf
+                                                        ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
+                                                        : (termTouchedFields.manager1_cpf && isTermFieldValid('manager1_cpf', termForm.managerCpf2)
+                                                            ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
+                                                            : 'border-slate-200 text-slate-700')
+                                                } ${termShakeFields.manager1_cpf ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
+                                            {termFieldErrors.manager1_cpf && (
+                                                <p className="text-[10px] font-bold text-red-600">{termFieldErrors.manager1_cpf}</p>
+                                            )}
                                         </div>
                                         {termForm.managerSignature2 ? (
                                             <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
@@ -7312,19 +7487,48 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                             <input
                                                 type="text"
                                                 value={termForm.managerName}
-                                                onChange={(e) => updateTermForm(prev => ({ ...prev, managerName: e.target.value }))}
+                                                onChange={(e) => {
+                                                    clearTermFieldError('manager2_name');
+                                                    updateTermForm(prev => ({ ...prev, managerName: e.target.value }));
+                                                }}
+                                                onBlur={(e) => validateTermFieldOnBlur('manager2_name', e.target.value)}
                                                 placeholder="Nome do Gestor 2"
+                                                data-term-field="manager2_name"
                                                 readOnly={!canEditTerm}
-                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                className={`w-full bg-white border rounded-xl px-4 py-2 font-bold text-xs ${
+                                                    termFieldErrors.manager2_name
+                                                        ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
+                                                        : (termTouchedFields.manager2_name && isTermFieldValid('manager2_name', termForm.managerName)
+                                                            ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
+                                                            : 'border-slate-200 text-slate-700')
+                                                } ${termShakeFields.manager2_name ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
+                                            {termFieldErrors.manager2_name && (
+                                                <p className="text-[10px] font-bold text-red-600">{termFieldErrors.manager2_name}</p>
+                                            )}
                                             <input
                                                 type="text"
                                                 value={termForm.managerCpf}
-                                                onChange={(e) => updateTermForm(prev => ({ ...prev, managerCpf: e.target.value }))}
+                                                onChange={(e) => {
+                                                    clearTermFieldError('manager2_cpf');
+                                                    updateTermForm(prev => ({ ...prev, managerCpf: formatCpf(e.target.value) }));
+                                                }}
+                                                onBlur={(e) => validateTermFieldOnBlur('manager2_cpf', e.target.value)}
                                                 placeholder="CPF Gestor 2"
+                                                data-term-field="manager2_cpf"
+                                                maxLength={14}
                                                 readOnly={!canEditTerm}
-                                                className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-bold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                className={`w-full bg-white border rounded-xl px-4 py-2 font-bold text-xs ${
+                                                    termFieldErrors.manager2_cpf
+                                                        ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
+                                                        : (termTouchedFields.manager2_cpf && isTermFieldValid('manager2_cpf', termForm.managerCpf)
+                                                            ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
+                                                            : 'border-slate-200 text-slate-700')
+                                                } ${termShakeFields.manager2_cpf ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                             />
+                                            {termFieldErrors.manager2_cpf && (
+                                                <p className="text-[10px] font-bold text-red-600">{termFieldErrors.manager2_cpf}</p>
+                                            )}
                                         </div>
                                         {termForm.managerSignature ? (
                                             <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
@@ -7355,14 +7559,6 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                             <div className="space-y-3">
                                 <div className="flex items-center justify-between">
                                     <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400">Colaboradores</h4>
-                                    {canEditTerm && (
-                                        <button
-                                            onClick={() => updateTermForm(prev => ({ ...prev, collaborators: [...prev.collaborators, { name: '', cpf: '', signature: '' }] }))}
-                                            className="text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"
-                                        >
-                                            + Adicionar
-                                        </button>
-                                    )}
                                 </div>
                                 <div className="grid grid-cols-1 gap-3">
                                     {termForm.collaborators.map((collab, idx) => {
@@ -7377,26 +7573,59 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                         <input
                                                             type="text"
                                                             value={collab.name}
-                                                            onChange={(e) => updateTermForm(prev => ({
-                                                                ...prev,
-                                                                collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, name: e.target.value } : c)
-                                                            }))}
+                                                            onChange={(e) => {
+                                                                clearTermFieldError(`collab_${idx}_name`);
+                                                                updateTermForm(prev => ({
+                                                                    ...prev,
+                                                                    collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, name: e.target.value } : c)
+                                                                }));
+                                                            }}
+                                                            onBlur={(e) => validateTermFieldOnBlur(`collab_${idx}_name`, e.target.value)}
                                                             placeholder={`Colaborador ${collabNumber}`}
+                                                            data-term-field={`collab_${idx}_name`}
                                                             readOnly={!canEditTerm}
-                                                            className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                            className={`w-full bg-white border rounded-xl px-4 py-2 font-semibold text-xs ${
+                                                                termFieldErrors[`collab_${idx}_name`]
+                                                                    ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
+                                                                    : (termTouchedFields[`collab_${idx}_name`] && isTermFieldValid(`collab_${idx}_name`, collab.name)
+                                                                        ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
+                                                                        : 'border-slate-200 text-slate-700')
+                                                            } ${termShakeFields[`collab_${idx}_name`] ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                                         />
                                                         <input
                                                             type="text"
                                                             value={collab.cpf}
-                                                            onChange={(e) => updateTermForm(prev => ({
-                                                                ...prev,
-                                                                collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, cpf: e.target.value } : c)
-                                                            }))}
+                                                            onChange={(e) => {
+                                                                clearTermFieldError(`collab_${idx}_cpf`);
+                                                                updateTermForm(prev => ({
+                                                                    ...prev,
+                                                                    collaborators: prev.collaborators.map((c, i) => i === idx ? { ...c, cpf: formatCpf(e.target.value) } : c)
+                                                                }));
+                                                            }}
+                                                            onBlur={(e) => validateTermFieldOnBlur(`collab_${idx}_cpf`, e.target.value)}
                                                             placeholder={`CPF ${collabNumber}`}
+                                                            data-term-field={`collab_${idx}_cpf`}
+                                                            maxLength={14}
                                                             readOnly={!canEditTerm}
-                                                            className={`w-full bg-white border border-slate-200 rounded-xl px-4 py-2 font-semibold text-xs text-slate-700 ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
+                                                            className={`w-full bg-white border rounded-xl px-4 py-2 font-semibold text-xs ${
+                                                                termFieldErrors[`collab_${idx}_cpf`]
+                                                                    ? 'border-red-400 bg-red-50 text-red-700 placeholder:text-red-400'
+                                                                    : (termTouchedFields[`collab_${idx}_cpf`] && isTermFieldValid(`collab_${idx}_cpf`, collab.cpf)
+                                                                        ? 'border-emerald-400 bg-emerald-50 text-emerald-700 placeholder:text-emerald-400'
+                                                                        : 'border-slate-200 text-slate-700')
+                                                            } ${termShakeFields[`collab_${idx}_cpf`] ? 'term-field-shake' : ''} ${!canEditTerm ? 'bg-slate-50 cursor-not-allowed' : ''}`}
                                                         />
                                                     </div>
+                                                    {(termFieldErrors[`collab_${idx}_name`] || termFieldErrors[`collab_${idx}_cpf`]) && (
+                                                        <div className="space-y-1 -mt-1">
+                                                            {termFieldErrors[`collab_${idx}_name`] && (
+                                                                <p className="text-[10px] font-bold text-red-600">{termFieldErrors[`collab_${idx}_name`]}</p>
+                                                            )}
+                                                            {termFieldErrors[`collab_${idx}_cpf`] && (
+                                                                <p className="text-[10px] font-bold text-red-600">{termFieldErrors[`collab_${idx}_cpf`]}</p>
+                                                            )}
+                                                        </div>
+                                                    )}
                                                     {collab.signature ? (
                                                         <div className="relative border border-slate-200 rounded-xl overflow-hidden bg-white h-40 flex items-center justify-center">
                                                             <img src={collab.signature} alt="Assinatura Colaborador" className="max-h-full" />
@@ -7433,6 +7662,18 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                         );
                                     })}
                                 </div>
+                                {canEditTerm && (
+                                    <div className="flex justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => updateTermForm(prev => ({ ...prev, collaborators: [...prev.collaborators, { name: '', cpf: '', signature: '' }] }))}
+                                            className="text-[10px] font-black uppercase tracking-widest text-indigo-600 bg-indigo-50 border border-indigo-100 px-3 py-1.5 rounded-lg hover:bg-indigo-600 hover:text-white transition-all"
+                                            title="Adicionar novo colaborador ao final da lista"
+                                        >
+                                            + Adicionar no final
+                                        </button>
+                                    </div>
+                                )}
                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">A assinatura deve ser igual ao documento.</p>
                                 <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Todos colaboradores da Filial devem assinar.</p>
                             </div>
@@ -7487,50 +7728,57 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                         <X className="w-4 h-4" />
                                                     </button>
                                                     <h5 className="text-[10px] font-black text-indigo-800 uppercase tracking-widest mb-3">Resumo Identificado</h5>
-                                                    <div className="grid grid-cols-2 lg:grid-cols-2 gap-4">
-                                                        {/* Row 1: Quantities */}
-                                                        <div className="flex justify-between items-center bg-white p-3 rounded border border-slate-100">
-                                                            <div>
-                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Sist (Qtde)</p>
-                                                                <p className="font-bold text-slate-700">{Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')} un.</p>
-                                                            </div>
-                                                            <div className="text-right">
-                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Físico (Qtde)</p>
-                                                                <p className="font-bold text-slate-700">{Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')} un.</p>
-                                                            </div>
-                                                            <div className="text-right pl-4 border-l border-slate-100">
-                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Diferença (Qtde)</p>
-                                                                <p className={`font-black text-base ${termComparisonMetrics.diffQty < 0 ? 'text-red-500' : termComparisonMetrics.diffQty > 0 ? 'text-green-500' : 'text-slate-600'}`}>
-                                                                    {termComparisonMetrics.diffQty > 0 ? '+' : ''}{Math.round(termComparisonMetrics.diffQty).toLocaleString('pt-BR')} un.
-                                                                </p>
+                                                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                                                        <div className="bg-white p-3 rounded border border-slate-100">
+                                                            <div className="grid grid-cols-3 gap-2">
+                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
+                                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Sist</p>
+                                                                    <p className="mt-1 text-xl font-black text-slate-700 tabular-nums leading-none">{Math.round(termComparisonMetrics.sysQty).toLocaleString('pt-BR')}</p>
+                                                                    <p className="text-[10px] font-bold text-slate-500">un.</p>
+                                                                </div>
+                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
+                                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Est. Físico</p>
+                                                                    <p className="mt-1 text-xl font-black text-slate-700 tabular-nums leading-none">{Math.round(termComparisonMetrics.countedQty).toLocaleString('pt-BR')}</p>
+                                                                    <p className="text-[10px] font-bold text-slate-500">un.</p>
+                                                                </div>
+                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
+                                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Diferença</p>
+                                                                    <p className={`mt-1 text-xl font-black tabular-nums leading-none ${termComparisonMetrics.diffQty < 0 ? 'text-red-500' : termComparisonMetrics.diffQty > 0 ? 'text-green-500' : 'text-slate-600'}`}>
+                                                                        {termComparisonMetrics.diffQty > 0 ? '+' : ''}{Math.round(termComparisonMetrics.diffQty).toLocaleString('pt-BR')}
+                                                                    </p>
+                                                                    <p className="text-[10px] font-bold text-slate-500">un.</p>
+                                                                </div>
                                                             </div>
                                                         </div>
 
-                                                        {/* Row 2: Finances */}
-                                                        <div className="flex justify-between items-center bg-white p-3 rounded border border-slate-100">
-                                                            <div>
-                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Sist</p>
-                                                                <p className="font-bold text-slate-700">{termComparisonMetrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
-                                                            </div>
-                                                            <div className="text-right">
-                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Físico</p>
-                                                                <p className="font-bold text-slate-700">{termComparisonMetrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}</p>
-                                                            </div>
-                                                            <div className="text-right pl-4 border-l border-slate-100">
-                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Resultado Fin.</p>
-                                                                <div className="flex flex-col items-end">
-                                                                    <span className={`font-black text-base ${termComparisonMetrics.diffCost < 0 ? 'text-red-600' : termComparisonMetrics.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>
-                                                                        {termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
-                                                                    </span>
-                                                                    <span className={`text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${termComparisonMetrics.diffCost < 0 ? 'bg-red-100 text-red-600' : termComparisonMetrics.diffCost > 0 ? 'bg-green-100 text-green-600' : 'bg-slate-200 text-slate-600'}`}>
-                                                                        {termComparisonMetrics.diffCost < 0 ? 'Prejuízo' : termComparisonMetrics.diffCost > 0 ? 'Sobra' : 'Zero'}
-                                                                    </span>
-                                                                    {representativity !== null && (
-                                                                        <span className="text-[9px] font-black text-slate-500 uppercase tracking-widest mt-1">
-                                                                            Rep. Auditada: {representativity.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
-                                                                        </span>
-                                                                    )}
+                                                        <div className="bg-white p-3 rounded border border-slate-100">
+                                                            <div className="grid grid-cols-2 gap-2">
+                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
+                                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Sist</p>
+                                                                    <p className="mt-1 text-base md:text-lg font-black text-slate-700 tabular-nums leading-tight break-words">
+                                                                        {termComparisonMetrics.sysCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                    </p>
                                                                 </div>
+                                                                <div className="rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
+                                                                    <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Custo Físico</p>
+                                                                    <p className="mt-1 text-base md:text-lg font-black text-slate-700 tabular-nums leading-tight break-words">
+                                                                        {termComparisonMetrics.countedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+                                                            <div className="mt-2 rounded-lg border border-slate-100 bg-slate-50 px-2 py-2 text-center">
+                                                                <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest">Resultado Financeiro</p>
+                                                                <p className={`mt-1 text-2xl font-black tabular-nums leading-none ${termComparisonMetrics.diffCost < 0 ? 'text-red-600' : termComparisonMetrics.diffCost > 0 ? 'text-green-600' : 'text-slate-600'}`}>
+                                                                    {termComparisonMetrics.diffCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                                                                </p>
+                                                                <span className={`mt-1 inline-block text-[9px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded ${termComparisonMetrics.diffCost < 0 ? 'bg-red-100 text-red-600' : termComparisonMetrics.diffCost > 0 ? 'bg-green-100 text-green-600' : 'bg-slate-200 text-slate-600'}`}>
+                                                                    {termComparisonMetrics.diffCost < 0 ? 'Prejuízo' : termComparisonMetrics.diffCost > 0 ? 'Sobra' : 'Zero'}
+                                                                </span>
+                                                                {representativity !== null && (
+                                                                    <p className="mt-1 text-[10px] font-black text-slate-500 uppercase tracking-widest">
+                                                                        Rep. Auditada: {representativity.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}%
+                                                                    </p>
+                                                                )}
                                                             </div>
                                                         </div>
                                                     </div>
@@ -7539,11 +7787,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                         <p className="text-[9px] font-black text-indigo-400 uppercase tracking-widest mb-1">
                                                             Totais dos Itens Conferidos
                                                         </p>
-                                                        <div className="flex items-center justify-between gap-4">
-                                                            <span className="font-black text-slate-700">
+                                                        <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                                                            <span className="font-black text-slate-700 tabular-nums">
                                                                 {Math.round(scopeAuditedQty).toLocaleString('pt-BR')} un.
                                                             </span>
-                                                            <span className="font-black text-slate-700">
+                                                            <span className="font-black text-slate-700 tabular-nums break-words">
                                                                 {scopeAuditedCost.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
                                                             </span>
                                                         </div>
@@ -7795,6 +8043,15 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         .custom-scrollbar::-webkit-scrollbar-track { background: #f8fafc; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 12px; border: 3px solid #f8fafc; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .term-field-shake { animation: termFieldShake 0.35s ease-in-out; }
+        @keyframes termFieldShake {
+          0% { transform: translateX(0); }
+          20% { transform: translateX(-5px); }
+          40% { transform: translateX(5px); }
+          60% { transform: translateX(-4px); }
+          80% { transform: translateX(4px); }
+          100% { transform: translateX(0); }
+        }
       `}</style>
         </div >
     );
