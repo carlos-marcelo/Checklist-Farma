@@ -671,6 +671,8 @@ const parseCustomDraftKeyMeta = (draftKey: string): null | { batchId?: string; s
     return { batchId: undefined, scopesPart: match[1] || '' };
 };
 
+const GLOBAL_UNIFIED_TERM_BATCH_ID = '__global_unified_term__';
+
 const draftKeyTouchesGroup = (draftKey: string, groupId?: string | number): boolean => {
     const target = normalizeScopeId(groupId);
     if (!target) return false;
@@ -3690,6 +3692,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
 
     const openTermModal = (scope: TermScope) => {
         const key = buildTermKey(scope);
+        const isGlobalUnifiedCustomTerm = scope.type === 'custom' && normalizeScopeId(scope.batchId) === GLOBAL_UNIFIED_TERM_BATCH_ID;
         let draft = termDrafts[key];
         const legacyKey = getLegacyCustomTermKey(scope);
         if (!draft && scope.type === 'custom' && scope.batchId && legacyKey) draft = termDrafts[legacyKey];
@@ -3703,7 +3706,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
             : (signerTemplate
                 ? applyTermSigners(createDefaultTermForm(), signerTemplate)
                 : createDefaultTermForm());
-        const nextForm = (!hasExplicitRemovalDraft && backupMetrics && !nextFormBase?.excelMetrics)
+        const nextForm = (!isGlobalUnifiedCustomTerm && !hasExplicitRemovalDraft && backupMetrics && !nextFormBase?.excelMetrics)
             ? { ...nextFormBase, excelMetrics: backupMetrics }
             : nextFormBase;
         setTermModal(scope);
@@ -3715,7 +3718,12 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const scopeGroupIds = getScopeGroupIds(scope);
         const fallbackPools = scope.type === 'custom'
             ? (scope.batchId
-                ? scopeGroupIds.flatMap(groupId => getExcelPoolsByGroupFromDrafts(termDrafts, groupId, { batchId: scope.batchId }))
+                ? (isGlobalUnifiedCustomTerm
+                    ? Object.entries(termDrafts || {})
+                        .filter(([draftKey, draft]) => draftKey !== key && !!draft?.excelMetrics && !draft?.excelMetricsRemovedAt)
+                        .map(([, draft]) => draft!.excelMetrics)
+                        .filter(Boolean)
+                    : scopeGroupIds.flatMap(groupId => getExcelPoolsByGroupFromDrafts(termDrafts, groupId, { batchId: scope.batchId })))
                 : [])
             : (() => {
                 const targetCatKeys = new Set(
@@ -3767,9 +3775,11 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         const hasExplicitRemoval = !!(draft?.excelMetricsRemovedAt && !draft?.excelMetrics);
         const rawPool = hasExplicitRemoval
             ? null
-            : (draft?.excelMetrics || mergeExcelMetricsPools(fallbackPools as any[]));
+            : (isGlobalUnifiedCustomTerm
+                ? mergeExcelMetricsPools(fallbackPools as any[])
+                : (draft?.excelMetrics || mergeExcelMetricsPools(fallbackPools as any[])));
 
-        const hasDirectExcelMetrics = !!draft?.excelMetrics;
+        const hasDirectExcelMetrics = !!draft?.excelMetrics && !isGlobalUnifiedCustomTerm;
         let nextMetrics = hasDirectExcelMetrics ? rawPool : null;
         const metricsMissingScopeIds = (metrics: any) => {
             if (!metrics) return false;
@@ -5109,15 +5119,7 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                 signature: termForm.managerSignature,
                 nameField: 'manager2_name',
                 cpfField: 'manager2_cpf'
-            },
-            ...(termForm.collaborators || []).map((c, idx) => ({
-                label: `Colaborador ${idx + 1}`,
-                name: c.name,
-                cpf: c.cpf,
-                signature: c.signature,
-                nameField: `collab_${idx}_name`,
-                cpfField: `collab_${idx}_cpf`
-            }))
+            }
         ];
 
         const filledPeople = peopleToValidate.filter(p =>
@@ -6283,6 +6285,48 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
         });
     };
 
+    const openGlobalUnifiedTerm = () => {
+        if (!data) return;
+        const map = new Map<string, { groupId?: string; deptId?: string; catId?: string }>();
+
+        (data.partialCompleted || []).forEach(p => {
+            const scope = {
+                groupId: normalizeScopeId(p.groupId),
+                deptId: normalizeScopeId(p.deptId),
+                catId: normalizeScopeId(p.catId)
+            };
+            if (!scope.groupId) return;
+            map.set(partialScopeKey(scope), scope);
+        });
+
+        if (map.size === 0) {
+            data.groups.forEach(group => {
+                group.departments.forEach(dept => {
+                    dept.categories.forEach(cat => {
+                        const scope = {
+                            groupId: normalizeScopeId(group.id),
+                            deptId: normalizeScopeId(dept.id),
+                            catId: normalizeScopeId(cat.id)
+                        };
+                        map.set(partialScopeKey(scope), scope);
+                    });
+                });
+            });
+        }
+
+        const customScopes = Array.from(map.entries())
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([, scope]) => scope);
+        if (customScopes.length === 0) return;
+
+        openTermModal({
+            type: 'custom',
+            customScopes,
+            customLabel: 'Termo Único Geral - 100% da Auditoria',
+            batchId: GLOBAL_UNIFIED_TERM_BATCH_ID
+        });
+    };
+
     const resetPartialHistory = useCallback(async () => {
         if (!data) return;
         alert("Proteção ativa: não é permitido zerar contagens finalizadas nem termos.");
@@ -6890,6 +6934,22 @@ const AuditModule: React.FC<AuditModuleProps> = ({ userEmail, userName, userRole
                                                         </div>
                                                     </div>
                                                 ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                    {branchMetrics.progress >= 100 && (
+                                        <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-3">
+                                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                                                <div>
+                                                    <div className="text-[9px] font-black uppercase tracking-widest text-emerald-700/80">Termo Único Geral (100%)</div>
+                                                    <div className="text-[11px] font-semibold text-emerald-900/80">Consolida todas as divergências em um único termo final.</div>
+                                                </div>
+                                                <button
+                                                    onClick={openGlobalUnifiedTerm}
+                                                    className="w-full sm:w-auto text-xs font-black uppercase tracking-wider bg-emerald-600 text-white border border-emerald-700 px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors"
+                                                >
+                                                    Abrir Termo Geral
+                                                </button>
                                             </div>
                                         </div>
                                     )}
