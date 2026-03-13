@@ -433,6 +433,8 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
   const [cameraStatusMsg, setCameraStatusMsg] = useState('Posicione o código de barras dentro do quadro.');
   const [isTorchSupported, setIsTorchSupported] = useState(false);
   const [isTorchOn, setIsTorchOn] = useState(false);
+  const [isCameraPaused, setIsCameraPaused] = useState(false);
+  const [lightAssistEnabled, setLightAssistEnabled] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const countRef = useRef<HTMLInputElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1128,7 +1130,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     processScannedCode(scanInput, true);
   };
 
-  const stopCameraScanner = useCallback(() => {
+  const clearCameraResources = useCallback((closeModal = false) => {
     if (cameraLoopRef.current !== null) {
       window.clearInterval(cameraLoopRef.current);
       cameraLoopRef.current = null;
@@ -1138,12 +1140,20 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       cameraStreamRef.current = null;
     }
     imageCaptureRef.current = null;
-    setIsCameraOpen(false);
-    setCameraStatusMsg('Posicione o código de barras dentro do quadro.');
     setIsTorchOn(false);
-    setIsTorchSupported(false);
+    if (closeModal) {
+      setIsCameraOpen(false);
+      setIsTorchSupported(false);
+      setIsCameraPaused(false);
+      setLightAssistEnabled(false);
+      setCameraStatusMsg('Posicione o código de barras dentro do quadro.');
+    }
     lastDetectedCodeRef.current = '';
   }, []);
+
+  const stopCameraScanner = useCallback(() => {
+    clearCameraResources(true);
+  }, [clearCameraResources]);
 
   const applyTorch = useCallback(async (enabled: boolean) => {
     const videoTrack = cameraStreamRef.current?.getVideoTracks?.()?.[0];
@@ -1198,6 +1208,13 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     setCameraStatusMsg(next ? 'Lanterna ligada para facilitar a leitura.' : 'Lanterna desligada.');
   }, [applyTorch, isTorchOn, isTorchSupported]);
 
+  const pauseCameraForExternalTorch = useCallback(() => {
+    clearCameraResources(false);
+    setIsCameraPaused(true);
+    setIsTorchSupported(false);
+    setCameraStatusMsg('Câmera pausada. Agora você pode usar a lanterna externa do celular e depois retomar.');
+  }, [clearCameraResources]);
+
   const startCameraScanner = useCallback(async () => {
     const BarcodeDetectorCtor = (window as any).BarcodeDetector;
     if (!BarcodeDetectorCtor) {
@@ -1207,6 +1224,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
     }
 
     try {
+      clearCameraResources(false);
       let stream: MediaStream;
       try {
         stream = await navigator.mediaDevices.getUserMedia({
@@ -1248,7 +1266,15 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       setIsTorchSupported(torchAvailable);
       setIsTorchOn(false);
       setIsCameraOpen(true);
+      setIsCameraPaused(false);
       setCameraStatusMsg('Câmera ativa. Mire no código para bipar.');
+
+      if (torchAvailable) {
+        const torchAuto = await applyTorch(true);
+        if (torchAuto) {
+          setCameraStatusMsg('Câmera ativa com lanterna ligada. Mire no código para bipar.');
+        }
+      }
 
       window.setTimeout(() => {
         if (videoRef.current) {
@@ -1299,9 +1325,10 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
       }, 250);
     } catch {
       setIsCameraOpen(true);
+      setIsCameraPaused(false);
       setCameraStatusMsg('Permissão de câmera negada ou indisponível neste dispositivo.');
     }
-  }, [processScannedCode, stopCameraScanner]);
+  }, [applyTorch, clearCameraResources, processScannedCode, stopCameraScanner]);
 
   useEffect(() => {
     return () => {
@@ -2767,7 +2794,7 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
               </button>
             </div>
             <div className="p-4">
-              <div className="mb-3 flex items-center justify-end">
+              <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => void toggleTorch()}
@@ -2781,19 +2808,44 @@ export const StockConference = ({ userEmail, userName, companies = [], onReportS
                   {isTorchOn ? <FlashlightOff className="w-4 h-4" /> : <Flashlight className="w-4 h-4" />}
                   {isTorchOn ? 'Desligar lanterna' : 'Ligar lanterna'}
                 </button>
+                <button
+                  type="button"
+                  onClick={isCameraPaused ? () => void startCameraScanner() : pauseCameraForExternalTorch}
+                  className="inline-flex items-center gap-2 rounded-lg border border-sky-300 bg-sky-100 px-3 py-1.5 text-xs font-semibold text-sky-800 hover:bg-sky-200 transition"
+                >
+                  {isCameraPaused ? 'Retomar câmera' : 'Pausar câmera'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLightAssistEnabled(prev => !prev)}
+                  className={`inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-xs font-semibold transition ${lightAssistEnabled
+                    ? 'border-yellow-300 bg-yellow-100 text-yellow-800 hover:bg-yellow-200'
+                    : 'border-gray-700 bg-gray-900 text-gray-200 hover:bg-gray-800'}`}
+                >
+                  {lightAssistEnabled ? 'Desativar iluminação' : 'Modo iluminação'}
+                </button>
               </div>
               <div className="relative rounded-xl border border-emerald-400/40 overflow-hidden bg-black">
-                <video
-                  ref={videoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="w-full aspect-[3/4] object-cover"
-                />
+                {!isCameraPaused ? (
+                  <video
+                    ref={videoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    className="w-full aspect-[3/4] object-cover"
+                  />
+                ) : (
+                  <div className="w-full aspect-[3/4] flex items-center justify-center text-gray-300 text-sm px-6 text-center">
+                    Câmera pausada para liberar hardware. Ligue a lanterna externa e toque em "Retomar câmera".
+                  </div>
+                )}
                 <div className="pointer-events-none absolute inset-5 border-2 border-emerald-400/70 rounded-xl" />
                 <div className="pointer-events-none absolute left-8 right-8 top-1/2 -translate-y-1/2">
                   <div className="h-[2px] bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.9)]" />
                 </div>
+                {lightAssistEnabled && !isTorchOn && !isCameraPaused && (
+                  <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-white/20 via-transparent to-white/20" />
+                )}
               </div>
               <p className="mt-3 text-xs text-emerald-300 leading-5">{cameraStatusMsg}</p>
               <p className="mt-1 text-[11px] text-gray-400">
